@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>FrameForge.Desktop</RootNamespace>
+    <AssemblyName>FrameForge</AssemblyName>
+    <Product>FrameForge</Product>
+    <Description>Visual layout editor for World of Warcraft 3.3.5a user interfaces.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\branding\frameforge-icon.ico</ApplicationIcon>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!--
+      Avalonia is compiled ahead of time and relies on reflection for XAML and for Skia
+      native loading, so self-contained publishes must not be trimmed.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.2" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The dependency direction is one way: Desktop depends on Core, never the reverse.
+      FrameForge.Core holds the WoW geometry engine and has no Avalonia reference.
+    -->
+    <ProjectReference Include="..\FrameForge.Core\FrameForge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shipped example ships with the app so "Load Native Hunts Example" always works. -->
+    <AvaloniaResource Include="..\..\examples\native-hunts.fforge.json"
+                      Link="Assets/examples/native-hunts.fforge.json" />
+  </ItemGroup>
+
+</Project>

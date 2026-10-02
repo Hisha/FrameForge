@@ -1,0 +1,121 @@
+name: Build Release
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup -y
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          dotnet restore FrameForge.slnx
+          dotnet build FrameForge.slnx -c Release --no-restore
+          dotnet test FrameForge.slnx -c Release --no-build
+
+      - name: Build Windows release packages
+        shell: pwsh
+        run: ./scripts/publish-win.ps1 -Installer
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameForge-Windows
+          path: |
+            dist/FrameForge-*-win-x64.zip
+            dist/FrameForge-Setup-*.exe
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Build and test
+        run: |
+          dotnet restore FrameForge.slnx
+          dotnet build FrameForge.slnx -c Release --no-restore
+          dotnet test FrameForge.slnx -c Release --no-build
+
+      - name: Build Linux release package
+        run: bash ./scripts/publish-linux.sh
+
+      - name: Upload Linux release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameForge-Linux
+          path: dist/FrameForge-*-linux-x64.zip
+          if-no-files-found: error
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-windows
+      - build-linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: FrameForge-Windows
+          path: release-assets
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: FrameForge-Linux
+          path: release-assets
+
+      - name: Show release files
+        run: ls -lh release-assets
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" \
+            release-assets/FrameForge-*-win-x64.zip \
+            release-assets/FrameForge-Setup-*.exe \
+            release-assets/FrameForge-*-linux-x64.zip \
+            --title "FrameForge $TAG" \
+            --generate-notes \
+            --verify-tag

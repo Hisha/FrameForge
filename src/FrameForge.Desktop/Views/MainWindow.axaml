@@ -1,0 +1,191 @@
+<Window
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:FrameForge.Desktop.ViewModels"
+    xmlns:controls="using:FrameForge.Desktop.Controls"
+    mc:Ignorable="d"
+    d:DesignWidth="1440"
+    d:DesignHeight="880"
+    x:Class="FrameForge.Desktop.Views.MainWindow"
+    x:DataType="vm:MainWindowViewModel"
+    Title="{Binding WindowTitle}"
+    Width="1440"
+    Height="880"
+    MinWidth="1000"
+    MinHeight="640"
+    WindowStartupLocation="CenterScreen">
+
+    <Window.Styles>
+        <Style Selector="TextBlock.label">
+            <Setter Property="Foreground" Value="#8FA3B0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.value">
+            <Setter Property="Foreground" Value="#DCE7EE" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#11181E" />
+            <Setter Property="BorderBrush" Value="#22303A" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="TextBlock.header">
+            <Setter Property="Foreground" Value="#7FB2C9" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="TextBlock.mono">
+            <Setter Property="FontFamily" Value="Consolas,Menlo,DejaVu Sans Mono,monospace" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#9FB4C1" />
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
+        <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="New" Click="OnNewClick" ToolTip.Tip="Start an empty project" />
+                <Button Content="Open" Click="OnOpenClick" ToolTip.Tip="Open a .fforge.json project" />
+                <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
+                <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
+
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+
+                <Button Content="Load Native Hunts Example" Click="OnLoadExampleClick"
+                        ToolTip.Tip="Load the built-in example layout" />
+                <Button Content="Add Frame" Click="OnAddFrameClick" />
+                <Button Content="Delete Frame" Click="OnDeleteFrameClick" />
+                <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1" ColumnDefinitions="260,* ,320">
+
+            <!-- Frame tree -->
+            <Border Grid.Column="0" Classes="panel" BorderThickness="0,0,1,0" Padding="10">
+                <DockPanel LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Top" Classes="header" Text="FRAMES" />
+                    <TextBlock DockPanel.Dock="Bottom" Classes="mono" Text="{Binding ProjectDescription}"
+                               TextWrapping="Wrap" Margin="0,8,0,0" />
+                    <TreeView x:Name="FrameTree"
+                              SelectionMode="Single"
+                              ItemsSource="{Binding TreeRoots}"
+                              SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
+                        <TreeView.Styles>
+                            <Style Selector="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="True" />
+                            </Style>
+                        </TreeView.Styles>
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
+                                <Grid ColumnDefinitions="*,Auto" MinWidth="180">
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Text="{Binding SizeText}" Classes="mono"
+                                               VerticalAlignment="Center" Opacity="0.75" />
+                                </Grid>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </DockPanel>
+            </Border>
+
+            <!-- Preview canvas -->
+            <Border Grid.Column="1" Background="#0C1116">
+                <controls:LayoutCanvas x:Name="Canvas"
+                                       SelectionRequested="OnCanvasSelectionRequested"
+                                       FrameDragged="OnCanvasFrameDragged"
+                                       DragCompleted="OnCanvasDragCompleted"
+                                       FitRequested="OnCanvasFitRequested" />
+            </Border>
+
+            <!-- Inspector -->
+            <Border Grid.Column="2" Classes="panel" BorderThickness="1,0,0,0" Padding="12">
+                <ScrollViewer>
+                    <StackPanel Spacing="6" IsEnabled="{Binding CanEditSelection}">
+                        <TextBlock Classes="header" Text="INSPECTOR" />
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Name" />
+                            <TextBox Grid.Column="1" Text="{Binding Editor.Name, Mode=TwoWay}" Margin="4,0,0,4" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Parent" />
+                            <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      ItemsSource="{Binding Editor.FrameOptions}"
+                                      SelectedItem="{Binding Editor.Parent, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Width" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Width, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Height" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Height, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Size ref" />
+                            <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      ItemsSource="{Binding Editor.SizeReferenceOptions}"
+                                      SelectedItem="{Binding Editor.SizeReference, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Point" />
+                            <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      ItemsSource="{Binding Editor.AnchorOptions}"
+                                      SelectedItem="{Binding Editor.Point, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Relative to" />
+                            <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      ItemsSource="{Binding Editor.FrameOptions}"
+                                      SelectedItem="{Binding Editor.RelativeTo, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Relative pt" />
+                            <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      ItemsSource="{Binding Editor.AnchorOptions}"
+                                      SelectedItem="{Binding Editor.RelativePoint, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Offset X" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetX, Mode=TwoWay}" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="96,*">
+                            <TextBlock Grid.Column="0" Classes="label" Text="Offset Y" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetY, Mode=TwoWay}" />
+                        </Grid>
+
+                        <CheckBox Margin="4,4,0,4" Content="Visible" IsChecked="{Binding Editor.IsVisible, Mode=TwoWay}" />
+
+                        <TextBlock Classes="header" Text="RESOLVED GEOMETRY" Margin="0,12,0,4" />
+                        <TextBlock Classes="mono" Text="{Binding Editor.ResolvedSummary}" TextWrapping="Wrap" />
+                        <TextBlock Classes="label" Margin="0,8,0,0" Text="WoW model units, +Y up" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Geometry diagnostics -->
+        <Border Grid.Row="2" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,1,0,0" Padding="10,6">
+            <StackPanel Spacing="2">
+                <TextBlock Classes="value" Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Classes="mono" Text="{Binding SelectionSummary}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

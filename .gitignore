@@ -1,0 +1,36 @@
+# Build outputs
+bin/
+obj/
+dist/
+publish/
+
+# Local artifacts
+artifacts/
+*.log
+*.tmp
+*.cache
+
+# IDE / OS metadata
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+.DS_Store
+Thumbs.db
+
+# Generated smoke/test outputs
+frameforge-smoke.png
+smoke-output/
+coverage/
+
+# Packaging intermediates
+Installer/Output/
+*.iss.log
+
+# Environment
+.env
+*.local
+
+.project
+session-*.md

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>FrameForge.Core.Tests</RootNamespace>
+    <AssemblyName>FrameForge.Core.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!--
+      These tests are release-critical: the anchor solver is the heart of FrameForge.
+      FrameForge.Core deliberately has no Avalonia reference, so this project proves the
+      geometry engine stands alone.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FrameForge.Core\FrameForge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The shipped example project is embedded so the test compares the built-in
+      FrameForge.Core example against the checked-in file. Editing
+      examples/native-hunts.fforge.json by hand will fail the test suite in CI rather than
+      silently drifting.
+    -->
+    <EmbeddedResource Include="..\..\examples\native-hunts.fforge.json"
+                      LogicalName="FrameForge.Core.Tests.examples.native-hunts.fforge.json" />
+  </ItemGroup>
+
+</Project>

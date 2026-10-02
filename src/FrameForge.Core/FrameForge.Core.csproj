@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>FrameForge.Core</RootNamespace>
+    <AssemblyName>FrameForge.Core</AssemblyName>
+    <!--
+      FrameForge.Core is the WoW geometry/layout engine. It must stay free of any
+      UI dependency so it can be reasoned about and tested on its own; do not add
+      an Avalonia package reference here. FrameForge.Desktop depends on this
+      project, never the other way round.
+    -->
+  </PropertyGroup>
+
+</Project>

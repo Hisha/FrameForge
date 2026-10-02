@@ -1,0 +1,83 @@
+{
+  "format": "frameforge-project",
+  "version": 1,
+  "name": "Native Hunts",
+  "screen": {
+    "width": 1024,
+    "height": 768
+  },
+  "frames": [
+    {
+      "name": "MainWindow",
+      "parent": null,
+      "width": 355,
+      "height": 500,
+      "point": "TOPLEFT",
+      "relativeTo": null,
+      "relativePoint": "TOPLEFT",
+      "offsetX": 0,
+      "offsetY": 0,
+      "visible": true
+    },
+    {
+      "name": "Content",
+      "parent": "MainWindow",
+      "width": 296,
+      "height": 406,
+      "point": "TOP",
+      "relativeTo": "MainWindow",
+      "relativePoint": "TOP",
+      "offsetX": 12,
+      "offsetY": -44,
+      "visible": true
+    },
+    {
+      "name": "Identity",
+      "parent": "Content",
+      "width": 280,
+      "height": 88,
+      "point": "TOP",
+      "relativeTo": "Content",
+      "relativePoint": "TOP",
+      "offsetX": 0,
+      "offsetY": -26,
+      "visible": true
+    },
+    {
+      "name": "State",
+      "parent": "Content",
+      "width": 280,
+      "height": 118,
+      "point": "TOP",
+      "relativeTo": "Identity",
+      "relativePoint": "BOTTOM",
+      "offsetX": 0,
+      "offsetY": -30,
+      "visible": true
+    },
+    {
+      "name": "Idle",
+      "parent": "Content",
+      "width": 280,
+      "height": 212,
+      "point": "TOP",
+      "relativeTo": "Identity",
+      "relativePoint": "TOP",
+      "offsetX": 0,
+      "offsetY": 0,
+      "visible": true
+    },
+    {
+      "name": "Record",
+      "parent": "Content",
+      "width": 280,
+      "height": 86,
+      "point": "BOTTOM",
+      "relativeTo": "Content",
+      "relativePoint": "BOTTOM",
+      "offsetX": 0,
+      "offsetY": 8,
+      "visible": true
+    }
+  ]
+}
