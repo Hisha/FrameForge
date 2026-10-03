@@ -26,6 +26,7 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     private readonly Action<string, FrameDef, string?> _commit;
     private readonly Func<IReadOnlyList<FrameOption>> _parentOptions;
     private readonly Func<IReadOnlyList<AnchorPoint>> _anchorOptions;
+    private readonly Func<FrameDef, IEnumerable<string>> _assetDescription;
 
     [ObservableProperty]
     private string _validationMessage = string.Empty;
@@ -33,11 +34,13 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     public FrameEditorViewModel(
         Action<string, FrameDef, string?> commit,
         Func<IReadOnlyList<FrameOption>> parentOptions,
-        Func<IReadOnlyList<AnchorPoint>> anchorOptions)
+        Func<IReadOnlyList<AnchorPoint>> anchorOptions,
+        Func<FrameDef, IEnumerable<string>>? assetDescription = null)
     {
         _commit = commit;
         _parentOptions = parentOptions;
         _anchorOptions = anchorOptions;
+        _assetDescription = assetDescription ?? (_ => []);
     }
 
     /// <summary>True when a frame is selected and safe to edit.</summary>
@@ -247,8 +250,17 @@ public sealed partial class FrameEditorViewModel : ObservableObject
                 VisualLines.Add(line);
         }
 
+        if (Frame is { } frame)
+        {
+            foreach (var line in _assetDescription(frame))
+                VisualLines.Add(line);
+        }
+
         OnPropertyChanged(nameof(HasVisual));
     }
+
+    /// <summary>Re-runs local asset diagnostics after roots or caches change.</summary>
+    public void RefreshAssetLines() => RefreshVisualLines();
 
     private void RefreshAnchorNotes(FrameLayout? layout)
     {

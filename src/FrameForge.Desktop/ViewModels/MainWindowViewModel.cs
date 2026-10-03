@@ -8,6 +8,7 @@ using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
+using FrameForge.Desktop.Assets;
 
 namespace FrameForge.Desktop.ViewModels;
 
@@ -137,6 +138,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
             : $"{Project.Frames.Count} frames";
 
     private TreeProjection? _treeProjection;
+    private readonly AssetSettingsStore _assetSettings;
+    private string? _assetSourcePath;
+
+    /// <summary>Application-local roots searched after source-relative content.</summary>
+    public ObservableCollection<string> AssetRoots { get; } = [];
+
+    /// <summary>The reusable resolver shared by the inspector and canvas.</summary>
+    public TextureAssetResolver Assets { get; } = new();
+
+    public string AssetRootsSummary => AssetRoots.Count == 0
+        ? "Asset roots (none)"
+        : $"Asset roots ({AssetRoots.Count})";
 
     /// <summary>
     /// True when one specific visibility category is switched on.
@@ -209,14 +222,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
             option.Refresh();
     }
 
-    public MainWindowViewModel()
+    public MainWindowViewModel() : this(null)
     {
+    }
+
+    public MainWindowViewModel(string? settingsPath)
+    {
+        _assetSettings = new AssetSettingsStore(settingsPath);
+        foreach (var root in _assetSettings.Load())
+            AssetRoots.Add(root);
+        Assets.Configure(null, AssetRoots);
         ModeOptions = [.. Enum.GetValues<CanvasViewMode>().Select(m => new CanvasModeOption(this, m))];
         LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
         TreeFilterOptions = [.. TreeFilters.All.Select(f => new TreeFilterOption(this, f))];
         VisibilityToggles = [.. VisibilityFilters.Toggles.Select(t => new VisibilityToggle(this, t.Label, t.Flag, t.ToolTip))];
 
-        Editor = new FrameEditorViewModel((n, u, r) => ReplaceFrame(n, u, r), BuildFrameOptions, AnchorOptions);
+        Editor = new FrameEditorViewModel((n, u, r) => ReplaceFrame(n, u, r), BuildFrameOptions, AnchorOptions,
+            DescribeAsset);
         RelaidOut(_project, null, "New project. Load the Native Hunts example from the toolbar.");
     }
 
@@ -329,6 +351,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Source = null;
         ImportDiagnostics = [];
         LastImport = null;
+        _assetSourcePath = ResolveSourcePath(project, path);
+        Assets.Configure(_assetSourcePath, AssetRoots);
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
@@ -405,6 +429,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         // path: null, so Save never targets the source file; it routes through Save As.
         Load(project, null, result.SummaryText);
+        _assetSourcePath = path;
+        Assets.Configure(_assetSourcePath, AssetRoots);
 
         // Published AFTER Load, because Load is what clears the previous document's provenance.
         Source = SourceSummary.Imported(FileName(path), path, result);
@@ -428,7 +454,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            File.WriteAllText(path, ProjectCodec.Serialize(Project));
+            var projectToSave = Project;
+            if (Project.Source?.ReferencePath is { Length: > 0 } reference)
+            {
+                string portableReference;
+                try
+                {
+                    portableReference = Path.IsPathRooted(reference)
+                        ? Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(path))!, reference)
+                        : reference;
+                }
+                catch (ArgumentException)
+                {
+                    portableReference = Project.Source.FileName ?? Path.GetFileName(reference);
+                }
+                projectToSave = Project with
+                {
+                    Source = Project.Source with { ReferencePath = portableReference.Replace('\\', '/') },
+                };
+            }
+
+            File.WriteAllText(path, ProjectCodec.Serialize(projectToSave));
             ProjectPath = path;
             IsDirty = false;
             Status = $"Saved {FileName(path)}.";
@@ -566,6 +612,84 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void ReportRevealSelection(bool revealed) => Status = revealed
         ? $"Revealed {SelectedName} at the current zoom."
         : "The selection has no resolved bounds to reveal.";
+
+    public void AddAssetRoot(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (AssetRoots.Contains(fullPath, StringComparer.Ordinal))
+        {
+            Status = $"Asset root already configured: {fullPath}";
+            return;
+        }
+        AssetRoots.Add(fullPath);
+        Assets.Configure(_assetSourcePath, AssetRoots);
+        SaveAssetRoots();
+        RefreshAssetPresentation($"Added asset root {fullPath}.");
+    }
+
+    public void RemoveAssetRoot(string path)
+    {
+        if (!AssetRoots.Remove(path))
+            return;
+        Assets.Configure(_assetSourcePath, AssetRoots);
+        SaveAssetRoots();
+        RefreshAssetPresentation($"Removed asset root {path}.");
+    }
+
+    public void RefreshAssets()
+    {
+        Assets.Refresh();
+        RefreshAssetPresentation("Asset caches refreshed.");
+    }
+
+    private void SaveAssetRoots()
+    {
+        try { _assetSettings.Save(AssetRoots); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Status = $"Could not save asset roots: {ex.Message}";
+        }
+    }
+
+    private void RefreshAssetPresentation(string status)
+    {
+        Editor.RefreshAssetLines();
+        OnPropertyChanged(nameof(AssetRootsSummary));
+        OnPropertyChanged(nameof(Assets));
+        Status = status;
+    }
+
+    private IEnumerable<string> DescribeAsset(FrameDef frame)
+    {
+        if (frame.Kind != FrameKind.TEXTURE || frame.Visual?.Texture is not { } texture)
+            yield break;
+        var asset = Assets.Resolve(texture.File);
+        yield return $"asset status {asset.Status}";
+        if (!texture.TexCoords.IsValid || texture.TexCoords.Width <= 0 || texture.TexCoords.Height <= 0)
+            yield return "fallback invalid or reversed texCoords cannot be rendered";
+        if (asset.PhysicalPath is { } path)
+            yield return $"resolved {path}";
+        if (asset.SourceKind is { } kind)
+            yield return $"source {kind}: {asset.SourceRoot}";
+        if (asset.Format != TextureFileFormat.Unknown)
+            yield return $"format {asset.Format}";
+        if (asset.Width is { } width && asset.Height is { } height)
+            yield return $"image {width} x {height}";
+        if (!asset.CanRender)
+            yield return $"fallback {asset.Diagnostic.Message}";
+    }
+
+    private static string? ResolveSourcePath(Project project, string? projectPath)
+    {
+        var reference = project.Source?.ReferencePath;
+        if (string.IsNullOrWhiteSpace(reference))
+            return null;
+        if (Path.IsPathRooted(reference))
+            return reference;
+        return projectPath is { Length: > 0 }
+            ? Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath)!, reference))
+            : null;
+    }
 
     private void ReplaceFrame(string name, FrameDef updated, string? rename = null)
     {

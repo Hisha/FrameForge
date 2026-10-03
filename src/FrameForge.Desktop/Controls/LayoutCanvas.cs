@@ -6,6 +6,7 @@ using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Rendering;
+using FrameForge.Desktop.Assets;
 
 namespace FrameForge.Desktop.Controls;
 
@@ -53,6 +54,7 @@ public class LayoutCanvas : Control
     private VisibilityFilter _filter = ViewPolicy.DefaultsFor(CanvasViewMode.DEBUG);
     private LabelPolicy _labels = ViewPolicy.DefaultLabelPolicyFor(CanvasViewMode.DEBUG);
     private RenderPipeline _pipeline = RenderPipeline.Default();
+    private ITextureAssetResolver? _assetResolver;
 
     /// <summary>The completed render pass's policy, drawable, layer, and visual-paint counts.</summary>
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
@@ -193,6 +195,17 @@ public class LayoutCanvas : Control
         set
         {
             _pipeline = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>The desktop-side service used by the visual layer to locate and decode artwork.</summary>
+    public ITextureAssetResolver? AssetResolver
+    {
+        get => _assetResolver;
+        set
+        {
+            _assetResolver = value;
             InvalidateVisual();
         }
     }
@@ -358,7 +371,8 @@ public class LayoutCanvas : Control
             _labels,
             _selectedName,
             drawable,
-            diagnostics);
+            diagnostics,
+            _assetResolver);
     }
 
     /// <inheritdoc />

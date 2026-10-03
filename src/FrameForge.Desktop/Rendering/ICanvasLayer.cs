@@ -3,6 +3,7 @@ using Avalonia.Media;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
+using FrameForge.Desktop.Assets;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -61,7 +62,8 @@ public sealed record CanvasRenderContext(
     LabelPolicy Labels,
     string? SelectedName,
     IReadOnlyList<DrawableFrame> VisibleFrames,
-    CanvasRenderDiagnostics Diagnostics)
+    CanvasRenderDiagnostics Diagnostics,
+    ITextureAssetResolver? AssetResolver = null)
 {
     /// <summary>The screen (UIParent) rectangle in canvas pixels.</summary>
     public CanvasBox ScreenBox => Viewport.RectToCanvas(LayoutResolver.ScreenRect(Project?.Screen ?? Screen.Default), Origin);

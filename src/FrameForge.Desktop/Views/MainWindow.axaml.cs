@@ -48,7 +48,8 @@ public partial class MainWindow : Window
             or nameof(MainWindowViewModel.SelectedName)
             or nameof(MainWindowViewModel.ViewMode)
             or nameof(MainWindowViewModel.CanvasFilter)
-            or nameof(MainWindowViewModel.LabelPolicy))
+            or nameof(MainWindowViewModel.LabelPolicy)
+            or nameof(MainWindowViewModel.Assets))
         {
             SyncCanvas();
         }
@@ -74,6 +75,7 @@ public partial class MainWindow : Window
         Canvas.Mode = vm.ViewMode;
         Canvas.Filter = vm.CanvasFilter;
         Canvas.Labels = vm.LabelPolicy;
+        Canvas.AssetResolver = vm.Assets;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();
@@ -103,6 +105,31 @@ public partial class MainWindow : Window
             return;
 
         vm.ResetViewToModeDefaults();
+    }
+
+    private async void OnAddAssetRootClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+            return;
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Add a WoW Interface asset root",
+            AllowMultiple = false,
+        });
+        if (folders.Count > 0 && folders[0].Path.LocalPath is { Length: > 0 } path)
+            vm.AddAssetRoot(path);
+    }
+
+    private void OnRemoveAssetRootClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is Button { Tag: string path })
+            vm.RemoveAssetRoot(path);
+    }
+
+    private void OnRefreshAssetsClick(object? sender, RoutedEventArgs e)
+    {
+        ViewModel?.RefreshAssets();
+        Canvas.InvalidateVisual();
     }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e)

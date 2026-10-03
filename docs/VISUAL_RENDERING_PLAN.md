@@ -18,7 +18,8 @@ textures, 20 font strings, two buttons, and one status bar.
 - Three views over one layered canvas: visual content, debug overlay, and selection overlay.
 - View filters for frames, buttons, text, textures, helpers, and hidden subtrees.
 - Literal FontString and Button text using a neutral host font.
-- Texture stand-ins tinted by declared color and alpha.
+- Real source-relative and configured-root TGA artwork, including texCoords, RGB modulation, alpha,
+  and imported paint order. Unresolved textures retain the Phase 3 stand-in.
 - Status-bar tracks and fills at their declared default fraction and color.
 
 ## 2. Imported but not visually rendered
@@ -42,18 +43,41 @@ directly from XML would break saved-project independence and duplicate import po
 - StatusBar min/max/default values, bar texture, bar color, and draw layer.
 - Visual metadata in `.fforge.json`, with backward-compatible loading when it is absent.
 
-## 4. Requires WoW client asset access
+## 4. Phase 4A asset resolution
 
-- Resolve `Interface\...` references case-insensitively against a user-supplied 3.3.5a asset root.
-- Decode BLP (and load TGA where used by the addon) into a UI-independent image abstraction.
-- Apply `TexCoords`, alpha/color modulation, and supported blend modes to decoded images.
-- Cache decoded sources by canonical asset path and atlas region.
-- Report missing assets in the inspector and diagnostics without replacing them with unrelated art.
+- Search order is the opened XML's source content hierarchy first, then application-level asset roots
+  in the visible user-configured order. A root can be either the directory containing `Interface`
+  or `Interface` itself.
+- WoW backslashes and platform separators are normalized without lowercasing physical paths. Exact
+  case wins; a unique case-insensitive match is accepted; multiple matches are diagnosed as
+  ambiguous. Rooted paths and traversal are rejected. Extensionless references try the literal
+  name, `.tga`, `.blp`, and `.png`, and multiple matches are ambiguous.
+- Asset roots are machine-local application settings, not project data. This keeps `.fforge.json`
+  portable and prevents developer-machine paths leaking into saved projects. The toolbar exposes
+  add/browse, remove, current roots, and Refresh Assets.
+- Phase 4A decodes TGA type 2 uncompressed true-color images at 24 or 32 bits, including both
+  vertical origins and both horizontal origins. The Native Hunts files use 32-bit BGRA, 8-bit alpha,
+  top-left origin. Other TGA types fail explicitly.
+- Successfully decoded source images are cached by canonical path, length, and modification time.
+  Tint variants are separate bitmap views; the straight-alpha source pixels are not changed.
+  Project/source changes, root changes, and Refresh Assets invalidate resolution and decode caches.
+- The inspector reports declared reference, status, physical path, source/root, detected format,
+  dimensions, and fallback reason. Absolute resolved paths remain local UI state and are never
+  serialized.
 
-FrameForge must not redistribute Blizzard client assets. Asset discovery should be opt-in and point
-at files the user already has access to.
+FrameForge must not redistribute Blizzard client assets. Asset discovery is opt-in and points at
+files the user already has access to.
 
-## 5. Requires stock Blizzard template emulation
+## 5. Current BLP boundary
+
+Phase 4A does not decode BLP. Native Hunts' eight directly referenced custom files are all supported
+TGAs, so BLP is not necessary for meaningful custom-art progress. Its three unique stock Blizzard
+references are extensionless and absent from the addon checkout. If an asset root resolves one to a
+physical BLP, the inspector reports `UnsupportedFormat` and Preview keeps its stand-in. PNG is also
+identified but not decoded in this phase. See `NATIVE_HUNTS_ASSET_INVENTORY.md` for the evidence and
+declaration counts.
+
+## 6. Requires stock Blizzard template emulation
 
 `LFDParentFrame`, `CharacterFrameTabButtonTemplate`, inherited texture paint, and `GameFont*`
 references are defined outside this XML. Resolve only the small, documented template subset needed
@@ -63,7 +87,7 @@ facts so the inspector can distinguish the two.
 Avoid a general FrameXML/template runtime. A versioned library of specific 3.3.5a visual templates
 is sufficient for the designer goal.
 
-## 6. Requires runtime/Lua state approximation
+## 7. Requires runtime/Lua state approximation
 
 Native Hunts uses Lua to choose which hidden state panel is shown, populate 13 text fields, update
 the progress bar, size/position the external parent, and change icons or button state. FrameForge
@@ -73,20 +97,16 @@ Later design-time state should use explicit preview inputs: selected panel/state
 status value, and optional externally supplied parent bounds. Defaults must be labeled as design
 samples and never serialized as facts imported from the XML.
 
-## 7. Recommended implementation order
+## 8. Recommended implementation order
 
-1. Add an asset-root service and deterministic, case-insensitive path resolution with missing-asset
-   diagnostics.
-2. Decode TGA first, because Native Hunts directly references its own TGA panels and dividers; add
-   the minimal BLP formats needed by the referenced 3.3.5a client textures next.
-3. Render decoded textures with `TexCoords`, color, and alpha through the existing
-   `VisualContentLayer`.
-4. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
-5. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font
+1. Add only the BLP forms demonstrated by supplied/extracted 3.3.5a stock assets, or accept legal
+   converted TGA equivalents through the same resolver.
+2. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
+3. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font
    fallback when unavailable.
-6. Retain and render Button state textures and other currently skipped paint fields.
-7. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, and status values.
+4. Retain and render Button state textures and other currently skipped paint fields.
+5. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, and status values.
 
-The first task for the next phase should be real texture resolution and TGA rendering. It yields the
-largest honest improvement to Native Hunts Preview while fitting the current model/layer boundary;
-Lua and broad template emulation can remain out of scope.
+Phase 4A delivered the first real texture resolution and TGA rendering while preserving the current
+model/layer boundary. Lua, broad template emulation, and speculative stock artwork remain out of
+scope.

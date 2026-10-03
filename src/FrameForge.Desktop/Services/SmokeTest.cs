@@ -14,6 +14,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
+using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.ViewModels;
 using FrameForge.Desktop.Views;
@@ -323,7 +324,12 @@ public static class SmokeTest
         // 6. The real FrameXML file, imported through the same path the Open button uses.
         //    This is the acceptance test for Phase 2: the packaged copy of the actual
         //    NativeHuntsFrame.xml goes in, and nothing about the source file may change.
-        var xmlFixture = Path.Combine(Path.GetTempPath(), $"frameforge-smoke-{Guid.NewGuid():N}.xml");
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), $"frameforge-smoke-{Guid.NewGuid():N}");
+        var xmlFixture = Path.Combine(fixtureRoot, "content", "client", "Interface", "FrameXML", "NativeHuntsFrame.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(xmlFixture)!);
+        var fixtureAssetDirectory = Path.Combine(fixtureRoot, "content", "client", "Interface", "NativeHunts");
+        Directory.CreateDirectory(fixtureAssetDirectory);
+        File.WriteAllBytes(Path.Combine(fixtureAssetDirectory, "hunt_divider.tga"), CreateSmokeDividerTga());
         var xmlSource = ExtractPackagedFixture(xmlFixture);
         var xmlDigestBefore = Sha256(xmlSource);
         var imported = 0;
@@ -344,6 +350,11 @@ public static class SmokeTest
                 string.IsNullOrEmpty(vm.ProjectPath), vm.ProjectPath ?? "(null)");
             Check("source file was not modified by the import",
                 Sha256(xmlFixture) == xmlDigestBefore);
+
+            var dividerAsset = vm.Assets.Resolve(@"Interface\NativeHunts\hunt_divider.tga");
+            Check("source-relative TGA resolved and decoded",
+                dividerAsset is { Status: AssetResolutionStatus.Resolved, Width: 512, Height: 8 },
+                dividerAsset.Diagnostic.Message);
 
             // The counts the importer reports, restated independently from the project itself:
             // FrameForge must not be able to pass this by miscounting its own output.
@@ -436,6 +447,35 @@ public static class SmokeTest
                     vm.CanvasFilter.HasFlag(VisibilityFilter.HIDDEN));
                 Check("Hidden toolbar updates the canvas",
                     canvas.Filter.HasFlag(VisibilityFilter.HIDDEN));
+
+                var divider = vm.Project.Frames.First(frame =>
+                    frame.Visual?.Texture?.File?.EndsWith("hunt_divider.tga", StringComparison.OrdinalIgnoreCase) == true);
+                vm.OnCanvasSelectionRequested(divider.Name);
+                canvas.SelectedName = divider.Name;
+                canvas.FitToContent();
+                canvas.InvalidateVisual();
+                await PumpAsync(1);
+                var artworkBitmap = new RenderTargetBitmap(
+                    new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                    new Vector(96, 96));
+                artworkBitmap.Render(canvas);
+
+                var dividerLayout = vm.Layout.Frames[divider.Name].Rect!.Value;
+                var dividerBox = canvas.Viewport.RectToCanvas(dividerLayout, canvas.Origin);
+                var cropColors = CountDominantColors(artworkBitmap,
+                    new Rect(dividerBox.X, dividerBox.Y, dividerBox.Width, dividerBox.Height));
+                Check("decoded artwork contributes pixels inside the texture bounds", cropColors.Red > 100,
+                    $"red={cropColors.Red}, blue={cropColors.Blue}");
+                Check("texCoords crop excludes the fixture's blue atlas half",
+                    cropColors.Blue < Math.Max(4, cropColors.Red / 20),
+                    $"red={cropColors.Red}, blue={cropColors.Blue}");
+
+                canvas.AssetResolver = null;
+                var fallbackBitmap = new RenderTargetBitmap(artworkBitmap.PixelSize, new Vector(96, 96));
+                fallbackBitmap.Render(canvas);
+                Check("resolved artwork changes Preview pixels from the fallback",
+                    CountPixelsChanged(artworkBitmap, fallbackBitmap) > 100);
+                canvas.AssetResolver = vm.Assets;
             }
 
             // The placeholder is a stand-in, so its size is FrameForge's estimate and must be
@@ -477,8 +517,8 @@ public static class SmokeTest
         }
         finally
         {
-            if (File.Exists(xmlFixture))
-                File.Delete(xmlFixture);
+            if (Directory.Exists(fixtureRoot))
+                Directory.Delete(fixtureRoot, recursive: true);
         }
 
         // Saving an imported project must produce a FrameForge project and must refuse the XML.
@@ -493,6 +533,8 @@ public static class SmokeTest
             Check("imported project saves as .fforge.json", vm.SaveToFile(jsonSaveTarget));
             Check("saved the project file",
                 File.Exists(jsonSaveTarget) && new FileInfo(jsonSaveTarget).Length > 0);
+            Check("saved project contains no absolute source-machine path",
+                !File.ReadAllText(jsonSaveTarget).Contains(fixtureRoot, StringComparison.Ordinal));
 
             var reloaded = ProjectCodec.Parse(File.ReadAllText(jsonSaveTarget));
             Check("saved project parses", reloaded.Ok, reloaded.ErrorText);
@@ -960,5 +1002,85 @@ public static class SmokeTest
         {
             System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    private static int CountPixelsChanged(RenderTargetBitmap first, RenderTargetBitmap second)
+    {
+        var size = first.PixelSize;
+        var stride = size.Width * 4;
+        var a = Marshal.AllocHGlobal(stride * size.Height);
+        var b = Marshal.AllocHGlobal(stride * size.Height);
+        try
+        {
+            first.CopyPixels(new PixelRect(size), a, stride * size.Height, stride);
+            second.CopyPixels(new PixelRect(size), b, stride * size.Height, stride);
+            var changed = 0;
+            for (var i = 0; i < stride * size.Height; i += 4)
+            {
+                if (Marshal.ReadInt32(a, i) != Marshal.ReadInt32(b, i))
+                    changed++;
+            }
+            return changed;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(a);
+            Marshal.FreeHGlobal(b);
+        }
+    }
+
+    private static (int Red, int Blue) CountDominantColors(RenderTargetBitmap bitmap, Rect region)
+    {
+        var size = bitmap.PixelSize;
+        var stride = size.Width * 4;
+        var buffer = Marshal.AllocHGlobal(stride * size.Height);
+        try
+        {
+            bitmap.CopyPixels(new PixelRect(size), buffer, stride * size.Height, stride);
+            var left = Math.Clamp((int)Math.Floor(region.Left), 0, size.Width);
+            var right = Math.Clamp((int)Math.Ceiling(region.Right), 0, size.Width);
+            var top = Math.Clamp((int)Math.Floor(region.Top), 0, size.Height);
+            var bottom = Math.Clamp((int)Math.Ceiling(region.Bottom), 0, size.Height);
+            var red = 0;
+            var blue = 0;
+            for (var y = top; y < bottom; y++)
+            for (var x = left; x < right; x++)
+            {
+                var offset = y * stride + x * 4;
+                var b = Marshal.ReadByte(buffer, offset);
+                var r = Marshal.ReadByte(buffer, offset + 2);
+                if (r > b + 40) red++;
+                if (b > r + 40) blue++;
+            }
+            return (red, blue);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static byte[] CreateSmokeDividerTga()
+    {
+        const int width = 512;
+        const int height = 8;
+        var bytes = new byte[18 + width * height * 4];
+        bytes[2] = 2;
+        bytes[12] = 0;
+        bytes[13] = 2;
+        bytes[14] = height;
+        bytes[16] = 32;
+        bytes[17] = 0x28;
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var offset = 18 + (y * width + x) * 4;
+            var redHalf = x < 260;
+            bytes[offset] = redHalf ? (byte)0 : (byte)230;
+            bytes[offset + 1] = 0;
+            bytes[offset + 2] = redHalf ? (byte)230 : (byte)0;
+            bytes[offset + 3] = 255;
+        }
+        return bytes;
     }
 }

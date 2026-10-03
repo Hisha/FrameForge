@@ -113,10 +113,11 @@ displayed rather than silently dropped or optimistically rewritten.
 | `referencePath` | string? | Where the source lived, relative to the project file when known. **Display only.** |
 | `readOnly` | bool | `true` when the source must never be written. |
 
-`referencePath` is informational. FrameForge never reopens the source through it, so a saved
-project still opens when the original XML has been moved or deleted. When the project file is
-written, the reference is made relative to the project, falling back to just the file name, so a
-project and its XML keep working when the pair is copied or committed somewhere else.
+`referencePath` is provenance, not a required project dependency. FrameForge opportunistically uses
+it to find source-relative artwork when the original XML still exists; the saved project still opens
+and uses texture fallbacks when it has been moved or deleted. When the project file is written, an
+absolute source reference is made relative to the project, falling back to just the file name, so no
+developer-machine absolute path is serialized and a project/XML pair can be copied together.
 
 ## FrameXML is never a save target
 

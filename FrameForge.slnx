@@ -5,5 +5,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FrameForge.Core.Tests/FrameForge.Core.Tests.csproj" />
+    <Project Path="tests/FrameForge.Desktop.Tests/FrameForge.Desktop.Tests.csproj" />
   </Folder>
 </Solution>

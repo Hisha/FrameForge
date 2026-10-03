@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Media;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
+using FrameForge.Desktop.Assets;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -11,19 +12,17 @@ namespace FrameForge.Desktop.Rendering;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This layer exists because Phase 3 kept the paint facts and then has to be honest about what it
-/// can do with them. FrameForge does not decode BLP or TGA textures and does not emulate Blizzard's
-/// fonts, so this layer CANNOT draw the artwork. What it can do is draw the part of the appearance
+/// This layer draws decoded TGA artwork when the desktop asset service can resolve it. It does not
+/// decode BLP or emulate Blizzard's fonts, so unresolved visuals retain an explicit stand-in. It can
+/// also draw the part of the appearance
 /// the geometry and the retained values actually determine: the rectangle, the declared colour and
 /// alpha, a literal text string, and a status bar's declared fill.
 /// </para>
 /// <para>
-/// So a texture is drawn as a neutral surface tinted by its own <c>&lt;Color&gt;</c> at its own
-/// alpha, a literal FontString is drawn with that literal string, and a StatusBar is drawn filled to
-/// the fraction its declared <c>defaultValue</c> implies. Each is a stand-in, and each stand-in is
-/// derived from a value the document stated - never from a guess at what the file "probably" meant.
-/// The texture's <i>artwork</i> is the one thing deliberately absent, and it stays absent rather
-/// than being faked with a colour that looks like the original.
+/// A resolved texture is drawn from its decoded pixels. Otherwise it is a neutral surface tinted by
+/// its own <c>&lt;Color&gt;</c> at its own alpha. A literal FontString is drawn with that literal string,
+/// and a StatusBar is filled to the fraction its declared <c>defaultValue</c> implies. Every fallback
+/// is derived from a value the document stated, never from a guess at what the file probably meant.
 /// </para>
 /// <para>
 /// A FontString whose text comes from Lua at runtime is drawn as a ruled placeholder with no
@@ -48,7 +47,7 @@ public sealed class VisualContentLayer : ICanvasLayer
 
     /// <summary>The neutral surface an un-decodeable texture is shown as.</summary>
     private static IBrush TextureSurface(ColorRgba? declared) =>
-        declared is { } color ? Tint(color) : new SolidColorBrush(Color.Parse("#3C4A52"));
+        declared is { } color ? Tint(color with { A = 1 }) : new SolidColorBrush(Color.Parse("#3C4A52"));
 
     /// <inheritdoc />
     public void Render(DrawingContext context, CanvasRenderContext canvas)
@@ -92,13 +91,11 @@ public sealed class VisualContentLayer : ICanvasLayer
     }
 
     /// <summary>
-    /// A texture as a tinted surface, at the alpha it declares.
+    /// A decoded texture, or the restrained Phase 3 stand-in when resolution cannot render it.
     /// </summary>
     /// <remarks>
-    /// The texCoords are NOT drawn. Rendering an atlas sub-rectangle requires the decoded texture,
-    /// and slicing a neutral rectangle by fractions of itself would produce a picture of nothing
-    /// that looks like a picture of something - a cropped grey box is easy to mistake for a real
-    /// border. The sub-rectangle is visible in the inspector instead, where it cannot mislead.
+    /// TexCoords map directly to the decoded image's source rectangle; invalid/reversed coordinates
+    /// deliberately fall back rather than silently producing a misleading crop.
     /// </remarks>
     private static void DrawTexture(
         DrawingContext context,
@@ -107,8 +104,29 @@ public sealed class VisualContentLayer : ICanvasLayer
         Rect rect,
         FrameVisual? visual)
     {
-        var declared = visual?.Texture?.Color;
-        var alpha = visual?.Texture?.EffectiveAlpha ?? 1;
+        var texture = visual?.Texture;
+        var declared = texture?.Color;
+        var alpha = (texture?.Alpha ?? 1) * (texture?.Color?.A ?? 1);
+
+        if (texture?.File is { } reference && canvas.AssetResolver is { } resolver)
+        {
+            var asset = resolver.Resolve(reference);
+            if (asset.CanRender && asset.Texture is { } decoded)
+            {
+                try
+                {
+                    var source = TextureSourceRect.Map(texture.TexCoords, decoded.Image.Width, decoded.Image.Height);
+                    using (context.PushOpacity(Math.Clamp(alpha, 0, 1)))
+                        context.DrawImage(decoded.BitmapFor(declared), source, rect);
+                    return;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // The inspector exposes the invalid values; the fallback makes the failure
+                    // visible without putting diagnostic prose across Preview.
+                }
+            }
+        }
 
         var fill = TextureSurface(declared);
         fill = fill is SolidColorBrush solid ? new SolidColorBrush(solid.Color) { Opacity = alpha } : fill;
@@ -119,7 +137,7 @@ public sealed class VisualContentLayer : ICanvasLayer
         // A texture with no file is tinting an inherited template, which is a materially different
         // state from one that names its own. Saying so on the canvas is more useful than another
         // grey box.
-        if (visual?.Texture is { File: null })
+        if (texture is { File: null })
             DrawTag(context, rect, "tints template", Color.Parse("#C9A227"));
     }
 

@@ -68,6 +68,32 @@
                 <Button Content="Add Frame" Click="OnAddFrameClick" />
                 <Button Content="Delete Frame" Click="OnDeleteFrameClick" />
                 <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
+
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+                <Expander Header="{Binding AssetRootsSummary}" VerticalAlignment="Center">
+                    <Border Background="#141B22" BorderBrush="#33434E" BorderThickness="1"
+                            CornerRadius="4" Padding="8" MinWidth="360">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="label" Text="Machine-local roots, searched after source-relative assets" />
+                            <ItemsControl ItemsSource="{Binding AssetRoots}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                                            <TextBlock Grid.Column="0" Classes="mono" Text="{Binding}"
+                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding}" />
+                                            <Button Grid.Column="1" Content="Remove" Tag="{Binding}"
+                                                    Click="OnRemoveAssetRootClick" Margin="8,0,0,0" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="Add / Browse" Click="OnAddAssetRootClick" />
+                                <Button Content="Refresh Assets" Click="OnRefreshAssetsClick" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Expander>
             </StackPanel>
         </Border>
 
