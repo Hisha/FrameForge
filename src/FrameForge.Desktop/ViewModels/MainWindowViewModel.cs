@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core;
 using FrameForge.Core.Examples;
 using FrameForge.Core.Geometry;
+using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 
@@ -17,6 +18,12 @@ namespace FrameForge.Desktop.ViewModels;
 /// <see cref="LayoutResolver"/> after every mutation, and pushes the result at the canvas.
 /// It never performs geometry maths of its own: absolute bounds, paint order and visibility
 /// inheritance all come from FrameForge.Core so there is exactly one implementation.
+/// <para>
+/// A project can come from three places - hand-authored, the shipped example, and a read-only
+/// FrameXML import - and the difference is never hidden. <see cref="Source"/> is null, a text
+/// summary of where the layout came from and what could not be carried across, and drives both
+/// the banner and the save guard.
+/// </para>
 /// <para>
 /// File dialogs are NOT handled here. <see cref="MainWindow"/> owns the window and performs
 /// the pickers, then calls the Open/Save methods on this class with a path.
@@ -98,18 +105,75 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Hint under the toolbar buttons.</summary>
     public string SaveHint => IsDirty ? "Unsaved changes" : "Saved";
 
-    /// <summary>The selected frame, or null.</summary>
+    /// <summary>Where the open project came from, and what the import could not carry across.</summary>
+    public SourceSummary? Source
+    {
+        get => _source;
+        private set
+        {
+            if (SetProperty(ref _source, value))
+                OnPropertyChanged(nameof(HasSource));
+        }
+    }
+
+    private SourceSummary? _source;
+
+    /// <summary>True when a FrameXML import banner should be shown.</summary>
+    public bool HasSource => Source is not null;
+
+    /// <summary>The findings of the most recent import, for the diagnostics list.</summary>
+    public ObservableCollection<FrameXmlDiagnostic> ImportDiagnostics
+    {
+        get => _importDiagnostics;
+        private set
+        {
+            if (SetProperty(ref _importDiagnostics, value))
+                OnPropertyChanged(nameof(HasImportDiagnostics));
+        }
+    }
+
+    /// <summary>True when the last import reported anything at all.</summary>
+    public bool HasImportDiagnostics => ImportDiagnostics.Count > 0;
+
+    private ObservableCollection<FrameXmlDiagnostic> _importDiagnostics = [];
+
+    /// <summary>
+    /// The outcome of the most recent FrameXML import, kept whole rather than reduced to a
+    /// sentence.
+    /// </summary>
+    /// <remarks>
+    /// The banner needs the per-element support levels, and so does anything that wants to check
+    /// the importer rather than trust it. Keeping the result means those numbers come from the
+    /// importer that actually ran instead of being recounted later from the project, which would
+    /// only prove that the recount agrees with itself.
+    /// </remarks>
+    public FrameXmlImportResult? LastImport { get; private set; }
+
+    /// <summary>True when a frame is selected.</summary>
     public FrameDef? SelectedFrame => Project.Find(SelectedName);
 
     /// <summary>True when the inspector can be edited.</summary>
     public bool CanEditSelection => SelectedFrame is not null;
 
     /// <summary>Replaces the whole project. Used by New / Open / Load Example.</summary>
+    /// <remarks>
+    /// Any previous import banner is cleared: opening a project - even one that was itself
+    /// saved from an import - is not the same event as importing, and leaving a stale warning
+    /// list on screen would describe a file the user is no longer looking at.
+    /// </remarks>
     public void Load(Project project, string? path, string status)
     {
         Project = project;
         ProjectPath = path ?? string.Empty;
         IsDirty = false;
+
+        // Everything below describes the PREVIOUS document, so it is cleared here rather than
+        // left to each caller. An importer that publishes its findings before calling Load would
+        // have them wiped by this line, which is exactly the kind of ordering bug that makes an
+        // import look clean when it was not.
+        Source = null;
+        ImportDiagnostics = [];
+        LastImport = null;
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
@@ -125,8 +189,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
             "Loaded the Native Hunts example. Identity, State and Idle overlap on purpose.");
 
     /// <summary>Loads a project from disk and reports any error in the status bar.</summary>
+    /// <remarks>
+    /// The extension decides the reader, so the same Open action handles both formats and the
+    /// user never has to pick a mode. A <c>.xml</c> path is handed to
+    /// <see cref="FrameXmlImporter"/>; anything else is treated as a FrameForge project.
+    /// </remarks>
     public void OpenFromFile(string path)
     {
+        if (ProjectCodec.IsXmlPath(path))
+        {
+            ImportFromFile(path);
+            return;
+        }
+
         try
         {
             var result = ProjectCodec.Parse(File.ReadAllText(path));
@@ -144,9 +219,58 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>Writes the project to disk. Returns false when the write failed.</summary>
+    /// <summary>
+    /// Imports a WoW FrameXML document into an ordinary project and keeps it read-only.
+    /// </summary>
+    /// <remarks>
+    /// The result becomes a normal FrameForge project - same tree, same canvas, same inspector,
+    /// editable and savable - with two deliberate differences: no <see cref="ProjectPath"/> is
+    /// set, because overwriting the addon file with a JSON project would be the worst possible
+    /// outcome; and <see cref="Source"/> is populated, so the banner stays visible and the save
+    /// path is guarded until the project has been saved somewhere else.
+    /// </remarks>
+    public void ImportFromFile(string path)
+    {
+        var result = FrameXmlImporter.ImportFile(path);
+
+        if (!result.Ok)
+        {
+            var message = string.Join(" ", result.Errors.Select(e => e.Message));
+            Source = SourceSummary.Failed(FileName(path), path, message, result.Warnings.Count);
+            ImportDiagnostics = [.. result.Diagnostics];
+            LastImport = result;
+            RelaidOut(Project, SelectedName, $"Could not import {FileName(path)}: {message}");
+            return;
+        }
+
+        // The reference path is informational only: it records where the layout came from, and
+        // nothing writes back to it.
+        var imported = result.Project!;
+        var project = imported with { Source = imported.Source! with { ReferencePath = path } };
+
+        // path: null, so Save never targets the source file; it routes through Save As.
+        Load(project, null, result.SummaryText);
+
+        // Published AFTER Load, because Load is what clears the previous document's provenance.
+        Source = SourceSummary.Imported(FileName(path), path, result);
+        ImportDiagnostics = [.. result.Diagnostics];
+        LastImport = result;
+        Status = result.Warnings.Count == 0
+            ? result.SummaryText
+            : $"{result.SummaryText} {result.WarningSummary}";
+    }
+
+    /// <summary>Writes the project to disk. Returns false when the write was refused or failed.</summary>
     public bool SaveToFile(string path)
     {
+        if (!ProjectCodec.CanSaveTo(path))
+        {
+            Status =
+                $"Refused to save to {FileName(path)}: that is a FrameXML source file. " +
+                $"FrameForge never writes XML, so use Save As and keep the {ProjectCodec.FileExtension} extension.";
+            return false;
+        }
+
         try
         {
             File.WriteAllText(path, ProjectCodec.Serialize(Project));
@@ -375,6 +499,135 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (ArgumentException)
         {
             return path;
+        }
+    }
+}
+
+/// <summary>
+/// Where the open project came from, phrased for the banner above the canvas.
+/// </summary>
+/// <remarks>
+/// This is the one piece of UI state that must not be allowed to look tidy. A FrameXML import
+/// is a partial view of somebody else's runtime layout, and the banner exists so that is
+/// stated before the user draws any conclusions from a picture.
+/// </remarks>
+/// <summary>
+/// What the import banner shows: where the layout came from, and how much of it carried across.
+/// </summary>
+/// <remarks>
+/// The support counts are carried separately from <see cref="Summary"/> instead of being parsed
+/// back out of its sentence. "42 fully supported, 9 partially supported" is exactly the kind of
+/// sentence that gets reworded, and a banner whose numbers come from prose breaks the first time
+/// someone improves the wording.
+/// </remarks>
+public sealed record SourceSummary
+{
+    /// <summary>The imported file name.</summary>
+    public required string FileName { get; init; }
+
+    /// <summary>
+    /// Where the XML was read from, for display only. Nothing reopens it: a project saved
+    /// elsewhere must still open when the original addon file is gone.
+    /// </summary>
+    public required string SourcePath { get; init; }
+
+    /// <summary>True when the file could not be imported at all.</summary>
+    public bool ImportFailed { get; init; }
+
+    /// <summary>The importer's one-line headline, or the reason it failed.</summary>
+    public required string Summary { get; init; }
+
+    /// <summary>Layout elements discovered in the file.</summary>
+    public int Discovered { get; init; }
+
+    /// <summary>Elements whose geometry FrameForge reproduced exactly.</summary>
+    public int FullySupported { get; init; }
+
+    /// <summary>Elements whose geometry is usable but not exact.</summary>
+    public int PartiallySupported { get; init; }
+
+    /// <summary>Elements that could not be represented at all.</summary>
+    public int Unsupported { get; init; }
+
+    /// <summary>How many warnings the importer reported.</summary>
+    public int WarningCount { get; init; }
+
+    /// <summary>How many informational findings the importer reported.</summary>
+    public int InfoCount { get; init; }
+
+    /// <summary>How many errors the importer reported.</summary>
+    public int ErrorCount { get; init; }
+
+    /// <summary>Builds the summary for a file that could not be read.</summary>
+    public static SourceSummary Failed(string fileName, string path, string reason, int warnings) =>
+        new()
+        {
+            FileName = fileName,
+            SourcePath = path,
+            ImportFailed = true,
+            Summary = reason,
+            WarningCount = warnings,
+            ErrorCount = 1,
+        };
+
+    /// <summary>Builds the summary for a file that imported.</summary>
+    public static SourceSummary Imported(string fileName, string path, FrameXmlImportResult result) =>
+        new()
+        {
+            FileName = fileName,
+            SourcePath = path,
+            Summary = result.SummaryText,
+            Discovered = result.Elements.Count,
+            FullySupported = result.FullySupported,
+            PartiallySupported = result.PartiallySupported,
+            Unsupported = result.Unsupported,
+            WarningCount = result.Warnings.Count,
+            InfoCount = result.Infos.Count,
+            ErrorCount = result.Errors.Count,
+        };
+
+    /// <summary>Headline shown at the left of the banner.</summary>
+    public string Headline => ImportFailed
+        ? $"Import failed: {FileName}"
+        : $"Read-only import from {FileName}";
+
+    /// <summary>Second line: the counts, and what they do and do not mean.</summary>
+    public string Detail
+    {
+        get
+        {
+            if (ImportFailed)
+                return Summary;
+
+            var verdict = Unsupported == 0
+                ? "Nothing was dropped."
+                : $"{Unsupported} element(s) could not be represented at all.";
+
+            return $"{FullySupported} fully / {PartiallySupported} partial / {Unsupported} unsupported " +
+                   $"of {Discovered} layout elements. {verdict} " +
+                   (WarningCount == 0
+                       ? "Nothing was left out."
+                       : $"{WarningCount + InfoCount} finding(s) below describe what FrameForge could not carry across.");
+        }
+    }
+
+    /// <summary>How the findings list should be headed.</summary>
+    public string DiagnosticsHeader
+    {
+        get
+        {
+            if (ImportFailed)
+                return "IMPORT DIAGNOSTICS (FAILED)";
+
+            var parts = new List<string>();
+            if (ErrorCount > 0)
+                parts.Add($"{ErrorCount} error{(ErrorCount == 1 ? string.Empty : "s")}");
+            if (WarningCount > 0)
+                parts.Add($"{WarningCount} warning{(WarningCount == 1 ? string.Empty : "s")}");
+            if (InfoCount > 0)
+                parts.Add($"{InfoCount} note{(InfoCount == 1 ? string.Empty : "s")}");
+
+            return $"IMPORT DIAGNOSTICS ({string.Join(", ", parts)})";
         }
     }
 }

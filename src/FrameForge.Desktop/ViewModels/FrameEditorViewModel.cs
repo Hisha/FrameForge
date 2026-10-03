@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core;
@@ -58,6 +59,32 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     /// <summary>The frame currently being edited. Null when nothing is selected.</summary>
     public FrameDef? Frame { get; private set; }
 
+    /// <summary>
+    /// The anchors the source declared after the first one, shown read-only.
+    /// </summary>
+    /// <remarks>
+    /// FrameForge keeps them rather than dropping them, but it also does not pretend to edit
+    /// them: WoW solves several anchors at once and there is no safe way to rewrite one without
+    /// knowing the order the game would apply them in. They are displayed so the user can see
+    /// what the file asked for, which is the thing that was otherwise invisible.
+    /// </remarks>
+    public ObservableCollection<AnchorLine> ExtraAnchors { get; } = [];
+
+    /// <summary>True when the selected frame declared more than one anchor.</summary>
+    public bool HasExtraAnchors => ExtraAnchors.Count > 0;
+
+    /// <summary>Where this frame came from, when it came from an imported file.</summary>
+    public string SourceNote { get; private set; } = string.Empty;
+
+    /// <summary>Anchors the engine could not honour, joined for display.</summary>
+    public string AnchorNote { get; private set; } = string.Empty;
+
+    /// <summary>True when the frame was synthesized to stand in for an external one.</summary>
+    public bool IsPlaceholder => Frame?.Placeholder ?? false;
+
+    /// <summary>True when the source element was anonymous.</summary>
+    public bool IsAnonymous => Frame?.Anonymous ?? false;
+
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private FrameOption? _parent;
     [ObservableProperty] private FrameOption? _relativeTo;
@@ -93,6 +120,9 @@ public sealed partial class FrameEditorViewModel : ObservableObject
             HasIssues = false;
             IssueText = string.Empty;
             ValidationMessage = string.Empty;
+            SourceNote = string.Empty;
+            ExtraAnchors.Clear();
+            RefreshAnchorNotes(null);
             Name = string.Empty;
             Parent = null;
             RelativeTo = null;
@@ -117,7 +147,51 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         OffsetY = Number(Frame.OffsetY);
         IsVisible = Frame.Visible;
         SizeReference = Frame.SizeReferenceOrDefault;
+        SourceNote = DescribeSource(Frame, imported: project.Source is { IsReadOnlyXml: true });
         ValidationMessage = string.Empty;
+
+        OnPropertyChanged(nameof(SourceNote));
+        OnPropertyChanged(nameof(IsPlaceholder));
+        OnPropertyChanged(nameof(IsAnonymous));
+    }
+
+    /// <summary>
+    /// One line describing where the selected frame came from.
+    /// </summary>
+    /// <remarks>
+    /// Shown read-only, because the imported document is the authority on its own widgets.
+    /// A <c>FontString</c> whose size came from <c>GameFontHighlightSmall</c> looks identical to
+    /// one that declared its size unless the user is told which, and "0 x 0" in a width/height
+    /// box is otherwise indistinguishable from a mistake.
+    /// </remarks>
+    private static string DescribeSource(FrameDef frame, bool imported)
+    {
+        // Empty means "this frame was not imported", which is what lets the view hide the box
+        // instead of showing provenance for a project the user built by hand.
+        if (!imported)
+            return string.Empty;
+
+        if (frame.Placeholder)
+            return $"Stand-in for \"{frame.Name}\", which this file references but does not define. " +
+                   "Its size is FrameForge's guess; the real one is decided at runtime.";
+
+        var parts = new List<string> { $"imported as <{frame.Kind.TagName()}>" };
+
+        if (frame.Anonymous)
+            parts.Add("unnamed in the source, so FrameForge generated this identity");
+        else if (frame.SourceName is { } source && source != frame.Name)
+            parts.Add($"written as \"{source}\" before $parent expansion");
+
+        if (frame.Inherits is { Length: > 0 } inherits)
+            parts.Add($"inherits \"{inherits}\", which was NOT resolved");
+
+        if (frame.SetAllPoints)
+            parts.Add("setAllPoints: fills its anchor target, ignoring size and offsets");
+
+        if (!frame.Visible)
+            parts.Add("hidden in the source (hidden=\"true\")");
+
+        return string.Join("  |  ", parts) + ".";
     }
 
     /// <summary>Mirrors the engine's output for the edited frame.</summary>
@@ -127,11 +201,31 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         AnchoredTo = layout?.AnchoredTo;
         HasIssues = layout is { Issues.Count: > 0 };
         IssueText = layout is { } detail ? string.Join("; ", detail.Issues) : string.Empty;
+
+        ExtraAnchors.Clear();
+        if (layout is { } withAnchors)
+        {
+            foreach (var anchor in withAnchors.Anchors.Where(a => !a.Primary))
+                ExtraAnchors.Add(AnchorLine.From(anchor));
+        }
+
+        RefreshAnchorNotes(layout);
+
         OnPropertyChanged(nameof(Resolved));
         OnPropertyChanged(nameof(AnchoredTo));
         OnPropertyChanged(nameof(HasIssues));
         OnPropertyChanged(nameof(IssueText));
         OnPropertyChanged(nameof(ResolvedSummary));
+        OnPropertyChanged(nameof(HasExtraAnchors));
+    }
+
+    private void RefreshAnchorNotes(FrameLayout? layout)
+    {
+        AnchorNote = layout is { UnresolvedAnchorNotes.Count: > 0 } notes
+            ? string.Join("  ", notes.UnresolvedAnchorNotes)
+            : string.Empty;
+
+        OnPropertyChanged(nameof(AnchorNote));
     }
 
     /// <summary>One-line summary of the resolved geometry, for the inspector header.</summary>
@@ -259,4 +353,38 @@ public sealed partial class FrameEditorViewModel : ObservableObject
 
     private static bool TryParseNumber(string text, out double value) =>
         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
+}
+/// <summary>
+/// One resolved anchor relationship, formatted for the read-only list in the inspector.
+/// </summary>
+/// <remarks>
+/// Every field is a copy of something the engine already resolved; nothing here recomputes
+/// geometry. The point of the record is that the XAML can bind a <c>TextBlock.Text</c> without
+/// a converter per field, and that the wording cannot drift away from the model.
+/// </remarks>
+public sealed record AnchorLine(
+    string Label,
+    string Point,
+    string Target,
+    string RelativePoint,
+    string Offsets,
+    bool Holds,
+    string Note)
+{
+    /// <summary>Builds the line from one resolved anchor.</summary>
+    public static AnchorLine From(ResolvedAnchor anchor)
+    {
+        var number = (double value) => value == Math.Floor(value)
+            ? value.ToString("0", CultureInfo.InvariantCulture)
+            : value.ToString("0.##", CultureInfo.InvariantCulture);
+
+        return new AnchorLine(
+            anchor.Label,
+            anchor.Point.ToString(),
+            anchor.TargetIsPlaceholder ? $"{anchor.Target} (stand-in)" : anchor.Target ?? "screen / UIParent",
+            anchor.RelativePoint.ToString(),
+            $"{number(anchor.OffsetX)}, {number(anchor.OffsetY)}",
+            anchor.Resolved,
+            anchor.Note ?? "Holds.");
+    }
 }

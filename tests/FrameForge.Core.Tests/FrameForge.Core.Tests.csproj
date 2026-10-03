@@ -22,15 +22,23 @@
     <ProjectReference Include="..\..\src\FrameForge.Core\FrameForge.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!--
-      The shipped example project is embedded so the test compares the built-in
-      FrameForge.Core example against the checked-in file. Editing
-      examples/native-hunts.fforge.json by hand will fail the test suite in CI rather than
-      silently drifting.
+<ItemGroup>
+    <!-- The shipped example project is embedded so the test compares the built-in
+    FrameForge.Core example against the checked-in file. Editing
+    examples/native-hunts.fforge.json by hand will fail the test suite in CI rather than
+    silently drifting.
     -->
     <EmbeddedResource Include="..\..\examples\native-hunts.fforge.json"
                       LogicalName="FrameForge.Core.Tests.examples.native-hunts.fforge.json" />
+
+    <!--
+      A byte-for-byte copy of the real mod-native-hunts NativeHuntsFrame.xml. It is committed
+      rather than read from ../mod-native-hunts so the suite never depends on a sibling checkout;
+      the attribution and expected digest live in tests/FrameForge.Core.Tests/Fixtures/README.md.
+    -->
+    <EmbeddedResource Include="Fixtures\NativeHuntsFrame.xml"
+                      LogicalName="FrameForge.Core.Tests.fixtures.NativeHuntsFrame.xml" />
   </ItemGroup>
+
 
 </Project>

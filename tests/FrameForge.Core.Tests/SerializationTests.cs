@@ -227,6 +227,35 @@ public class SerializationTests
     }
 
     [Fact]
+    public void TheOpenDialogOffersBothFormatsAndNothingElse()
+    {
+        var filters = ProjectCodec.OpenDialogFilters;
+
+        Assert.Equal(
+            ["All Supported Files", "FrameForge Projects (*.fforge.json)", "WoW FrameXML (*.xml)", "All Files (*)"],
+            filters.Select(f => f.Label));
+
+        // The default has to satisfy both formats at once, because the Linux Open dialog is the
+        // XDG portal: it takes the whole filter list once and a remote backend owns the combo,
+        // so a narrower first entry would hide one format with no reliable way back.
+        Assert.Equal(["*.fforge.json", "*.xml"], filters[0].Patterns);
+        Assert.Equal(["*.fforge.json"], filters[1].Patterns);
+        Assert.Equal(["*.xml"], filters[2].Patterns);
+        Assert.Equal(["*.*"], filters[3].Patterns);
+    }
+
+    [Fact]
+    public void EveryOpenFilterMatchesAtLeastOneFile()
+    {
+        foreach (var filter in ProjectCodec.OpenDialogFilters)
+        {
+            Assert.NotEmpty(filter.Patterns);
+            Assert.All(filter.Patterns, p => Assert.StartsWith("*.", p, StringComparison.Ordinal));
+            Assert.Equal(filter.Label, filter.Label.Trim());
+        }
+    }
+
+    [Fact]
     public void TheNativeHuntsExampleRoundTripsToIdenticalGeometry()
     {
         var example = NativeHuntsExample.CreateProject();

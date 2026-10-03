@@ -42,12 +42,14 @@ public readonly record struct Screen(double Width, double Height)
 }
 
 /// <summary>
-/// A single frame in a FrameForge layout.
+/// A single widget in a FrameForge layout.
 /// </summary>
 /// <remarks>
-/// A frame is positioned by ONE anchor (WoW allows several; multi-anchor support is
-/// roadmap work). <see cref="Point"/> names the point of THIS frame that is placed, and
-/// <see cref="RelativePoint"/> names the point of <see cref="RelativeTo"/> it is placed against.
+/// A frame is positioned by an anchor. <see cref="Point"/> names the point of THIS frame that
+/// is placed, and <see cref="RelativePoint"/> names the point of <see cref="RelativeTo"/> it is
+/// placed against. Those four flattened fields are the PRIMARY anchor and stay the editable
+/// ones; any further <c>&lt;Anchor&gt;</c> elements the source declared are retained verbatim in
+/// <see cref="ExtraAnchors"/> so importing a multi-anchor frame never silently drops one.
 /// <para>
 /// <see cref="RelativeTo"/> of null means "use <see cref="Parent"/>"; if the parent is also
 /// null the frame is positioned against the screen (the WoW UIParent centre, model 0,0).
@@ -69,6 +71,26 @@ public readonly record struct Screen(double Width, double Height)
 /// <param name="SizeReference">What the size is measured against. Null means SCREEN.</param>
 /// <param name="Stratum">Draw-order stratum. Null means MEDIUM.</param>
 /// <param name="Level">Sub-order within the stratum. Null means 0.</param>
+/// <param name="Kind">Which FrameXML widget this is, so the tree and canvas do not lie about it.</param>
+/// <param name="SetAllPoints">
+/// WoW's <c>SetAllPoints()</c>: the widget fills its reference frame exactly, ignoring size and
+/// offsets. Modelled as an explicit relationship rather than as a size, because the target can
+/// change and because "fills the parent" and "happens to be the same size" are different facts.
+/// </param>
+/// <param name="ExtraAnchors">
+/// Additional anchors beyond the primary, in source order. Empty for hand-authored data.
+/// </param>
+/// <param name="SourceName">
+/// The name exactly as written in the imported source, before <c>$parent</c> expansion.
+/// Null when the source element was anonymous or the frame was authored in FrameForge.
+/// </param>
+/// <param name="Anonymous">True when the source element had no name and FrameForge generated an internal identity.</param>
+/// <param name="Inherits">The template name from a <c>inherits</c> attribute, retained unresolved.</param>
+/// <param name="Placeholder">
+/// True when FrameForge synthesized this frame to stand in for a frame that the source
+/// references but does not define (typically a Blizzard frame such as <c>LFDParentFrame</c>).
+/// The editor marks these so the preview is never mistaken for the real runtime layout.
+/// </param>
 public sealed record FrameDef
 {
     public required string Name { get; init; }
@@ -97,6 +119,20 @@ public sealed record FrameDef
 
     public int? Level { get; init; }
 
+    public FrameKind Kind { get; init; } = FrameKind.FRAME;
+
+    public bool SetAllPoints { get; init; }
+
+    public IReadOnlyList<FrameAnchor> ExtraAnchors { get; init; } = [];
+
+    public string? SourceName { get; init; }
+
+    public bool Anonymous { get; init; }
+
+    public string? Inherits { get; init; }
+
+    public bool Placeholder { get; init; }
+
     /// <summary>Effective size reference, defaulting to <see cref="Models.SizeReference.SCREEN"/>.</summary>
     public SizeReference SizeReferenceOrDefault => SizeReference ?? Models.SizeReference.SCREEN;
 
@@ -114,4 +150,24 @@ public sealed record FrameDef
 
     /// <summary>True when this frame anchors against the screen rather than another frame.</summary>
     public bool IsRoot => Parent is null;
+
+    /// <summary>The primary anchor, lifted out of the flattened fields.</summary>
+    public FrameAnchor PrimaryAnchor => new()
+    {
+        Point = Point,
+        RelativeTo = RelativeTo,
+        RelativePoint = RelativePoint,
+        OffsetX = OffsetX,
+        OffsetY = OffsetY,
+    };
+
+    /// <summary>Primary anchor first, then <see cref="ExtraAnchors"/> in source order.</summary>
+    public IReadOnlyList<FrameAnchor> AllAnchors =>
+        ExtraAnchors.Count == 0 ? [PrimaryAnchor] : [PrimaryAnchor, .. ExtraAnchors];
+
+    /// <summary>True when the source declared more than one anchor.</summary>
+    public bool HasMultipleAnchors => ExtraAnchors.Count > 0;
+
+    /// <summary>True when the widget actually has area, which is not guaranteed by the source.</summary>
+    public bool HasArea => Width > 0 && Height > 0;
 }

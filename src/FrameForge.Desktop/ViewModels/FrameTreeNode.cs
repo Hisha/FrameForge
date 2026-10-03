@@ -21,11 +21,26 @@ public sealed record FrameTreeNode(FrameDef Frame, IReadOnlyList<FrameTreeNode> 
     /// <summary>Frame name, shown as the tree label.</summary>
     public string Name => Frame.Name;
 
+    /// <summary>
+    /// What kind of FrameXML widget this is, so the tree does not imply a hierarchy of panels
+    /// where the file actually contains textures and text.
+    /// </summary>
+    public string KindBadge => Frame.Placeholder ? "stand-in" : Frame.Kind.Badge();
+
+    /// <summary>True when the widget's size came from somewhere other than the file.</summary>
+    public bool IsFill => Frame.SetAllPoints;
+
+    /// <summary>True when the source element had no name of its own.</summary>
+    public bool IsAnonymous => Frame.Anonymous;
+
     /// <summary>Size beside the name; parent-relative sizes are marked as such.</summary>
     public string SizeText
     {
         get
         {
+            if (Frame.SetAllPoints)
+                return "fills anchor target";
+
             var width = Format(Frame.Width);
             var height = Format(Frame.Height);
             return Frame.SizeReferenceOrDefault == SizeReference.PARENT

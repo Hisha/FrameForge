@@ -85,12 +85,16 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm)
             return;
 
+        // Projects and FrameXML side by side: the same Open action reads either, so the picker
+        // must not hide the format the user is most likely to have to hand. The filter order is
+        // significant - the first entry is the dialog's default - so it is sent exactly as
+        // ProjectCodec declares it, and "All Supported Files" leads with both globs.
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Open FrameForge project",
+            Title = "Open a FrameForge project or a WoW FrameXML file",
             AllowMultiple = false,
-            FileTypeFilter = ProjectCodec.DialogFilters
-                .Select(name => new FilePickerFileType(name) { Patterns = ["*.fforge.json", "*.json"] })
+            FileTypeFilter = ProjectCodec.OpenDialogFilters
+                .Select(filter => new FilePickerFileType(filter.Label) { Patterns = [.. filter.Patterns] })
                 .ToArray(),
         });
 
@@ -103,6 +107,7 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm)
             return;
 
+        // A read-only import has no destination yet, so Save must not shortcut past Save As.
         if (vm.ProjectPath is { Length: > 0 } existing)
         {
             vm.SaveToFile(existing);
@@ -124,7 +129,7 @@ public partial class MainWindow : Window
         {
             Title = "Save FrameForge project",
             SuggestedFileName = SanitizeFileName(vm.Project.Name) + ProjectCodec.FileExtension,
-            DefaultExtension = "fforge.json",
+            DefaultExtension = ProjectCodec.FileExtension.TrimStart('.'),
             ShowOverwritePrompt = true,
             FileTypeChoices = ProjectCodec.DialogFilters
                 .Select(name => new FilePickerFileType(name) { Patterns = ["*.fforge.json"] })

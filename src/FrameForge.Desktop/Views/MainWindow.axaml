@@ -45,13 +45,19 @@
         </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="Auto,*,Auto">
+    <!--
+      The root grid is named so the smoke test can render the WHOLE window and compare it against a
+      render with the canvas hidden. That is the only way to prove the canvas does not paint over
+      its neighbours: asserting on a bitmap of the canvas alone can never observe an escape.
+    -->
+    <Grid x:Name="RootGrid" RowDefinitions="Auto,Auto,*,Auto">
 
         <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
         <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="New" Click="OnNewClick" ToolTip.Tip="Start an empty project" />
-                <Button Content="Open" Click="OnOpenClick" ToolTip.Tip="Open a .fforge.json project" />
+                <Button Content="Open" Click="OnOpenClick"
+                        ToolTip.Tip="Open a .fforge.json project or a WoW FrameXML file" />
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
                 <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
 
@@ -65,7 +71,49 @@
             </StackPanel>
         </Border>
 
-        <Grid Grid.Row="1" ColumnDefinitions="260,* ,320">
+        <!-- Import banner: the origin of the layout, and what the importer could not honour.
+             Row 1 collapses to nothing for projects authored in FrameForge, so this is only
+             visible when there is genuinely a read-only external source to account for. -->
+        <Border Grid.Row="1" IsVisible="{Binding HasSource}"
+                Background="#141C15" BorderBrush="#2F4636" BorderThickness="0,0,0,1" Padding="12,8">
+            <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Column="0" Classes="header" Text="IMPORTED" Margin="0,0,8,0"
+                               VerticalAlignment="Top" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Source.Headline}" TextWrapping="Wrap" />
+                        <TextBlock Classes="mono" Text="{Binding Source.Detail}" TextWrapping="Wrap"
+                                   Opacity="0.8" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Classes="mono" Margin="12,0,0,0" VerticalAlignment="Top"
+                               Text="{Binding Source.SourcePath}" TextTrimming="CharacterEllipsis"
+                               MaxWidth="320" ToolTip.Tip="{Binding Source.SourcePath}" />
+                </Grid>
+
+                <!-- Diagnostics are shown whether or not the import produced errors: a file that
+                     imported "successfully" with fourteen warnings is not a clean file, and a
+                     banner that stayed silent would imply otherwise. -->
+                <Expander IsVisible="{Binding HasImportDiagnostics}" Header="{Binding Source.DiagnosticsHeader}">
+                    <ItemsControl ItemsSource="{Binding ImportDiagnostics}" Margin="0,6,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,0,0,3">
+                                    <TextBlock Grid.Column="0" Margin="0,0,6,0" MinWidth="62"
+                                               Text="{Binding Severity}" />
+                                    <TextBlock Grid.Column="1" Classes="mono" Margin="0,0,6,0"
+                                               Text="{Binding Heading}" Opacity="0.85" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+            </StackPanel>
+        </Border>
+
+        <!-- Row 2 is the only star row: the toolbar and import banner size to their content above
+             it and the status bar sits below it, so this cell is exactly the canvas's allotment. -->
+        <Grid x:Name="ContentRow" Grid.Row="2" ColumnDefinitions="260,* ,320">
 
             <!-- Frame tree -->
             <Border Grid.Column="0" Classes="panel" BorderThickness="0,0,1,0" Padding="10">
@@ -84,9 +132,19 @@
                         </TreeView.Styles>
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
-                                <Grid ColumnDefinitions="*,Auto" MinWidth="180">
-                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="1" Text="{Binding SizeText}" Classes="mono"
+                                <Grid ColumnDefinitions="Auto,*,Auto" MinWidth="180">
+                                    <!-- The kind and the "fills" tag are what distinguish a
+                                         FontString from a Texture from a Frame. Importing 51
+                                         widgets that all look like identical panels tells the
+                                         user nothing about the file they just opened. -->
+                                    <Border Grid.Column="0" Classes="mono" Margin="0,0,6,0"
+                                            Padding="4,1" CornerRadius="3" VerticalAlignment="Center"
+                                            Background="#1C2733">
+                                        <TextBlock Text="{Binding KindBadge}" />
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="2" Text="{Binding SizeText}" Classes="mono"
                                                VerticalAlignment="Center" Opacity="0.75" />
                                 </Grid>
                             </TreeDataTemplate>
@@ -109,6 +167,15 @@
                 <ScrollViewer>
                     <StackPanel Spacing="6" IsEnabled="{Binding CanEditSelection}">
                         <TextBlock Classes="header" Text="INSPECTOR" />
+
+                        <!-- Provenance, above the editable fields and outside their enabled state:
+                             it describes the source, so it stays true while the fields below are
+                             read-only because the frame belongs to an imported document. -->
+                        <Border Background="#151B21" CornerRadius="4" Padding="8,6" Margin="0,0,0,8"
+                                IsVisible="{Binding Editor.SourceNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Classes="mono" TextWrapping="Wrap"
+                                       Text="{Binding Editor.SourceNote}" Opacity="0.85" />
+                        </Border>
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Name" />
@@ -174,6 +241,41 @@
 
                         <TextBlock Classes="header" Text="RESOLVED GEOMETRY" Margin="0,12,0,4" />
                         <TextBlock Classes="mono" Text="{Binding Editor.ResolvedSummary}" TextWrapping="Wrap" />
+
+                        <!-- Extra anchors are shown, not editable. WoW applies several anchors
+                             together and FrameForge will not rewrite one blind, so displaying them
+                             is the honest option; hiding them would lose the only record of what
+                             the source actually asked for. -->
+                        <StackPanel IsVisible="{Binding Editor.HasExtraAnchors}" Margin="0,10,0,0">
+                            <TextBlock Classes="header" Text="ADDITIONAL ANCHORS (READ-ONLY)" Margin="0,0,0,4" />
+                            <ItemsControl ItemsSource="{Binding Editor.ExtraAnchors}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="vm:AnchorLine">
+                                        <Border BorderBrush="#22303A" BorderThickness="1" CornerRadius="3"
+                                                Padding="6,4" Margin="0,0,0,4">
+                                            <StackPanel Spacing="1">
+                                                <TextBlock Classes="mono" Text="{Binding Label}" />
+                                                <TextBlock Classes="mono" TextWrapping="Wrap"
+                                                           Text="{Binding Point}" Opacity="0.9" />
+                                                <TextBlock Classes="mono" TextWrapping="Wrap"
+                                                           Text="{Binding Target}" Opacity="0.9" />
+                                                <TextBlock Classes="mono" TextWrapping="Wrap"
+                                                           Text="{Binding RelativePoint}" Opacity="0.9" />
+                                                <TextBlock Classes="mono" TextWrapping="Wrap"
+                                                           Text="{Binding Offsets}" Opacity="0.7" />
+                                                <TextBlock Classes="mono" TextWrapping="Wrap"
+                                                           Text="{Binding Note}" Opacity="0.7" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <TextBlock Classes="mono" TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="{Binding Editor.AnchorNote}" Foreground="#E06C6C"
+                                   IsVisible="{Binding Editor.AnchorNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
                         <TextBlock Classes="label" Margin="0,8,0,0" Text="WoW model units, +Y up" />
                     </StackPanel>
                 </ScrollViewer>
@@ -181,7 +283,7 @@
         </Grid>
 
         <!-- Geometry diagnostics -->
-        <Border Grid.Row="2" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,1,0,0" Padding="10,6">
+        <Border Grid.Row="3" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,1,0,0" Padding="10,6">
             <StackPanel Spacing="2">
                 <TextBlock Classes="value" Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Classes="mono" Text="{Binding SelectionSummary}" TextTrimming="CharacterEllipsis" />

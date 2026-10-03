@@ -12,6 +12,7 @@ namespace FrameForge.Core.Models;
 /// <param name="Name">Display name.</param>
 /// <param name="Screen">The UIParent this layout targets.</param>
 /// <param name="Frames">Frames in authored order, which is also the tie-breaker for draw order.</param>
+/// <param name="Source">Where the project came from, or null when it was authored here.</param>
 public sealed record Project
 {
     /// <summary>Discriminator written to every project file.</summary>
@@ -25,6 +26,8 @@ public sealed record Project
     public Screen Screen { get; init; } = Screen.Default;
 
     public IReadOnlyList<FrameDef> Frames { get; init; } = [];
+
+    public ProjectSource? Source { get; init; }
 
     /// <summary>Finds a frame by name, or null.</summary>
     public FrameDef? Find(string? name) =>
@@ -53,6 +56,7 @@ public sealed record Project
 
         return Name == other.Name
                && Screen == other.Screen
+               && Equals(Source, other.Source)
                && Frames.SequenceEqual(other.Frames);
     }
 
@@ -62,6 +66,7 @@ public sealed record Project
         var hash = new HashCode();
         hash.Add(Name);
         hash.Add(Screen);
+        hash.Add(Source);
         foreach (var frame in Frames)
             hash.Add(frame);
         return hash.ToHashCode();

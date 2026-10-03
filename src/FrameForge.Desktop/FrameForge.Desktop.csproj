@@ -46,6 +46,15 @@
     <!-- The shipped example ships with the app so "Load Native Hunts Example" always works. -->
     <AvaloniaResource Include="..\..\examples\native-hunts.fforge.json"
                       Link="Assets/examples/native-hunts.fforge.json" />
+
+    <!--
+      The real NativeHuntsFrame.xml is packaged so the desktop smoke test can exercise the
+      FrameXML importer end to end, including in a self-contained publish where the repository
+      is not present. It is LINKED from the single canonical copy in the test fixtures folder
+      rather than duplicated, so the importer can never be smoke-tested against a stale copy.
+    -->
+    <AvaloniaResource Include="..\..\tests\FrameForge.Core.Tests\Fixtures\NativeHuntsFrame.xml"
+                      Link="Assets/Fixtures/NativeHuntsFrame.xml" />
   </ItemGroup>
 
 </Project>
