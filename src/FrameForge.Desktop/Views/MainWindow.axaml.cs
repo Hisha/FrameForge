@@ -45,7 +45,10 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName is nameof(MainWindowViewModel.Layout)
             or nameof(MainWindowViewModel.Project)
-            or nameof(MainWindowViewModel.SelectedName))
+            or nameof(MainWindowViewModel.SelectedName)
+            or nameof(MainWindowViewModel.ViewMode)
+            or nameof(MainWindowViewModel.CanvasFilter)
+            or nameof(MainWindowViewModel.LabelPolicy))
         {
             SyncCanvas();
         }
@@ -68,6 +71,9 @@ public partial class MainWindow : Window
         Canvas.Project = vm.Project;
         Canvas.Layout = vm.Layout;
         Canvas.SelectedName = vm.SelectedName;
+        Canvas.Mode = vm.ViewMode;
+        Canvas.Filter = vm.CanvasFilter;
+        Canvas.Labels = vm.LabelPolicy;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();
@@ -79,6 +85,25 @@ public partial class MainWindow : Window
     private void OnDeleteFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteFrame();
 
     private void OnFitClick(object? sender, RoutedEventArgs e) => OnCanvasFitRequested(sender, EventArgs.Empty);
+
+    private void OnRevealSelectionClick(object? sender, RoutedEventArgs e) =>
+        ViewModel?.ReportRevealSelection(Canvas.RevealSelection());
+
+    /// <summary>
+    /// Restores the active mode's own defaults.
+    /// </summary>
+    /// <remarks>
+    /// Every visibility toggle and the label selector are independent, so a few experiments can leave
+    /// the canvas in a combination no mode would ever produce. Reset gives one honest way back
+    /// without switching modes, which would also work but would silently discard the mode choice.
+    /// </remarks>
+    private void OnResetViewClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+            return;
+
+        vm.ResetViewToModeDefaults();
+    }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e)
     {

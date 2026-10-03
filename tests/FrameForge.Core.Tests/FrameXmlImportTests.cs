@@ -320,8 +320,7 @@ public class FrameXmlImportTests
     [InlineData(FrameXmlDiagnosticCodes.AnonymousElement)]
     [InlineData(FrameXmlDiagnosticCodes.ExternalFramePlaceholder)]
     [InlineData(FrameXmlDiagnosticCodes.UnresolvedReference)]
-    [InlineData(FrameXmlDiagnosticCodes.PaintAttributeIgnored)]
-    [InlineData(FrameXmlDiagnosticCodes.StatusBarValueIgnored)]
+    [InlineData(FrameXmlDiagnosticCodes.VisualRetainedNotRendered)]
     [InlineData(FrameXmlDiagnosticCodes.UnresolvedTemplate)]
     [InlineData(FrameXmlDiagnosticCodes.RelativePointDefaulted)]
     public void RealDocumentReportsEveryGapItActuallyHas(string code) =>

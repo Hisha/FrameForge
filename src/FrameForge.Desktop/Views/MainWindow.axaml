@@ -50,7 +50,7 @@
       render with the canvas hidden. That is the only way to prove the canvas does not paint over
       its neighbours: asserting on a bitmap of the canvas alone can never observe an escape.
     -->
-    <Grid x:Name="RootGrid" RowDefinitions="Auto,Auto,*,Auto">
+    <Grid x:Name="RootGrid" RowDefinitions="Auto,Auto,Auto,*,Auto">
 
         <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
         <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
@@ -111,14 +111,110 @@
             </StackPanel>
         </Border>
 
-        <!-- Row 2 is the only star row: the toolbar and import banner size to their content above
-             it and the status bar sits below it, so this cell is exactly the canvas's allotment. -->
-        <Grid x:Name="ContentRow" Grid.Row="2" ColumnDefinitions="260,* ,320">
+        <!--
+          View controls. Row 2 sits directly under the import banner and above the canvas, because
+          these govern how the canvas draws rather than what the document contains: switching mode
+          or a category is a change of view, never an edit, so nothing here marks the project dirty.
+        -->
+        <Border Grid.Row="2" Background="#0B1116" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,6">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <TextBlock Classes="label" Text="View" VerticalAlignment="Center" />
+
+                <!-- A RadioButton group rather than a ComboBox: the three modes are mutually
+                     exclusive and are the most-used control in the window, so they should cost one
+                     click rather than two, and should be able to show each mode's description. -->
+                <ItemsControl ItemsSource="{Binding ModeOptions}" VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:CanvasModeOption">
+                            <RadioButton GroupName="CanvasMode" Margin="0,0,2,0"
+                                         Content="{Binding Label}"
+                                         ToolTip.Tip="{Binding Description}"
+                                         IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+
+                <TextBlock Classes="label" Text="Show" VerticalAlignment="Center" />
+
+                <!-- One checkbox per category. Turning a category off removes those widgets from
+                     drawing AND from picking, so the toggle cannot appear to do nothing until the
+                     user happens to click where the widget used to be. -->
+                <ItemsControl ItemsSource="{Binding VisibilityToggles}" VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="8" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:VisibilityToggle">
+                            <CheckBox Content="{Binding Label}" ToolTip.Tip="{Binding ToolTip}"
+                                      IsChecked="{Binding IsOn, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+
+                <TextBlock Classes="label" Text="Labels" VerticalAlignment="Center" />
+                <ComboBox ItemsSource="{Binding LabelPolicyOptions}"
+                          SelectedItem="{Binding SelectedLabelPolicyOption, Mode=TwoWay}"
+                          DisplayMemberBinding="{Binding Label}"
+                          ToolTip.Tip="Which widgets get a name label on the canvas" />
+
+                <Button Content="Reset" Click="OnResetViewClick"
+                        ToolTip.Tip="Restore this mode's default visibility and label settings" />
+            </StackPanel>
+        </Border>
+
+        <!-- Row 3 is the only star row: the toolbar, view controls and import banner size to their
+             content above it and the status bar sits below it, so this cell is exactly the canvas's
+             allotment. -->
+        <Grid x:Name="ContentRow" Grid.Row="3" ColumnDefinitions="260,* ,320">
 
             <!-- Frame tree -->
             <Border Grid.Column="0" Classes="panel" BorderThickness="0,0,1,0" Padding="10">
                 <DockPanel LastChildFill="True">
-                    <TextBlock DockPanel.Dock="Top" Classes="header" Text="FRAMES" />
+                    <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+                        <TextBlock Classes="header" Text="FRAMES" Margin="0" />
+
+                        <!-- Search and structural filter only decide what the tree DISPLAYS. The
+                             projection is recomputed from the project on every keystroke, so
+                             filtering can never delete a widget and clearing the box restores the
+                             full hierarchy. Ancestors of a match are always kept, so a search result
+                             is never stranded under a collapsed parent. -->
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0" Text="{Binding TreeSearch, Mode=TwoWay}"
+                                     PlaceholderText="Search frame names"
+                                     ToolTip.Tip="Case-insensitive substring match on frame names" />
+                            <Button Grid.Column="1" Content="Reveal" Margin="6,0,0,0"
+                                    Click="OnRevealSelectionClick"
+                                    ToolTip.Tip="Center the selected widget without changing zoom" />
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding TreeFilterOptions}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:TreeFilterOption">
+                                    <RadioButton GroupName="TreeFilter" Content="{Binding Label}"
+                                                 IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Classes="mono" Text="{Binding TreeFilterSummary}" Opacity="0.7" />
+                    </StackPanel>
+
                     <TextBlock DockPanel.Dock="Bottom" Classes="mono" Text="{Binding ProjectDescription}"
                                TextWrapping="Wrap" Margin="0,8,0,0" />
                     <TreeView x:Name="FrameTree"
@@ -276,6 +372,29 @@
                                    Text="{Binding Editor.AnchorNote}" Foreground="#E06C6C"
                                    IsVisible="{Binding Editor.AnchorNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
+                        <!--
+                            Retained visual metadata. Read-only on purpose, and stated as such:
+                            FrameForge understands these values and can draw a stand-in for them, but
+                            it does not decode the art, emulate the Blizzard fonts, or run the Lua
+                            that assigns runtime text. Showing the declared values without claiming
+                            more is the honest presentation - an inspector that rendered the texture
+                            file as if it were the texture would be lying about what it can do.
+                        -->
+                        <StackPanel IsVisible="{Binding Editor.HasVisual}" Margin="0,14,0,0">
+                            <TextBlock Classes="header" Text="DECLARED VISUALS (READ-ONLY)" Margin="0,0,0,4" />
+                            <Border Background="#141B22" BorderBrush="#22303A" BorderThickness="1"
+                                    CornerRadius="4" Padding="8,6">
+                                <ItemsControl ItemsSource="{Binding Editor.VisualLines}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Classes="mono" Text="{Binding}" TextWrapping="Wrap"
+                                                       Margin="0,1" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                        </StackPanel>
+
                         <TextBlock Classes="label" Margin="0,8,0,0" Text="WoW model units, +Y up" />
                     </StackPanel>
                 </ScrollViewer>
@@ -283,7 +402,7 @@
         </Grid>
 
         <!-- Geometry diagnostics -->
-        <Border Grid.Row="3" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,1,0,0" Padding="10,6">
+        <Border Grid.Row="4" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,1,0,0" Padding="10,6">
             <StackPanel Spacing="2">
                 <TextBlock Classes="value" Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Classes="mono" Text="{Binding SelectionSummary}" TextTrimming="CharacterEllipsis" />

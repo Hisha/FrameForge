@@ -235,6 +235,8 @@ public static class ProjectCodec
                     writer.WriteString("inherits", inherits);
                 if (frame.Placeholder)
                     writer.WriteBoolean("placeholder", true);
+                if (frame.Visual is { } visual && !visual.IsEmpty)
+                    WriteVisual(writer, visual);
 
                 writer.WriteEndObject();
             }
@@ -502,7 +504,255 @@ public static class ProjectCodec
             Anonymous = anonymous,
             Inherits = ReadOptionalString(element, "inherits"),
             Placeholder = placeholder,
+            Visual = ReadVisual(element, path, errors),
         };
+    }
+
+    /// <summary>
+    /// Writes one frame's retained paint facts.
+    /// </summary>
+    /// <remarks>
+    /// Written as a nested object with only the keys that exist, matching the rest of the format's
+    /// rule that absent facts are absent rather than defaulted. That matters here: "this texture
+    /// declares no colour" and "this texture is white" are different states, and collapsing them
+    /// would lose the ability to tell a round-tripped file from an authored one.
+    /// </remarks>
+    private static void WriteVisual(Utf8JsonWriter writer, FrameVisual visual)
+    {
+        writer.WriteStartObject("visual");
+
+        if (visual.Texture is { } texture)
+        {
+            writer.WriteStartObject("texture");
+            WriteNullableString(writer, "file", texture.File);
+
+            if (texture.TexCoords.IsSubRectangle)
+            {
+                writer.WriteStartObject("texCoords");
+                writer.WriteNumber("left", texture.TexCoords.Left);
+                writer.WriteNumber("right", texture.TexCoords.Right);
+                writer.WriteNumber("top", texture.TexCoords.Top);
+                writer.WriteNumber("bottom", texture.TexCoords.Bottom);
+                writer.WriteEndObject();
+            }
+
+            if (texture.Color is { } color)
+                WriteColor(writer, "color", color);
+            if (texture.Alpha is { } alpha)
+                writer.WriteNumber("alpha", alpha);
+            if (texture.NormalizeTexCoords is { } normalize)
+                writer.WriteBoolean("normalizeTexCoords", normalize);
+            if (texture.BlendMode is { Length: > 0 } blendMode)
+                writer.WriteString("blendMode", blendMode);
+
+            writer.WriteEndObject();
+        }
+
+        if (visual.Text is { } text)
+        {
+            writer.WriteStartObject("text");
+            WriteNullableString(writer, "text", text.Text);
+            if (text.JustifyH is { Length: > 0 } justifyH)
+                writer.WriteString("justifyH", justifyH);
+            if (text.JustifyV is { Length: > 0 } justifyV)
+                writer.WriteString("justifyV", justifyV);
+            if (text.FontTemplate is { Length: > 0 } font)
+                writer.WriteString("font", font);
+            writer.WriteEndObject();
+        }
+
+        if (visual.StatusBar is { } bar)
+        {
+            writer.WriteStartObject("statusBar");
+            if (bar.MinValue is { } min)
+                writer.WriteNumber("minValue", min);
+            if (bar.MaxValue is { } max)
+                writer.WriteNumber("maxValue", max);
+            if (bar.DefaultValue is { } value)
+                writer.WriteNumber("defaultValue", value);
+            if (bar.BarTexture is { Length: > 0 } barTexture)
+                writer.WriteString("barTexture", barTexture);
+            if (bar.BarColor is { } barColor)
+                WriteColor(writer, "barColor", barColor);
+            writer.WriteEndObject();
+        }
+
+        if (visual.DrawLayer is { Length: > 0 } drawLayer)
+            writer.WriteString("drawLayer", drawLayer);
+        if (visual.Id is { } id)
+            writer.WriteNumber("id", id);
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteColor(Utf8JsonWriter writer, string name, ColorRgba color)
+    {
+        writer.WriteStartObject(name);
+        writer.WriteNumber("r", color.R);
+        writer.WriteNumber("g", color.G);
+        writer.WriteNumber("b", color.B);
+        writer.WriteNumber("a", color.A);
+        writer.WriteEndObject();
+    }
+
+    private static FrameVisual? ReadVisual(JsonElement element, string path, List<string> errors)
+    {
+        if (!element.TryGetProperty("visual", out var visual) || visual.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (visual.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.visual must be an object.");
+            return null;
+        }
+
+        var result = new FrameVisual
+        {
+            Texture = ReadTextureVisual(visual, path, errors),
+            Text = ReadTextVisual(visual, path, errors),
+            StatusBar = ReadStatusBarVisual(visual, path, errors),
+            DrawLayer = ReadOptionalString(visual, "drawLayer"),
+            Id = ReadOptionalInt(visual, "id"),
+        };
+
+        return result.IsEmpty ? null : result;
+    }
+
+    private static TextureVisual? ReadTextureVisual(JsonElement visual, string path, List<string> errors)
+    {
+        if (!visual.TryGetProperty("texture", out var texture) || texture.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (texture.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.visual.texture must be an object.");
+            return null;
+        }
+
+        var file = ReadOptionalString(texture, "file");
+        var color = ReadColor(texture, "color", $"{path}.visual.texture", errors);
+        var alpha = ReadOptionalNumber(texture, "alpha", $"{path}.visual.texture", errors);
+        var normalize = texture.TryGetProperty("normalizeTexCoords", out var normalizeElement) &&
+                        normalizeElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? normalizeElement.ValueKind == JsonValueKind.True
+            : (bool?)null;
+        var blendMode = ReadOptionalString(texture, "blendMode");
+
+        // Mirrors the importer: a texture that states no paint at all is not carried, while one
+        // that states only a colour is.
+        if (file is null && color is null && alpha is null && normalize is null && blendMode is null)
+            return null;
+
+        return new TextureVisual(
+            file,
+            ReadTexCoords(texture, $"{path}.visual.texture", errors),
+            color,
+            alpha,
+            normalize,
+            blendMode);
+    }
+
+    private static TexCoords ReadTexCoords(JsonElement texture, string path, List<string> errors)
+    {
+        if (!texture.TryGetProperty("texCoords", out var coords) || coords.ValueKind == JsonValueKind.Null)
+            return TexCoords.Full;
+
+        if (coords.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.texCoords must be an object.");
+            return TexCoords.Full;
+        }
+
+        return new TexCoords(
+            ReadOptionalNumber(coords, "left", path, errors) ?? 0,
+            ReadOptionalNumber(coords, "right", path, errors) ?? 0,
+            ReadOptionalNumber(coords, "top", path, errors) ?? 0,
+            ReadOptionalNumber(coords, "bottom", path, errors) ?? 0);
+    }
+
+    private static TextVisual? ReadTextVisual(JsonElement visual, string path, List<string> errors)
+    {
+        if (!visual.TryGetProperty("text", out var text) || text.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (text.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.visual.text must be an object.");
+            return null;
+        }
+
+        return new TextVisual(
+            ReadOptionalString(text, "text"),
+            ReadOptionalString(text, "justifyH"),
+            ReadOptionalString(text, "justifyV"),
+            ReadOptionalString(text, "font"));
+    }
+
+    private static StatusBarVisual? ReadStatusBarVisual(JsonElement visual, string path, List<string> errors)
+    {
+        if (!visual.TryGetProperty("statusBar", out var bar) || bar.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (bar.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.visual.statusBar must be an object.");
+            return null;
+        }
+
+        return new StatusBarVisual(
+            ReadOptionalNumber(bar, "minValue", $"{path}.visual.statusBar", errors),
+            ReadOptionalNumber(bar, "maxValue", $"{path}.visual.statusBar", errors),
+            ReadOptionalNumber(bar, "defaultValue", $"{path}.visual.statusBar", errors),
+            ReadOptionalString(bar, "barTexture"),
+            ReadColor(bar, "barColor", $"{path}.visual.statusBar", errors));
+    }
+
+    private static ColorRgba? ReadColor(JsonElement parent, string key, string path, List<string> errors)
+    {
+        if (!parent.TryGetProperty(key, out var color) || color.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (color.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.{key} must be an object with r, g, b and a.");
+            return null;
+        }
+
+        return new ColorRgba(
+            ReadNumber(color, "r", $"{path}.{key}", errors),
+            ReadNumber(color, "g", $"{path}.{key}", errors),
+            ReadNumber(color, "b", $"{path}.{key}", errors),
+            ReadNumber(color, "a", $"{path}.{key}", errors, 1));
+    }
+
+    private static int? ReadOptionalInt(JsonElement element, string key) =>
+        element.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt32(out var number)
+            ? number
+            : null;
+
+    /// <summary>
+    /// Reads a number that is allowed to be absent, preserving the difference between "not
+    /// declared" and "declared as zero".
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadNumber"/> cannot be used for this: with no fallback it returns 0, which would
+    /// turn every undeclared optional number into a declared zero on the way back in. That matters
+    /// for status bars in particular - a missing <c>maxValue</c> is WoW's default of 100, not 0 - and
+    /// it would silently change what a reopened project says.
+    /// </remarks>
+    private static double? ReadOptionalNumber(JsonElement element, string key, string path, List<string> errors)
+    {
+        if (!element.TryGetProperty(key, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number) || !double.IsFinite(number))
+        {
+            errors.Add($"{path}.{key} must be a finite number.");
+            return null;
+        }
+
+        return number;
     }
 
     private static IReadOnlyList<FrameAnchor> ReadExtraAnchors(JsonElement element, string path, List<string> errors)

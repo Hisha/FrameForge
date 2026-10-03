@@ -12,7 +12,9 @@ using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
+using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.ViewModels;
 using FrameForge.Desktop.Views;
 
@@ -119,6 +121,52 @@ public static class SmokeTest
             Near(layout.Rects["Idle"].Top, layout.Rects["Identity"].Top) && layout.Rects["Idle"].Bottom < layout.Rects["Identity"].Bottom);
         Check("canvas received the layout", canvas.Project == vm.Project && canvas.Layout == layout);
 
+        // Phase 3 view policy and pipeline: the same canvas uses ordered content/overlay bands.
+        var pipeline = canvas.Pipeline;
+        Check("render pipeline is content, debug, selection",
+            pipeline.Layers.Select(l => l.Name).SequenceEqual(
+                ["visual-content", "debug-overlay", "selection-overlay"]));
+        Check("Preview skips the global debug overlay",
+            pipeline.For(CanvasViewMode.PREVIEW).Select(l => l.Name).SequenceEqual(
+                ["visual-content", "selection-overlay"]));
+        Check("Hybrid skips the global debug overlay",
+            pipeline.For(CanvasViewMode.HYBRID).Select(l => l.Name).SequenceEqual(
+                ["visual-content", "selection-overlay"]));
+
+        var projectCountBeforeViewChanges = vm.Project.Frames.Count;
+        vm.SetViewMode(CanvasViewMode.PREVIEW);
+        Check("Preview defaults to no labels", vm.LabelPolicy == LabelPolicy.NONE);
+        Check("Preview defaults hide helpers and hidden widgets",
+            !vm.CanvasFilter.HasFlag(VisibilityFilter.HELPERS)
+            && !vm.CanvasFilter.HasFlag(VisibilityFilter.HIDDEN));
+        Check("canvas followed Preview mode", canvas.Mode == CanvasViewMode.PREVIEW);
+
+        vm.SetViewMode(CanvasViewMode.HYBRID);
+        Check("Hybrid defaults to selected labels", vm.LabelPolicy == LabelPolicy.SELECTED);
+        Check("canvas followed Hybrid mode", canvas.Mode == CanvasViewMode.HYBRID);
+
+        vm.SetCategoryVisible(VisibilityFilter.TEXT, false);
+        Check("Text visibility toggle updates only the canvas filter",
+            !vm.CanvasFilter.HasFlag(VisibilityFilter.TEXT)
+            && vm.Project.Frames.Count == projectCountBeforeViewChanges);
+        vm.ResetViewToModeDefaults();
+
+        vm.TreeFilter = TreeFilter.VISUAL;
+        var visualTreeCount = CountTreeNodes(vm.TreeRoots);
+        Check("Visual tree filter can hide a structure-only project",
+            visualTreeCount == 0 && vm.Project.Frames.Count == projectCountBeforeViewChanges,
+            $"{visualTreeCount} of {projectCountBeforeViewChanges}");
+        vm.TreeFilter = TreeFilter.ALL;
+        vm.TreeSearch = "IDLE";
+        Check("tree search is case-insensitive and keeps the match",
+            FlattenTree(vm.TreeRoots).Any(n => n.Name.Contains("Idle", StringComparison.Ordinal)));
+        vm.TreeSearch = string.Empty;
+
+        vm.SetViewMode(CanvasViewMode.DEBUG);
+        Check("Debug restores all visibility and labels",
+            vm.CanvasFilter == VisibilityFilter.ALL && vm.LabelPolicy == LabelPolicy.ALL);
+        Check("view operations did not edit the project", vm.Project.Frames.Count == projectCountBeforeViewChanges);
+
         // A hand-authored project has no external source, so there is nothing to disclose. If the
         // provenance box ever shows up here it is claiming a file that does not exist.
         vm.Select("Content");
@@ -131,6 +179,33 @@ public static class SmokeTest
 
         var origin = new CanvasOrigin(canvas.Bounds.Width / 2, canvas.Bounds.Height / 2);
         var contentBox = canvas.Viewport.RectToCanvas(layout.Rects["Content"], origin);
+
+        IReadOnlyList<string>? overlap = null;
+        Point overlapPoint = default;
+        for (var y = contentBox.Y + 2; y < contentBox.Bottom - 2 && overlap is null; y += 3)
+        {
+            for (var x = contentBox.X + 2; x < contentBox.Right - 2; x += 3)
+            {
+                var candidates = canvas.HitTestCandidates(x, y);
+                if (candidates.Count > 1)
+                {
+                    overlap = candidates;
+                    overlapPoint = new Point(x, y);
+                    break;
+                }
+            }
+        }
+
+        Check("overlap hit testing returns an ordered candidate list", overlap is { Count: > 1 });
+        if (overlap is { Count: > 1 })
+        {
+            var first = canvas.CycleHitTestFrame(overlapPoint.X, overlapPoint.Y);
+            vm.Select(first);
+            var second = canvas.CycleHitTestFrame(overlapPoint.X, overlapPoint.Y);
+            Check("repeated click cycles to the next overlap candidate",
+                first == overlap[0] && second == overlap[1],
+                $"{first} then {second}; expected {overlap[0]} then {overlap[1]}");
+        }
 
         // Idle deliberately overlaps Identity, so the centre of Content belongs to whichever
         // frame is painted last. Sweep Content instead of trusting one coordinate: the sweep
@@ -159,6 +234,14 @@ public static class SmokeTest
             Check("canvas selection followed", canvas.SelectedName == "Content");
             Check("hit point was inside Content",
                 canvas.HitTestFrame(contentPoint.X, contentPoint.Y) == "Content");
+
+            var zoomBeforeReveal = canvas.Viewport.Zoom;
+            Check("Reveal Selection succeeds", canvas.RevealSelection());
+            var revealed = canvas.Viewport.RectToCanvas(vm.Layout.Rects["Content"], canvas.Origin);
+            Check("Reveal Selection preserves zoom", Near(canvas.Viewport.Zoom, zoomBeforeReveal));
+            Check("Reveal Selection centers the selected widget",
+                Near(revealed.X + revealed.Width / 2, canvas.Bounds.Width / 2)
+                && Near(revealed.Y + revealed.Height / 2, canvas.Bounds.Height / 2));
         }
 
         // 3. Inspector editing re-resolves immediately.
@@ -289,6 +372,72 @@ public static class SmokeTest
                 vm.Layout.Rects.Count == vm.Project.Frames.Count,
                 $"{vm.Layout.Rects.Count} of {vm.Project.Frames.Count}");
 
+            vm.TreeFilter = TreeFilter.VISUAL;
+            Check("Visual tree filter shows real visual widgets with ancestor context",
+                FlattenTree(vm.TreeRoots).Any(n => n.Frame.Kind == FrameKind.TEXTURE)
+                && CountTreeNodes(vm.TreeRoots) < vm.Project.Frames.Count);
+            vm.TreeSearch = "READY";
+            Check("imported tree search keeps matching descendants and ancestors",
+                FlattenTree(vm.TreeRoots).Any(n => n.Name.Contains("Ready", StringComparison.OrdinalIgnoreCase))
+                && FlattenTree(vm.TreeRoots).Any(n => n.Name == "NativeHuntsFrame"));
+            vm.TreeSearch = string.Empty;
+            vm.TreeFilter = TreeFilter.ALL;
+
+            var retainedTexture = vm.Project.Find("NativeHuntsFrameContentPanelHuntStateDecoration");
+            vm.OnCanvasSelectionRequested(retainedTexture!.Name);
+            Check("visual metadata appears in the inspector",
+                vm.Editor.HasVisual
+                && vm.Editor.VisualLines.Any(line => line.Contains("hunt_trail_prints.tga", StringComparison.Ordinal))
+                && vm.Editor.VisualLines.Any(line => line.Contains("alpha 0.38", StringComparison.Ordinal)),
+                string.Join(" | ", vm.Editor.VisualLines));
+
+            // Exercise the actual templated toolbar controls. Calling SetViewMode directly would
+            // prove the view model and miss a broken TwoWay binding between the visible toolbar
+            // and the ordinary (non-Avalonia-property) LayoutCanvas synchronization bridge.
+            vm.SetViewMode(CanvasViewMode.DEBUG);
+            await PumpAsync(1);
+            var previewButton = window.GetVisualDescendants()
+                .OfType<RadioButton>()
+                .FirstOrDefault(button => string.Equals(button.Content?.ToString(), "Preview", StringComparison.Ordinal));
+            Check("Preview toolbar button exists", previewButton is not null);
+            if (previewButton is not null)
+            {
+                previewButton.IsChecked = true;
+                await PumpAsync(2);
+                Check("Preview toolbar updates the view model", vm.ViewMode == CanvasViewMode.PREVIEW);
+                Check("Preview toolbar updates the canvas", canvas.Mode == CanvasViewMode.PREVIEW);
+            }
+
+            var hiddenToggle = window.GetVisualDescendants()
+                .OfType<CheckBox>()
+                .FirstOrDefault(checkBox => string.Equals(checkBox.Content?.ToString(), "Hidden", StringComparison.Ordinal));
+            Check("Hidden toolbar toggle exists", hiddenToggle is not null);
+            if (hiddenToggle is not null)
+            {
+                Check("Preview refreshes the visible Hidden toggle to off", hiddenToggle.IsChecked == false,
+                    $"control={hiddenToggle.IsChecked}, filter={vm.CanvasFilter}");
+
+                var beforeHiddenBitmap = new RenderTargetBitmap(
+                    new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                    new Vector(96, 96));
+                beforeHiddenBitmap.Render(canvas);
+                var beforeHiddenTrace = canvas.LastRenderTrace;
+                Console.WriteLine($"SMOKE_RENDER_BEFORE_HIDDEN {{\"filter\":\"{canvas.Filter}\"," +
+                                  $"\"visibilityAccepted\":{beforeHiddenTrace?.VisibilityAccepted ?? -1}," +
+                                  $"\"drawableFrames\":{beforeHiddenTrace?.DrawableFrames ?? -1}," +
+                                  $"\"areas\":{beforeHiddenTrace?.DrawableFramesWithArea ?? -1}," +
+                                  $"\"visualAttempts\":\"{FormatCounts(beforeHiddenTrace?.VisualAttemptsByKind
+                                      ?? new Dictionary<FrameKind, int>())}\"," +
+                                  $"\"paintedPixels\":{CountNonBackgroundPixels(beforeHiddenBitmap)}}}");
+
+                hiddenToggle.IsChecked = true;
+                await PumpAsync(2);
+                Check("Hidden toolbar updates the view model",
+                    vm.CanvasFilter.HasFlag(VisibilityFilter.HIDDEN));
+                Check("Hidden toolbar updates the canvas",
+                    canvas.Filter.HasFlag(VisibilityFilter.HIDDEN));
+            }
+
             // The placeholder is a stand-in, so its size is FrameForge's estimate and must be
             // labelled as such rather than presented as something the file said.
             Check("stand-in geometry is labelled as a stand-in",
@@ -362,6 +511,9 @@ public static class SmokeTest
                 Check("geometry survived the round trip",
                     LayoutResolver.Resolve(saved).Rects.Count == vm.Layout.Rects.Count,
                     $"{LayoutResolver.Resolve(saved).Rects.Count} vs {vm.Layout.Rects.Count}");
+                Check("visual metadata survived the round trip",
+                    saved.Find("NativeHuntsFrameContentPanelHuntStateDecoration")?.Visual
+                    == vm.Project.Find("NativeHuntsFrameContentPanelHuntStateDecoration")?.Visual);
             }
             else
             {
@@ -383,6 +535,63 @@ public static class SmokeTest
         canvas.SelectedName = "LFDParentFrame";
         canvas.FitToContent();
 
+        // Every first-class mode must be able to render the real fixture. The root is authored
+        // hidden, so turn Hidden on in the clean modes to exercise their visual content rather
+        // than correctly producing an empty runtime state.
+        foreach (var mode in Enum.GetValues<CanvasViewMode>())
+        {
+            vm.SetViewMode(mode);
+            if (mode is not CanvasViewMode.DEBUG)
+                vm.SetCategoryVisible(VisibilityFilter.HIDDEN, true);
+
+            canvas.InvalidateVisual();
+            await PumpAsync(1);
+            var modeBitmap = new RenderTargetBitmap(
+                new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                new Vector(96, 96));
+            modeBitmap.Render(canvas);
+            var modePixels = CountNonBackgroundPixels(modeBitmap);
+            var trace = canvas.LastRenderTrace;
+            Check($"{mode.Label()} canvas received the live mode", canvas.Mode == mode);
+            Check($"{mode.Label()} canvas received the live filter", canvas.Filter == vm.CanvasFilter);
+            Check($"{mode.Label()} canvas received the live label policy", canvas.Labels == vm.LabelPolicy);
+            Check($"{mode.Label()} executed VisualContentLayer", trace is { VisualContentExecuted: true });
+
+            if (trace is not null)
+            {
+                Console.WriteLine($"SMOKE_RENDER_TRACE {{\"mode\":\"{mode.Label()}\"," +
+                                  $"\"filter\":\"{trace.Filter}\"," +
+                                  $"\"projectFrames\":{trace.ProjectFrames}," +
+                                  $"\"resolvedRectangles\":{trace.ResolvedRectangles}," +
+                                  $"\"paintOrderEntries\":{trace.PaintOrderEntries}," +
+                                  $"\"visibilityAccepted\":{trace.VisibilityAccepted}," +
+                                  $"\"acceptedByKind\":\"{FormatCounts(trace.VisibilityAcceptedByKind)}\"," +
+                                  $"\"drawableFrames\":{trace.DrawableFrames}," +
+                                  $"\"boxes\":{trace.DrawableFramesWithBox}," +
+                                  $"\"areas\":{trace.DrawableFramesWithArea}," +
+                                  $"\"layers\":\"{string.Join(",", trace.ActiveLayers)}\"," +
+                                  $"\"visualAttempts\":\"{FormatCounts(trace.VisualAttemptsByKind)}\"," +
+                                  $"\"paintOperations\":{trace.VisualPaintOperations}," +
+                                  $"\"paintedPixels\":{modePixels}}}");
+            }
+
+            if (mode is CanvasViewMode.PREVIEW or CanvasViewMode.HYBRID)
+            {
+                Check($"{mode.Label()} Hidden override reached the canvas",
+                    canvas.Filter.HasFlag(VisibilityFilter.HIDDEN));
+                Check($"{mode.Label()} has drawable Native Hunts visuals",
+                    trace is { DrawableFramesWithArea: > 0 }
+                    && trace.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) > 0
+                    && trace.VisualAttemptsByKind.GetValueOrDefault(FrameKind.FONTSTRING) > 0);
+                Check($"{mode.Label()} meaningfully changes canvas pixels", modePixels > 1000,
+                    $"{modePixels} non-background pixels");
+            }
+        }
+
+        vm.SetViewMode(CanvasViewMode.DEBUG);
+        await PumpAsync(1);
+        canvas.FitToContent();
+
         // Fit must frame the widgets the user can actually see. NativeHuntsFrameInitializer is a
         // zero-area widget parked at the UIParent corner; including it would fit a box roughly
         // twice the size of the layout and leave the content filling half the canvas. Measured
@@ -397,22 +606,31 @@ public static class SmokeTest
             boxes.Min(b => b.Left), boxes.Max(b => b.Top),
             boxes.Max(b => b.Right), boxes.Min(b => b.Bottom));
 
-        var fitted = canvas.Viewport.RectToCanvas(modelBox, origin);
+        var importedOrigin = canvas.Origin;
+        var fitted = canvas.Viewport.RectToCanvas(modelBox, importedOrigin);
         var view = new Rect(0, 0, canvas.Bounds.Width, canvas.Bounds.Height);
         var fittedRect = new Rect(fitted.X, fitted.Y, fitted.Width, fitted.Height);
         // FitToContent leaves a 40px margin, so the framed box must fit inside the margin box and
         // fill one axis of it. Which axis is not asserted: this layout is taller than it is wide,
         // so height is the limiting dimension and demanding width be filled too would be wrong.
         var marginBox = view.Deflate(40);
-        Check("Fit framed the visible widgets", marginBox.Contains(fittedRect),
-            $"box {fittedRect.Width:F0}x{fittedRect.Height:F0} in usable {marginBox.Width:F0}x{marginBox.Height:F0}");
+        // Fractional layout pixels and window scaling can put an edge just past the computed
+        // margin even when the same formula produced both values; two device pixels is the
+        // rendering tolerance, while still catching any genuinely clipped widget.
+        const double fitTolerance = 2;
+        var framed = fittedRect.Left >= marginBox.Left - fitTolerance
+            && fittedRect.Top >= marginBox.Top - fitTolerance
+            && fittedRect.Right <= marginBox.Right + fitTolerance
+            && fittedRect.Bottom <= marginBox.Bottom + fitTolerance;
+        Check("Fit framed the visible widgets", framed,
+            $"box {fittedRect} in usable {marginBox}");
         Check("Fit used the available space",
             fittedRect.Width > marginBox.Width * 0.9 || fittedRect.Height > marginBox.Height * 0.9,
             $"box {fittedRect.Width:F0}x{fittedRect.Height:F0} in usable {marginBox.Width:F0}x{marginBox.Height:F0}");
 
         var initializer = new Rect(
-            canvas.Viewport.ModelToCanvasX(-512, origin) - 3,
-            canvas.Viewport.ModelToCanvasY(384, origin) - 3, 6, 6);
+            canvas.Viewport.ModelToCanvasX(-512, importedOrigin) - 3,
+            canvas.Viewport.ModelToCanvasY(384, importedOrigin) - 3, 6, 6);
         Check("Fit ignored the zero-area initializer",
             !view.Intersects(initializer),
             "the initializer sits outside the fitted view, so it did not drive the fit");
@@ -634,6 +852,22 @@ public static class SmokeTest
     private static string Number(double value) =>
         value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
+    private static string FormatCounts(IReadOnlyDictionary<FrameKind, int> counts) =>
+        string.Join(",", Enum.GetValues<FrameKind>().Select(kind => $"{kind}:{counts.GetValueOrDefault(kind)}"));
+
+    private static int CountTreeNodes(IEnumerable<FrameTreeNode> roots) =>
+        FlattenTree(roots).Count();
+
+    private static IEnumerable<FrameTreeNode> FlattenTree(IEnumerable<FrameTreeNode> roots)
+    {
+        foreach (var root in roots)
+        {
+            yield return root;
+            foreach (var child in FlattenTree(root.Children))
+                yield return child;
+        }
+    }
+
     /// <summary>
     /// Counts pixels OUTSIDE <paramref name="canvasRect"/> that changed between two renders of the
     /// whole window: one with the canvas hidden and one with it visible.
@@ -710,12 +944,13 @@ public static class SmokeTest
             var count = 0;
             for (var i = 0; i < stride * size.Height; i += 4)
             {
-                var pixel = System.Runtime.InteropServices.Marshal.ReadByte(buffer, i);
+                var blue = System.Runtime.InteropServices.Marshal.ReadByte(buffer, i);
                 var green = System.Runtime.InteropServices.Marshal.ReadByte(buffer, i + 1);
-                var blue = System.Runtime.InteropServices.Marshal.ReadByte(buffer, i + 2);
+                var red = System.Runtime.InteropServices.Marshal.ReadByte(buffer, i + 2);
 
-                // The canvas background is #0C1116; anything else means something was drawn.
-                if (pixel != 0x0C || green != 0x11 || blue != 0x16)
+                // CopyPixels returns BGRA bytes. The canvas background is RGB #0C1116, therefore
+                // B=0x16, G=0x11, R=0x0C in this buffer.
+                if (blue != 0x16 || green != 0x11 || red != 0x0C)
                     count++;
             }
 

@@ -7,6 +7,7 @@ using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Viewing;
 
 namespace FrameForge.Desktop.ViewModels;
 
@@ -59,8 +60,162 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private FrameTreeNode? _selectedTreeNode;
 
+    /// <summary>
+    /// The active canvas mode.
+    /// </summary>
+    /// <remarks>
+    /// Changing it resets the visibility filter and the label policy to that mode's defaults, so
+    /// switching to Preview really does produce a clean canvas rather than Preview's drawing rules
+    /// with Debug's everything-visible toggles still switched on.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModeOptions))]
+    [NotifyPropertyChangedFor(nameof(ActiveModeDescription))]
+    private CanvasViewMode _viewMode = CanvasViewMode.DEBUG;
+
+    /// <summary>Which categories of widget the canvas draws. Never changes the project.</summary>
+    [ObservableProperty]
+    private VisibilityFilter _canvasFilter = ViewPolicy.DefaultsFor(CanvasViewMode.DEBUG);
+
+    /// <summary>Which widgets get a name label on the canvas.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedLabelPolicyOption))]
+    private LabelPolicy _labelPolicy = ViewPolicy.DefaultLabelPolicyFor(CanvasViewMode.DEBUG);
+
+    /// <summary>
+    /// The selected entry in the label policy selector, as an option object rather than an enum.
+    /// </summary>
+    /// <remarks>
+    /// A ComboBox binds to an item, not to a value, so the selector needs the selected option itself
+    /// to stay in step. Resolving it on demand from the policy - rather than storing it - means the
+    /// two can never disagree.
+    /// </remarks>
+    public LabelPolicyOption? SelectedLabelPolicyOption
+    {
+        get => LabelPolicyOptions.FirstOrDefault(o => o.Policy == LabelPolicy);
+        set
+        {
+            if (value is not null)
+                LabelPolicy = value.Policy;
+        }
+    }
+
+    /// <summary>Case-insensitive substring filter over frame names in the tree.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TreeFilterSummary))]
+    [NotifyPropertyChangedFor(nameof(IsTreeFiltering))]
+    private string _treeSearch = string.Empty;
+
+    /// <summary>Structural narrowing of the tree.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TreeFilterSummary))]
+    [NotifyPropertyChangedFor(nameof(IsTreeFiltering))]
+    private TreeFilter _treeFilter = TreeFilter.ALL;
+
+    /// <summary>One entry per mode, for the mode selector.</summary>
+    public IReadOnlyList<CanvasModeOption> ModeOptions { get; }
+
+    /// <summary>The active mode's tooltip text.</summary>
+    public string ActiveModeDescription => ViewMode.Description();
+
+    /// <summary>The label for each visibility toggle, in toolbar order.</summary>
+    public IReadOnlyList<VisibilityToggle> VisibilityToggles { get; }
+
+    /// <summary>The label policies offered for the canvas.</summary>
+    public IReadOnlyList<LabelPolicyOption> LabelPolicyOptions { get; }
+
+    /// <summary>The structural filters offered for the tree, in order.</summary>
+    public IReadOnlyList<TreeFilterOption> TreeFilterOptions { get; }
+
+    /// <summary>True when the tree is hiding anything, so the UI can say so.</summary>
+    public bool IsTreeFiltering => _treeProjection?.Filtering ?? false;
+
+    /// <summary>How many nodes the tree is showing, and how many exist.</summary>
+    public string TreeFilterSummary =>
+        _treeProjection is { Filtering: true } projection
+            ? $"{projection.Visible.Count} of {Project.Frames.Count} shown"
+            : $"{Project.Frames.Count} frames";
+
+    private TreeProjection? _treeProjection;
+
+    /// <summary>
+    /// True when one specific visibility category is switched on.
+    /// </summary>
+    /// <remarks>
+    /// Exposed as a method rather than a computed property per category so the six toolbar
+    /// toggles bind to one implementation instead of six near-identical copies.
+    /// </remarks>
+    public bool IsCategoryVisible(VisibilityFilter flag) => CanvasFilter.HasFlag(flag);
+
+    /// <summary>Turns one visibility category on or off.</summary>
+    public void SetCategoryVisible(VisibilityFilter flag, bool enabled) =>
+        CanvasFilter = enabled ? CanvasFilter | flag : CanvasFilter & ~flag;
+
+    /// <summary>Returns the canvas to this mode's own defaults.</summary>
+    public void ResetViewToModeDefaults()
+    {
+        CanvasFilter = ViewPolicy.DefaultsFor(ViewMode);
+        LabelPolicy = ViewPolicy.DefaultLabelPolicyFor(ViewMode);
+        Status = $"Canvas reset to {ViewMode.Label()} defaults.";
+    }
+
+    /// <summary>
+    /// Switches mode, which also applies that mode's defaults.
+    /// </summary>
+    public void SetViewMode(CanvasViewMode mode)
+    {
+        if (ViewMode == mode)
+            return;
+
+        ViewMode = mode;
+        ResetViewToModeDefaults();
+        Status = $"{mode.Label()}: {mode.Description()}";
+    }
+
+    partial void OnViewModeChanged(CanvasViewMode value)
+    {
+        // The generated property already notified the bindings; the canvas filter and label policy
+        // follow so the mode's defaults are actually in force rather than merely advertised.
+        CanvasFilter = ViewPolicy.DefaultsFor(value);
+        LabelPolicy = ViewPolicy.DefaultLabelPolicyFor(value);
+
+        foreach (var option in ModeOptions)
+            option.Refresh();
+    }
+
+    /// <summary>Re-applies the visibility filter after an edit.</summary>
+    partial void OnCanvasFilterChanged(VisibilityFilter value)
+    {
+        // The toggles read the filter rather than owning state, so they need telling when it moves
+        // for any reason other than the user clicking them - including a mode change or a reset.
+        foreach (var toggle in VisibilityToggles)
+            toggle.Refresh();
+
+        if (Project.Find(SelectedName) is { } frame && !ViewPolicy.IsVisible(frame, Layout, value))
+            Status = $"\"{frame.Name}\" is hidden by the current filter; it stays selected.";
+    }
+
+    partial void OnLabelPolicyChanged(LabelPolicy value)
+    {
+        foreach (var option in LabelPolicyOptions)
+            option.Refresh();
+    }
+
+    partial void OnTreeFilterChanged(TreeFilter value)
+    {
+        RebuildTree(Project);
+
+        foreach (var option in TreeFilterOptions)
+            option.Refresh();
+    }
+
     public MainWindowViewModel()
     {
+        ModeOptions = [.. Enum.GetValues<CanvasViewMode>().Select(m => new CanvasModeOption(this, m))];
+        LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
+        TreeFilterOptions = [.. TreeFilters.All.Select(f => new TreeFilterOption(this, f))];
+        VisibilityToggles = [.. VisibilityFilters.Toggles.Select(t => new VisibilityToggle(this, t.Label, t.Flag, t.ToolTip))];
+
         Editor = new FrameEditorViewModel((n, u, r) => ReplaceFrame(n, u, r), BuildFrameOptions, AnchorOptions);
         RelaidOut(_project, null, "New project. Load the Native Hunts example from the toolbar.");
     }
@@ -302,6 +457,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Keeps the tree selection in step when the user clicks the tree.</summary>
     partial void OnSelectedTreeNodeChanged(FrameTreeNode? value) => Select(value?.Name);
 
+    /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
+    partial void OnTreeSearchChanged(string value) => RebuildTree(Project);
+
     private FrameTreeNode? FindNode(string? name)
     {
         if (name is null)
@@ -404,6 +562,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Fits the layout to the canvas viewport.</summary>
     public void RequestFit() => Status = "Fitted the layout to the canvas.";
 
+    /// <summary>Reports the result of centering the selected widget without changing zoom.</summary>
+    public void ReportRevealSelection(bool revealed) => Status = revealed
+        ? $"Revealed {SelectedName} at the current zoom."
+        : "The selection has no resolved bounds to reveal.";
+
     private void ReplaceFrame(string name, FrameDef updated, string? rename = null)
     {
         var targetName = rename ?? updated.Name;
@@ -447,15 +610,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = project.IssueSummary();
     }
 
+    /// <summary>
+    /// Rebuilds the tree through the current structural filter and search.
+    /// </summary>
+    /// <remarks>
+    /// Filtering and searching decide what is DISPLAYED and never what EXISTS: the projection is
+    /// discarded and recomputed from the project every time, so a filter cannot delete a widget and
+    /// clearing the search box always restores the full hierarchy.
+    /// </remarks>
     private void RebuildTree(Project project)
     {
+        _treeProjection = TreeProjectionBuilder.Resolve(project, TreeFilter, TreeSearch);
+        var visible = _treeProjection.Visible;
+
         TreeRoots.Clear();
         foreach (var root in FrameHierarchy.Children(project, null))
-            TreeRoots.Add(BuildNode(project, root));
+        {
+            if (BuildNode(project, root, visible) is { } node)
+                TreeRoots.Add(node);
+        }
+
+        OnPropertyChanged(nameof(IsTreeFiltering));
+        OnPropertyChanged(nameof(TreeFilterSummary));
     }
 
-    private static FrameTreeNode BuildNode(Project project, FrameDef frame) =>
-        new(frame, FrameHierarchy.Children(project, frame.Name).Select(child => BuildNode(project, child)).ToArray());
+    /// <summary>
+    /// Builds a node, or null when the frame itself is filtered out.
+    /// </summary>
+    /// <remarks>
+    /// The recursion still descends into a filtered-out node, because the projection already adds
+    /// the ancestors of every match to the visible set - so a frame whose own subtree matched is
+    /// itself visible, and a frame with no visible descendants is correctly dropped. Returning null
+    /// for the latter is what makes STRUCTURE and VISUAL actually narrow the tree instead of
+    /// re-including everything as context.
+    /// </remarks>
+    private static FrameTreeNode? BuildNode(Project project, FrameDef frame, IReadOnlySet<string> visible)
+    {
+        if (!visible.Contains(frame.Name))
+            return null;
+
+        var children = new List<FrameTreeNode>();
+        foreach (var child in FrameHierarchy.Children(project, frame.Name))
+        {
+            if (BuildNode(project, child, visible) is { } node)
+                children.Add(node);
+        }
+
+        return new FrameTreeNode(frame, children);
+    }
 
     private IReadOnlyList<FrameOption> BuildFrameOptions()
     {

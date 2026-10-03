@@ -79,6 +79,20 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     /// <summary>Anchors the engine could not honour, joined for display.</summary>
     public string AnchorNote { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// What the source declared visually, one line per fact, read-only.
+    /// </summary>
+    /// <remarks>
+    /// These are the values FrameForge retained from the file, not what it rendered. The distinction
+    /// is the whole point of showing them: it understands a texture path and a literal string, and it
+    /// does not decode the art or run the Lua. A runtime string reads as "runtime" here precisely so
+    /// nobody reads the panel and concludes FrameForge knows the text the add-on will show.
+    /// </remarks>
+    public ObservableCollection<string> VisualLines { get; } = [];
+
+    /// <summary>True when the selected widget declared anything visual.</summary>
+    public bool HasVisual => VisualLines.Count > 0;
+
     /// <summary>True when the frame was synthesized to stand in for an external one.</summary>
     public bool IsPlaceholder => Frame?.Placeholder ?? false;
 
@@ -122,6 +136,8 @@ public sealed partial class FrameEditorViewModel : ObservableObject
             ValidationMessage = string.Empty;
             SourceNote = string.Empty;
             ExtraAnchors.Clear();
+            VisualLines.Clear();
+            OnPropertyChanged(nameof(HasVisual));
             RefreshAnchorNotes(null);
             Name = string.Empty;
             Parent = null;
@@ -210,6 +226,7 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         }
 
         RefreshAnchorNotes(layout);
+        RefreshVisualLines();
 
         OnPropertyChanged(nameof(Resolved));
         OnPropertyChanged(nameof(AnchoredTo));
@@ -217,6 +234,20 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(IssueText));
         OnPropertyChanged(nameof(ResolvedSummary));
         OnPropertyChanged(nameof(HasExtraAnchors));
+    }
+
+    /// <summary>Rebuilds the declared-visual lines for the current frame.</summary>
+    private void RefreshVisualLines()
+    {
+        VisualLines.Clear();
+
+        if (Frame?.Visual?.Describe() is { } description)
+        {
+            foreach (var line in description.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                VisualLines.Add(line);
+        }
+
+        OnPropertyChanged(nameof(HasVisual));
     }
 
     private void RefreshAnchorNotes(FrameLayout? layout)

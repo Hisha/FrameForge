@@ -91,6 +91,10 @@ public readonly record struct Screen(double Width, double Height)
 /// references but does not define (typically a Blizzard frame such as <c>LFDParentFrame</c>).
 /// The editor marks these so the preview is never mistaken for the real runtime layout.
 /// </param>
+/// <param name="Visual">
+/// Paint facts the source stated and the geometry model does not carry: texture path, texCoords,
+/// colour, text literal, font reference, status bar fill. Null for a hand-authored frame.
+/// </param>
 public sealed record FrameDef
 {
     public required string Name { get; init; }
@@ -132,6 +136,12 @@ public sealed record FrameDef
     public string? Inherits { get; init; }
 
     public bool Placeholder { get; init; }
+
+    /// <summary>
+    /// Paint facts retained from the source. Never inferred: null means the document stated
+    /// nothing, which is different from the document stating "no texture".
+    /// </summary>
+    public FrameVisual? Visual { get; init; }
 
     /// <summary>Effective size reference, defaulting to <see cref="Models.SizeReference.SCREEN"/>.</summary>
     public SizeReference SizeReferenceOrDefault => SizeReference ?? Models.SizeReference.SCREEN;

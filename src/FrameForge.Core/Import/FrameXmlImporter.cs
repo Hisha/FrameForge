@@ -462,6 +462,7 @@ public static class FrameXmlImporter
 
             var (width, height, hasSize) = ReadSize(element, name);
             var anchors = ReadAnchors(element, name, context.ParentName);
+            var visual = ReadVisual(element, name, kind, inherits);
 
             var frame = new FrameDef
             {
@@ -482,9 +483,11 @@ public static class FrameXmlImporter
                 SourceName = sourceName,
                 Anonymous = anonymous,
                 Inherits = inherits,
+                Visual = visual,
             };
 
             var support = AssessSupport(element, name, kind, inherits, hasSize, setAllPoints);
+            ReportRetainedVisual(visual, name);
 
             _frames.Add(frame);
             _kinds[name] = kind;
@@ -580,45 +583,209 @@ public static class FrameXmlImporter
                 }
             }
 
-            ReportIgnoredPaint(element, name);
-
-            if (kind == FrameKind.STATUSBAR)
-            {
-                ReportOnce(
-                    "statusbar",
-                    FrameXmlSeverity.Info,
-                    FrameXmlDiagnosticCodes.StatusBarValueIgnored,
-                    "StatusBar values (minValue/maxValue/defaultValue, BarTexture, BarColor) are data, not layout. FrameForge shows " +
-                    "the bar's rectangle only.",
-                    name,
-                    "StatusBar");
-            }
-
             return support;
         }
 
-        /// <summary>Records paint-only attributes once, so their absence from the model is visible.</summary>
-        private void ReportIgnoredPaint(XElement element, string name)
+        /// <summary>
+        /// Reads the paint facts the document actually states, without interpreting them.
+        /// </summary>
+        /// <remarks>
+        /// Nothing here is inferred or emulated. A texture path stays a path, a font reference
+        /// stays a reference, a FontString whose text is assigned by Lua gets no text at all -
+        /// because the alternative, a plausible-looking guess, is far worse than an admitted gap
+        /// and impossible to tell apart from the real thing later.
+        /// </remarks>
+        private FrameVisual? ReadVisual(XElement element, string name, FrameKind kind, string? inherits)
         {
-            foreach (var attribute in element.Attributes())
-            {
-                if (attribute.IsNamespaceDeclaration)
-                    continue;
+            var texture = kind == FrameKind.TEXTURE ? ReadTextureVisual(element, name) : null;
+            var text = ReadTextVisual(element, name, kind, inherits);
+            var statusBar = kind == FrameKind.STATUSBAR ? ReadStatusBarVisual(element, name) : null;
+            var drawLayer = Attr(element, "drawLayer");
+            var id = Attr(element, "id") is { Length: > 0 } rawId && int.TryParse(rawId, out var parsed) ? parsed : (int?)null;
 
-                if (attribute.Name.LocalName is "file" or "texCoords" or "text" or "justifyH" or "justifyV"
-                    or "alpha" or "normalizeTexCoords" or "scale" or "blendMode" or "drawLayer" or "id")
-                {
-                    ReportOnce(
-                        "paint",
-                        FrameXmlSeverity.Info,
-                        FrameXmlDiagnosticCodes.PaintAttributeIgnored,
-                        "Paint-only attributes (file, TexCoords, Color, text, justifyH/V, alpha, id) do not affect layout. FrameForge " +
-                        "draws wireframes, not Blizzard artwork or fonts.",
-                        name,
-                        element.Name.LocalName);
-                    return;
-                }
+            var visual = new FrameVisual
+            {
+                Texture = texture,
+                Text = text,
+                StatusBar = statusBar,
+                DrawLayer = drawLayer,
+                Id = id,
+            };
+
+            return visual.IsEmpty ? null : visual;
+        }
+
+        private TextureVisual? ReadTextureVisual(XElement element, string name)
+        {
+            var file = Attr(element, "file");
+            var color = ReadColor(Child(element, "Color"), name);
+            var alpha = Attr(element, "alpha") is { Length: > 0 } rawAlpha
+                ? ReadNumberText(rawAlpha, name, "alpha")
+                : (double?)null;
+            var normalize = Attr(element, "normalizeTexCoords") is { Length: > 0 } ? ReadBool(element, "normalizeTexCoords") : (bool?)null;
+            var blendMode = Attr(element, "blendMode");
+
+            // A Texture with neither a file nor any other visual statement carries no paint
+            // information at all. One with only a <Color> does: it tints an inherited template.
+            if (file is null && color is null && alpha is null && normalize is null && blendMode is null)
+                return null;
+
+            return new TextureVisual(file, ReadTexCoords(element, name), color, alpha, normalize, blendMode);
+        }
+
+        private TexCoords ReadTexCoords(XElement element, string name)
+        {
+            var texCoords = Child(element, "TexCoords");
+            if (texCoords is null)
+                return TexCoords.Full;
+
+            return new TexCoords(
+                ReadNumber(texCoords, "left", name, "TexCoords"),
+                ReadNumber(texCoords, "right", name, "TexCoords"),
+                ReadNumber(texCoords, "top", name, "TexCoords"),
+                ReadNumber(texCoords, "bottom", name, "TexCoords"));
+        }
+
+        private ColorRgba? ReadColor(XElement? color, string name)
+        {
+            if (color is null)
+                return null;
+
+            var rgba = new ColorRgba(
+                ReadNumber(color, "r", name, "Color"),
+                ReadNumber(color, "g", name, "Color"),
+                ReadNumber(color, "b", name, "Color"),
+                Attr(color, "a") is { Length: > 0 } alpha ? ReadNumberText(alpha, name, "Color a") : 1);
+
+            if (!rgba.IsValid)
+            {
+                ReportOnce(
+                    "color-range",
+                    FrameXmlSeverity.Warning,
+                    FrameXmlDiagnosticCodes.ColorOutOfRange,
+                    $"<Color> channels ({Num(rgba.R)}, {Num(rgba.G)}, {Num(rgba.B)}, a={Num(rgba.A)}) are outside 0..1. " +
+                    "The values were kept verbatim for the inspector; Preview will clamp them.",
+                    name,
+                    "Color");
             }
+
+            return rgba;
+        }
+
+        /// <summary>
+        /// Reads a widget's text.
+        /// </summary>
+        /// <remarks>
+        /// Two sources. A FontString's own <c>text</c> attribute. Then a Button's label, which in
+        /// this document is simply its own <c>text="Dungeon Finder"</c> attribute; the nested
+        /// <c>&lt;NormalText&gt;</c> / <c>&lt;NormalFontString&gt;</c> forms are checked too,
+        /// because hand-authored frames use them. Then nothing. Thirteen of NativeHunts' twenty
+        /// FontStrings have no <c>text</c> attribute at all - Lua assigns them at runtime - and
+        /// those are recorded as needing runtime text rather than as having empty text, which is a
+        /// materially different fact for anyone reading the model later.
+        /// <para>
+        /// A Button's <c>inherits</c> is deliberately NOT read as a font. Both tab buttons inherit
+        /// <c>CharacterFrameTabButtonTemplate</c>, which is a frame template; recording it as a
+        /// font would invent a font reference that the document never mentions. A Button's font
+        /// comes only from its own <c>&lt;NormalFontString&gt;</c>.
+        /// </para>
+        /// </remarks>
+        private TextVisual? ReadTextVisual(XElement element, string name, FrameKind kind, string? inherits)
+        {
+            if (kind == FrameKind.FONTSTRING)
+            {
+                var text = Attr(element, "text");
+                if (text is null && Attr(element, "string") is { } value)
+                    text = value;
+
+                // A FontString's inherits IS its font reference; that is the only use WoW makes of
+                // it on a FontString.
+                return new TextVisual(text, Attr(element, "justifyH"), Attr(element, "justifyV"), FontTemplate(inherits));
+            }
+
+            if (kind != FrameKind.BUTTON)
+                return null;
+
+            var label = Attr(element, "text");
+            var template = FontTemplate(Child(element, "NormalFontString") is { } fontString ? Attr(fontString, "inherits") : null);
+
+            label ??= Child(element, "NormalText") is { } normalText ? Attr(normalText, "text") : null;
+            label ??= Child(element, "Text") is { } labelText ? Attr(labelText, "text") : null;
+            label ??= Child(element, "NormalFontString") is { } normalFont ? Attr(normalFont, "text") : null;
+
+            return label is null && template is null
+                ? null
+                : new TextVisual(label, Attr(element, "justifyH"), Attr(element, "justifyV"), template);
+        }
+
+        /// <summary>Maps a <c>GameFont*</c> reference onto FrameForge's unresolved font note.</summary>
+        private static string? FontTemplate(string? inherits) =>
+            string.IsNullOrWhiteSpace(inherits) ? null : inherits.Trim();
+
+        private StatusBarVisual? ReadStatusBarVisual(XElement element, string name)
+        {
+            var min = ReadOptionalNumber(element, "minValue", name);
+            var max = ReadOptionalNumber(element, "maxValue", name);
+            var fallback = ReadOptionalNumber(element, "defaultValue", name);
+            var barTexture = Child(element, "BarTexture") is { } texture ? Attr(texture, "file") : null;
+            var barColor = ReadColor(Child(element, "BarColor"), name);
+
+            if (min is null && max is null && fallback is null && barTexture is null && barColor is null)
+                return null;
+
+            return new StatusBarVisual(min, max, fallback, barTexture, barColor);
+        }
+
+        private double? ReadOptionalNumber(XElement element, string attribute, string name)
+        {
+            if (Attr(element, attribute) is not { Length: > 0 } raw)
+                return null;
+
+            return ReadNumberText(raw, name, attribute);
+        }
+
+        private double ReadNumberText(string raw, string name, string elementName)
+        {
+            if (double.TryParse(raw.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+                double.IsFinite(value))
+            {
+                return value;
+            }
+
+            ReportOnce(
+                "bad-number",
+                FrameXmlSeverity.Warning,
+                FrameXmlDiagnosticCodes.BadNumber,
+                $"{elementName}=\"{raw}\" is not a finite number; 0 was used.",
+                name,
+                elementName);
+            return 0;
+        }
+
+        /// <summary>
+        /// Records, once per document, that paint facts are retained but not yet reproduced.
+        /// </summary>
+        /// <remarks>
+        /// This replaces the old "paint attributes are ignored" note, which stopped being true once
+        /// <see cref="ReadVisual"/> started keeping them. What is still a genuine gap is narrower
+        /// and is now stated precisely: FrameForge holds the facts, but Preview substitutes a
+        /// stand-in because it does not decode BLP or TGA textures and does not emulate Blizzard's
+        /// fonts. Saying "ignored" would understate what the tool now knows.
+        /// </remarks>
+        private void ReportRetainedVisual(FrameVisual? visual, string name)
+        {
+            if (visual is null)
+                return;
+
+            ReportOnce(
+                "visual-retained",
+                FrameXmlSeverity.Info,
+                FrameXmlDiagnosticCodes.VisualRetainedNotRendered,
+                "Paint facts (texture file, TexCoords, Color, literal text, justification, StatusBar values, drawLayer) are now " +
+                "retained in the model and shown in the inspector. Preview still draws a stand-in for them: FrameForge does not " +
+                "decode BLP or TGA textures and does not emulate Blizzard's fonts.",
+                name,
+                name);
         }
 
         private (double Width, double Height, bool HasSize) ReadSize(XElement element, string name)

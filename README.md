@@ -4,12 +4,13 @@ FrameForge is a WoW UI frame layout editor. This repository contains a clean .NE
 
 ## Current Version
 
-v0.1.0 — geometry and editor foundation, plus read-only FrameXML import.
+v0.1.0 — geometry/editor foundation, read-only FrameXML import, and the Phase 3 visual-designer foundation.
 
 ## Architecture
 
 - **FrameForge.Core**: UI-independent model, geometry, hierarchy, anchor resolution, visibility, paint order, viewport transforms, JSON serialization, the generic FrameXML importer, and Native Hunts example.
-- **FrameForge.Desktop**: Avalonia desktop UI (editor window, layout canvas, frame tree, inspector, diagnostics, and headless smoke self-check).
+- **FrameForge.Desktop**: Avalonia desktop UI with one layered canvas (visual content, debug overlay,
+  selection overlay), frame tree, inspector, diagnostics, and a live smoke self-check.
 
 Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 
@@ -25,6 +26,11 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - 9-anchor anchoring system with parent/sibling/descendant relationships
 - Layout resolution with visibility inheritance, paint order, and cycle detection
 - Visual editor with selection, zoom, fit-to-content, and inspector editing
+- First-class **Debug**, **Preview**, and **Hybrid** canvas modes
+- Canvas category/hidden/helper toggles and None/Selected/All label policies
+- Tree structure/visual filters, case-insensitive search with ancestor context, direct canvas
+  selection, overlap cycling, and Reveal Selection
+- Retained texture/text/button/status-bar metadata with honest Preview stand-ins
 - Strict lossless `.fforge.json` project serialization (v1)
 - Native Hunts example included
 - **Read-only FrameXML import** (see below)
@@ -55,7 +61,8 @@ where a widget ends up:
 | `hidden` | recorded and inherited by children |
 | unnamed elements | given a canonical identity (`Texture#1`, `FontString#12`, …) |
 | `Layers`/`Layer`, `Frames`, `Size`, `AbsDimension` | parsed |
-| `<Scripts>`, `On*`, paint, font templates, `<BarTexture>` | skipped, silently or with a note |
+| `<Scripts>`, `On*` | never executed; runtime behavior is reported |
+| texture paths/coords/colors, literal text, font references, `<BarTexture>` | retained in the project; rendered where Phase 3 can do so honestly |
 
 ### Support levels and diagnostics
 
@@ -82,9 +89,11 @@ XML does not say.
 ### Acceptance
 
 `tests/FrameForge.Core.Tests/Fixtures/NativeHuntsFrame.xml` is an unmodified copy of the real
-addon file (SHA-256 `42673d3f…a47c0`). The 184 Core tests and the desktop smoke test both run
+addon file (SHA-256 `42673d3f…a47c0`). The Core tests and the desktop smoke test both run
 against it; the desktop smoke test also imports it from disk and hashes the file afterwards to
 prove it was not modified.
+
+The visual artifact roadmap is in [docs/VISUAL_RENDERING_PLAN.md](docs/VISUAL_RENDERING_PLAN.md).
 
 ```bash
 dotnet restore FrameForge.slnx
@@ -161,7 +170,9 @@ the file-type dropdown only re-lists the current directory if the backend choose
 
 ## Current Limitations
 
-This is an early geometry/editor foundation; advanced tooling features may be added in future releases.
+Preview currently uses restrained stand-ins when real WoW textures, fonts, templates, or Lua-driven
+values are unavailable. It does not execute Lua or emulate a WoW client. See the visual rendering
+plan for the practical path to real client-artifact rendering.
 
 ## License
 

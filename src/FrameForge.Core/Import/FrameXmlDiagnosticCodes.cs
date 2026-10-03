@@ -64,11 +64,14 @@ public static class FrameXmlDiagnosticCodes
     /// <summary>A <c>&lt;Layer level="..."</c> had to be folded into FrameForge's seven strata.</summary>
     public const string LayerStratumMapped = "layer-stratum-mapped";
 
-    /// <summary>A paint-only attribute was ignored; it does not affect layout.</summary>
-    public const string PaintAttributeIgnored = "paint-attribute-ignored";
+    /// <summary>
+    /// Paint facts were retained in the model but Preview still substitutes a stand-in, because
+    /// FrameForge does not decode BLP or TGA textures and does not emulate Blizzard's fonts.
+    /// </summary>
+    public const string VisualRetainedNotRendered = "visual-retained-not-rendered";
 
-    /// <summary>A StatusBar's value and bar-texture semantics are not modelled.</summary>
-    public const string StatusBarValueIgnored = "statusbar-value-ignored";
+    /// <summary>A <c>&lt;Color&gt;</c> child declared channels outside 0..1.</summary>
+    public const string ColorOutOfRange = "color-out-of-range";
 
     /// <summary>The element had no name, so FrameForge generated a stable internal identity.</summary>
     public const string AnonymousElement = "anonymous-element";
