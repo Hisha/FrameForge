@@ -85,7 +85,7 @@ public sealed class TextureAssetTests : IDisposable
         var xml = MakeSourceTree("stock.blp", "BLP2"u8.ToArray());
         using var resolver = new TextureAssetResolver();
         resolver.Configure(xml, []);
-        Assert.Equal(AssetResolutionStatus.UnsupportedFormat,
+        Assert.Equal(AssetResolutionStatus.DecodeFailed,
             resolver.Resolve(@"Interface\NativeHunts\stock.blp").Status);
         Assert.Equal(AssetResolutionStatus.Missing,
             resolver.Resolve(@"Interface\NativeHunts\absent.tga").Status);
@@ -154,22 +154,26 @@ public sealed class TextureAssetTests : IDisposable
         var import = FrameXmlImporter.ImportFile(xml);
         Assert.True(import.Ok);
         using var resolver = new TextureAssetResolver();
-        resolver.Configure(xml, []);
+        var assetRoot = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_HUNTS_ASSET_ROOT");
+        resolver.Configure(xml, string.IsNullOrWhiteSpace(assetRoot) ? [] : [assetRoot]);
         var textures = import.Project!.Frames.Where(frame => frame.Kind == FrameKind.TEXTURE).ToArray();
         var declared = textures.Where(frame => frame.Visual?.Texture?.File is { Length: > 0 }).ToArray();
         var results = declared.Select(frame => resolver.Resolve(frame.Visual!.Texture!.File)).ToArray();
 
         Assert.Equal(21, textures.Length);
         Assert.Equal(19, declared.Length);
-        Assert.Equal(8, results.Count(result => result.Status == AssetResolutionStatus.Resolved));
-        Assert.Equal(11, results.Count(result => result.Status == AssetResolutionStatus.Missing));
+        var expectedResolved = string.IsNullOrWhiteSpace(assetRoot) ? 8 : 19;
+        Assert.Equal(expectedResolved, results.Count(result => result.Status == AssetResolutionStatus.Resolved));
+        Assert.Equal(19 - expectedResolved, results.Count(result => result.Status == AssetResolutionStatus.Missing));
         Assert.Equal(8, results.Count(result => result.Format == TextureFileFormat.Tga && result.CanRender));
+        Assert.Equal(string.IsNullOrWhiteSpace(assetRoot) ? 0 : 11,
+            results.Count(result => result.Format == TextureFileFormat.Blp && result.CanRender));
         Assert.Equal(0, results.Count(result => result.Status == AssetResolutionStatus.DecodeFailed));
 
         Console.WriteLine("NATIVE_ASSET_ACCEPTANCE " +
             $"textures={textures.Length} declared={declared.Length} resolved={results.Count(r => r.CanRender)} " +
             $"unresolved={results.Count(r => !r.CanRender)} renderedTga={results.Count(r => r.CanRender && r.Format == TextureFileFormat.Tga)} " +
-            $"stockBlpExpected={results.Count(r => r.Status == AssetResolutionStatus.Missing)} " +
+            $"renderedBlp={results.Count(r => r.CanRender && r.Format == TextureFileFormat.Blp)} " +
             $"inherited={textures.Length - declared.Length} decodeFailures={results.Count(r => r.Status == AssetResolutionStatus.DecodeFailed)}");
     }
 

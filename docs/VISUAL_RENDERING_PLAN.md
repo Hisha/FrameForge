@@ -18,8 +18,9 @@ textures, 20 font strings, two buttons, and one status bar.
 - Three views over one layered canvas: visual content, debug overlay, and selection overlay.
 - View filters for frames, buttons, text, textures, helpers, and hidden subtrees.
 - Literal FontString and Button text using a neutral host font.
-- Real source-relative and configured-root TGA artwork, including texCoords, RGB modulation, alpha,
-  and imported paint order. Unresolved textures retain the Phase 3 stand-in.
+- Real source-relative and configured-root TGA artwork plus the demonstrated BLP2 DXT1/DXT5 stock
+  subset, including texCoords, RGB modulation, alpha, and imported paint order. Unresolved textures
+  retain the Phase 3 stand-in.
 - Status-bar tracks and fills at their declared default fraction and color.
 
 ## 2. Imported but not visually rendered
@@ -68,14 +69,27 @@ directly from XML would break saved-project independence and duplicate import po
 FrameForge must not redistribute Blizzard client assets. Asset discovery is opt-in and points at
 files the user already has access to.
 
-## 5. Current BLP boundary
+## 5. Phase 4B evidence-driven BLP subset
 
-Phase 4A does not decode BLP. Native Hunts' eight directly referenced custom files are all supported
-TGAs, so BLP is not necessary for meaningful custom-art progress. Its three unique stock Blizzard
-references are extensionless and absent from the addon checkout. If an asset root resolves one to a
-physical BLP, the inspector reports `UnsupportedFormat` and Preview keeps its stand-in. PNG is also
-identified but not decoded in this phase. See `NATIVE_HUNTS_ASSET_INVENTORY.md` for the evidence and
-declaration counts.
+- A decoder registry keeps physical-file resolution independent from byte decoding and makes TGA
+  and BLP implementations independently extensible. The renderer still owns texCoords, tint,
+  alpha, geometry, and paint order.
+- Phase 4B decodes the base mip of only the BLP forms demonstrated by the three supplied 3.3.5a
+  stock files: BLP2 encoding 2, opaque/1-bit-alpha DXT1 and 8-bit-alpha DXT5. Decoded pixels are
+  straight-alpha BGRA in top-left row order, matching the renderer's existing image contract.
+- Malformed headers and truncated mip data are decode failures. BLP1, paletted BLP2, JPEG, raw
+  ARGB, DXT3, and unrecognized encoding/alpha combinations receive explicit unsupported-format
+  diagnostics. PNG remains identified but undecoded.
+- Native Hunts acceptance with the optional extracted root resolves all 19 direct file references:
+  eight custom TGA declarations and eleven stock BLP declarations backed by three unique BLP files.
+  The eight LFG-frame widgets reuse one cached atlas decode and crop distinct regions with their
+  imported texCoords.
+- The StatusBar `BarTexture` metadata now resolves and is used for a nonzero design-time fill. Its
+  cached source stays immutable while widget color and alpha are applied during rendering. Native
+  Hunts' default value is zero, so that fill is absent in the default preview.
+
+The extracted client files remain user-owned, opt-in inputs and are not redistributed. See
+`NATIVE_HUNTS_ASSET_INVENTORY.md` for exact headers, hashes, mip tables, and acceptance counts.
 
 ## 6. Requires stock Blizzard template emulation
 
@@ -99,14 +113,12 @@ samples and never serialized as facts imported from the XML.
 
 ## 8. Recommended implementation order
 
-1. Add only the BLP forms demonstrated by supplied/extracted 3.3.5a stock assets, or accept legal
-   converted TGA equivalents through the same resolver.
-2. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
-3. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font
+1. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
+2. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font
    fallback when unavailable.
-4. Retain and render Button state textures and other currently skipped paint fields.
-5. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, and status values.
+3. Retain and render Button state textures and other currently skipped paint fields.
+4. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, and status values.
+5. Extend BLP decoding only when new, verified project assets demonstrate another required subtype.
 
-Phase 4A delivered the first real texture resolution and TGA rendering while preserving the current
-model/layer boundary. Lua, broad template emulation, and speculative stock artwork remain out of
-scope.
+Phase 4B adds verified stock artwork without broadening into a general BLP promise. Lua, broad
+template emulation, unsupported BLP variants, and speculative artwork remain out of scope.

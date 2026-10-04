@@ -8,7 +8,12 @@ using FrameForge.Core.Models;
 namespace FrameForge.Desktop.Assets;
 
 /// <summary>A decoded, top-left-origin image in straight BGRA byte order.</summary>
-public sealed record DecodedImageData(int Width, int Height, byte[] Bgra);
+public sealed record DecodedImageData(
+    int Width,
+    int Height,
+    byte[] Bgra,
+    string Description = "TGA type 2 true-color",
+    TextureFileFormat Format = TextureFileFormat.Tga);
 
 /// <summary>Decodes the uncompressed true-colour TGA variant used by Native Hunts.</summary>
 public static class TgaDecoder

@@ -661,20 +661,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private IEnumerable<string> DescribeAsset(FrameDef frame)
     {
-        if (frame.Kind != FrameKind.TEXTURE || frame.Visual?.Texture is not { } texture)
+        var texture = frame.Kind == FrameKind.TEXTURE ? frame.Visual?.Texture : null;
+        var reference = texture?.File ?? frame.Visual?.StatusBar?.BarTexture;
+        if (reference is null && texture is null)
             yield break;
-        var asset = Assets.Resolve(texture.File);
+        if (frame.Visual?.StatusBar?.BarTexture is { } barTexture)
+            yield return $"declared barTexture {barTexture}";
+        var asset = Assets.Resolve(reference);
         yield return $"asset status {asset.Status}";
-        if (!texture.TexCoords.IsValid || texture.TexCoords.Width <= 0 || texture.TexCoords.Height <= 0)
+        if (texture is not null && (!texture.TexCoords.IsValid || texture.TexCoords.Width <= 0 || texture.TexCoords.Height <= 0))
             yield return "fallback invalid or reversed texCoords cannot be rendered";
         if (asset.PhysicalPath is { } path)
             yield return $"resolved {path}";
         if (asset.SourceKind is { } kind)
             yield return $"source {kind}: {asset.SourceRoot}";
         if (asset.Format != TextureFileFormat.Unknown)
-            yield return $"format {asset.Format}";
+            yield return $"format {(asset.Format == TextureFileFormat.Blp ? "BLP" : asset.Format.ToString().ToUpperInvariant())}";
         if (asset.Width is { } width && asset.Height is { } height)
             yield return $"image {width} x {height}";
+        if (asset.Texture?.Image.Description is { } decoder)
+            yield return $"decoder {decoder}";
         if (!asset.CanRender)
             yield return $"fallback {asset.Diagnostic.Message}";
     }

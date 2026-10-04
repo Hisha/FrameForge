@@ -43,6 +43,7 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
 {
     private readonly Dictionary<string, ResolvedTextureAsset> _resolutionCache = new(StringComparer.Ordinal);
     private readonly Dictionary<FileIdentity, DecodedTexture> _decodeCache = [];
+    private readonly TextureDecoderRegistry _decoders;
     private string? _sourcePath;
     private string[] _assetRoots = [];
 
@@ -50,6 +51,9 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
     public int CacheHitCount { get; private set; }
     public IReadOnlyList<string> AssetRoots => _assetRoots;
     public string? SourcePath => _sourcePath;
+
+    public TextureAssetResolver(TextureDecoderRegistry? decoders = null) =>
+        _decoders = decoders ?? new TextureDecoderRegistry();
 
     public void Configure(string? sourcePath, IEnumerable<string> assetRoots)
     {
@@ -126,34 +130,38 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
             if (located.Path is null)
                 continue;
 
+            var detectedFormat = TextureFileFormat.Unknown;
             try
             {
-                var format = IdentifyFormat(located.Path);
-                if (format != TextureFileFormat.Tga)
-                    return Failure(reference, AssetResolutionStatus.UnsupportedFormat,
-                        $"Resolved {located.Path}, but {format} decoding is not supported in Phase 4A.", source.Kind, source.Root, located.Path, format);
-
                 var info = new FileInfo(located.Path);
                 var identity = new FileIdentity(info.FullName, info.Length, info.LastWriteTimeUtc.Ticks);
                 if (!_decodeCache.TryGetValue(identity, out var texture))
                 {
                     using var stream = File.OpenRead(located.Path);
-                    texture = new DecodedTexture(TgaDecoder.Decode(stream));
+                    detectedFormat = _decoders.Identify(stream);
+                    texture = new DecodedTexture(_decoders.Decode(stream, detectedFormat));
                     _decodeCache[identity] = texture;
                     DecodeCount++;
                 }
                 else
                 {
                     CacheHitCount++;
+                    detectedFormat = texture.Image.Format;
                 }
 
                 return new ResolvedTextureAsset(reference, AssetResolutionStatus.Resolved, located.Path,
-                    source.Kind, source.Root, format, texture,
+                    source.Kind, source.Root, detectedFormat, texture,
                     new AssetResolutionDiagnostic(AssetResolutionStatus.Resolved, "Resolved and decoded."));
+            }
+            catch (UnsupportedTextureEncodingException ex)
+            {
+                return Failure(reference, AssetResolutionStatus.UnsupportedFormat, ex.Message,
+                    source.Kind, source.Root, located.Path, detectedFormat);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException or OverflowException)
             {
-                return Failure(reference, AssetResolutionStatus.DecodeFailed, ex.Message, source.Kind, source.Root, located.Path);
+                return Failure(reference, AssetResolutionStatus.DecodeFailed, ex.Message,
+                    source.Kind, source.Root, located.Path, detectedFormat);
             }
         }
 
@@ -242,20 +250,6 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
         var all = entries.Where(path => Path.GetFileName(path).Equals(name, StringComparison.OrdinalIgnoreCase)).ToArray();
         var exact = all.Where(path => Path.GetFileName(path).Equals(name, StringComparison.Ordinal)).ToArray();
         return exact.Length > 0 ? exact : all;
-    }
-
-    private static TextureFileFormat IdentifyFormat(string path)
-    {
-        Span<byte> header = stackalloc byte[18];
-        using var stream = File.OpenRead(path);
-        var length = stream.Read(header);
-        if (length >= 4 && (header[..4].SequenceEqual("BLP1"u8) || header[..4].SequenceEqual("BLP2"u8)))
-            return TextureFileFormat.Blp;
-        if (length >= 8 && header[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
-            return TextureFileFormat.Png;
-        if (length >= 18 && header[1] == 0 && header[2] is 2 or 10)
-            return TextureFileFormat.Tga;
-        return TextureFileFormat.Unknown;
     }
 
     private static ResolvedTextureAsset Failure(string? reference, AssetResolutionStatus status, string message,

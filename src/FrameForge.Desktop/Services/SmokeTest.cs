@@ -766,6 +766,78 @@ public static class SmokeTest
                           $"\"paintedPixels\":{importedPainted}," +
                           $"\"screenshot\":\"{importedOutput}\"}}");
 
+        // Optional development acceptance against the user's real read-only addon checkout and
+        // separately extracted stock Interface root. The packaged smoke remains self-contained;
+        // these environment variables opt into evidence the repository must never require.
+        var nativeXml = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_HUNTS_XML");
+        var stockRoot = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_HUNTS_ASSET_ROOT");
+        if (!string.IsNullOrWhiteSpace(nativeXml) && !string.IsNullOrWhiteSpace(stockRoot))
+        {
+            vm.ImportFromFile(nativeXml);
+            vm.Assets.Configure(nativeXml, [stockRoot]);
+            var nativeDecodeStart = vm.Assets.DecodeCount;
+            window.SyncCanvas();
+            canvas.AssetResolver = vm.Assets;
+
+            var textureFrames = vm.Project.Frames.Where(frame => frame.Kind == FrameKind.TEXTURE).ToArray();
+            var declaredFrames = textureFrames.Where(frame => frame.Visual?.Texture?.File is { Length: > 0 }).ToArray();
+            var resolvedAssets = declaredFrames.Select(frame => vm.Assets.Resolve(frame.Visual!.Texture!.File)).ToArray();
+            Check("real acceptance has 21 Texture elements", textureFrames.Length == 21);
+            Check("real acceptance has 19 declared Texture references", declaredFrames.Length == 19);
+            Check("all 19 direct Texture declarations resolve and decode",
+                resolvedAssets.Count(asset => asset.CanRender) == 19);
+            Check("all 11 stock declarations render decoded BLP",
+                resolvedAssets.Count(asset => asset.CanRender && asset.Format == TextureFileFormat.Blp) == 11);
+            Check("the 8 custom declarations still render decoded TGA",
+                resolvedAssets.Count(asset => asset.CanRender && asset.Format == TextureFileFormat.Tga) == 8);
+            var nativeUniqueDecodes = vm.Assets.DecodeCount - nativeDecodeStart;
+            Check("eleven physical custom/stock files decoded once each", nativeUniqueDecodes == 11,
+                $"decoded {nativeUniqueDecodes}");
+
+            vm.OnCanvasSelectionRequested("Texture#4");
+            Check("BLP inspector reports format, dimensions, and demonstrated subtype",
+                vm.Editor.VisualLines.Any(line => line == "format BLP")
+                && vm.Editor.VisualLines.Any(line => line == "image 512 x 512")
+                && vm.Editor.VisualLines.Any(line => line.Contains("BLP2 DXT5", StringComparison.Ordinal)),
+                string.Join(" | ", vm.Editor.VisualLines));
+
+            vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelHuntStateProgress");
+            Check("StatusBar inspector resolves retained BarTexture metadata",
+                vm.Editor.VisualLines.Any(line => line.Contains("declared barTexture", StringComparison.Ordinal))
+                && vm.Editor.VisualLines.Any(line => line.Contains("BLP2 DXT1", StringComparison.Ordinal)));
+
+            vm.SetViewMode(CanvasViewMode.PREVIEW);
+            vm.SetCategoryVisible(VisibilityFilter.HIDDEN, true);
+            window.SyncCanvas();
+            canvas.FitToContent();
+            canvas.InvalidateVisual();
+            await PumpAsync(2);
+
+            var realPreview = new RenderTargetBitmap(
+                new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                new Vector(96, 96));
+            realPreview.Render(canvas);
+
+            canvas.AssetResolver = null;
+            var fallbackPreview = new RenderTargetBitmap(realPreview.PixelSize, new Vector(96, 96));
+            fallbackPreview.Render(canvas);
+            var realPixelDifference = CountPixelsChanged(realPreview, fallbackPreview);
+            Check("real stock artwork changes Preview pixels from stand-ins", realPixelDifference > 1000,
+                $"{realPixelDifference} changed pixels");
+            canvas.AssetResolver = vm.Assets;
+
+            var nativePreviewOutput = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_PREVIEW_OUT")
+                ?? "/tmp/frameforge-phase4b-native-preview.png";
+            realPreview.Save(nativePreviewOutput, new PngBitmapEncoderOptions());
+            Check("real Native Hunts Preview screenshot written", File.Exists(nativePreviewOutput), nativePreviewOutput);
+            Console.WriteLine($"SMOKE_NATIVE_ASSETS {{\"textures\":{textureFrames.Length}," +
+                              $"\"declared\":{declaredFrames.Length},\"resolved\":{resolvedAssets.Count(a => a.CanRender)}," +
+                              $"\"tga\":{resolvedAssets.Count(a => a.CanRender && a.Format == TextureFileFormat.Tga)}," +
+                              $"\"blp\":{resolvedAssets.Count(a => a.CanRender && a.Format == TextureFileFormat.Blp)}," +
+                              $"\"uniqueDecodes\":{nativeUniqueDecodes},\"pixelDifference\":{realPixelDifference}," +
+                              $"\"screenshot\":\"{nativePreviewOutput}\"}}");
+        }
+
         // 10. The Open picker contract. Last, because re-opening replaces vm's project.
         //
         //     The Linux Open dialog is the XDG desktop portal: Avalonia hands it the whole filter

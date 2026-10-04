@@ -206,11 +206,22 @@ public sealed class VisualContentLayer : ICanvasLayer
         if (bar?.DefaultFraction is not { } fraction || fraction <= 0)
             return;
 
+        var fillRect = new Rect(rect.X, rect.Y, rect.Width * fraction, rect.Height);
+        if (bar.BarTexture is { } reference && canvas.AssetResolver?.Resolve(reference) is
+            { CanRender: true, Texture: { } decoded })
+        {
+            var source = new Rect(0, 0, decoded.Image.Width, decoded.Image.Height);
+            var opacity = Math.Clamp(bar.BarColor?.A ?? 1, 0, 1);
+            using (context.PushOpacity(opacity))
+                context.DrawImage(decoded.BitmapFor(bar.BarColor), source, fillRect);
+            return;
+        }
+
         var fill = bar.BarColor is { } declared
             ? Tint(declared)
             : new SolidColorBrush(Color.Parse("#7FB2C9"));
 
-        context.FillRectangle(fill, new Rect(rect.X, rect.Y, rect.Width * fraction, rect.Height));
+        context.FillRectangle(fill, fillRect);
 
     }
 
