@@ -149,3 +149,21 @@ Real stock artwork now supplies the LFG outer frame, quest-paper panels, and dir
 Texture. Remaining placeholders are not missing physical files: one inherited/template-supplied
 tint Texture has no file, the identity icon is chosen by Lua at runtime, runtime text has no literal
 content, and external templates/fonts are not emulated.
+
+## Phase 5A local-client acceptance
+
+With no manual stock asset root, the local-client provider validated the known acceptance client as
+3.3.5a build 12340 with locale `enUS`. Its machine-specific path is not used by production code or
+stored in a project. Explicit resolution materialized exactly three
+unique files into a fresh FrameForge-owned cache:
+
+| Requested asset | Effective source archive | Result |
+|---|---|---|
+| `Interface\LFGFrame\UI-LFG-FRAME` | `Data/enUS/patch-enUS-2.MPQ` | 350724 bytes; SHA-256 matches the Phase 4B oracle |
+| `Interface\LFGFrame\UI-LFG-BACKGROUND-QUESTPAPER` | `Data/enUS/patch-enUS-2.MPQ` | 88572 bytes; SHA-256 matches the Phase 4B oracle |
+| `Interface\TargetingFrame\UI-StatusBar` | `Data/enUS/locale-enUS.MPQ` | 1532 bytes; SHA-256 matches the Phase 4B oracle |
+
+The resulting render accounting is identical to Phase 4B: 19 of 19 declared Texture references
+render, comprising eight custom TGA declarations and eleven stock BLP declarations backed by the
+three cached files. The source MPQs are opened read-only and all client, cache, and provenance paths
+remain machine-local.

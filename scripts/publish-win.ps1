@@ -86,6 +86,10 @@ if (Test-Path -LiteralPath (Join-Path $Root 'assets\branding\frameforge-icon.png
 
 if (Test-Path -LiteralPath (Join-Path $Root 'README.md')) { Copy-Item (Join-Path $Root 'README.md') (Join-Path $PackageDir 'README.md') }
 if (Test-Path -LiteralPath (Join-Path $Root 'LICENSE')) { Copy-Item (Join-Path $Root 'LICENSE') (Join-Path $PackageDir 'LICENSE') }
+if (Test-Path -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md')) { Copy-Item (Join-Path $Root 'THIRD_PARTY_NOTICES.md') (Join-Path $PackageDir 'THIRD_PARTY_NOTICES.md') }
+$ThirdPartyDir = Join-Path $PackageDir 'third_party'
+New-Item -ItemType Directory -Path $ThirdPartyDir -Force | Out-Null
+Copy-Item (Join-Path $Root 'third_party\Nmpq.Standard-LICENSE.txt') (Join-Path $ThirdPartyDir 'Nmpq.Standard-LICENSE.txt')
 
 Get-ChildItem -Path $PackageDir -Recurse -File |
     Where-Object { $_.Name -like '*.pdb' -or $_.Name -like '*.Development.json' } |

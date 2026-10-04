@@ -91,7 +91,24 @@ files the user already has access to.
 The extracted client files remain user-owned, opt-in inputs and are not redistributed. See
 `NATIVE_HUNTS_ASSET_INVENTORY.md` for exact headers, hashes, mip tables, and acceptance counts.
 
-## 6. Requires stock Blizzard template emulation
+## 6. Phase 5A local-client asset provider
+
+- A separate `IWoWClientAssetProvider` validates a selected Windows client from any host OS by
+  reading the `Wow.exe` PE FileVersion resource as bytes. Only 3.3.5a build 12340 is accepted.
+- Locale directories are discovered rather than assuming `enUS`; no locale or multiple plausible
+  locales are reported instead of guessed.
+- The provider opens the user's MPQs read-only and materializes only unresolved `Interface` paths
+  requested by the current project. It does not extract the Interface tree or depend on `smpq`.
+- Resolver precedence is source-relative project artwork, explicit manual asset roots in configured
+  order, then the FrameForge-managed stock cache. Custom/project artwork therefore cannot be
+  shadowed by cached stock art.
+- Cached files and provenance are machine-local. Portable projects contain neither the selected
+  client path nor cache paths. See `WOW_CLIENT_ASSETS.md` for the full search order and safeguards.
+- Native Hunts acceptance resolves three unique stock BLPs from the client and reuses those files
+  for all eleven stock declarations; together with eight project TGA declarations, all 19 direct
+  texture declarations render without a manual extracted-assets root.
+
+## 7. Requires stock Blizzard template emulation
 
 `LFDParentFrame`, `CharacterFrameTabButtonTemplate`, inherited texture paint, and `GameFont*`
 references are defined outside this XML. Resolve only the small, documented template subset needed
@@ -101,7 +118,7 @@ facts so the inspector can distinguish the two.
 Avoid a general FrameXML/template runtime. A versioned library of specific 3.3.5a visual templates
 is sufficient for the designer goal.
 
-## 7. Requires runtime/Lua state approximation
+## 8. Requires runtime/Lua state approximation
 
 Native Hunts uses Lua to choose which hidden state panel is shown, populate 13 text fields, update
 the progress bar, size/position the external parent, and change icons or button state. FrameForge
@@ -111,7 +128,7 @@ Later design-time state should use explicit preview inputs: selected panel/state
 status value, and optional externally supplied parent bounds. Defaults must be labeled as design
 samples and never serialized as facts imported from the XML.
 
-## 8. Recommended implementation order
+## 9. Recommended implementation order
 
 1. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
 2. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font

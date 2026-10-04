@@ -94,6 +94,41 @@
                         </StackPanel>
                     </Border>
                 </Expander>
+
+                <Expander Header="WoW Client" VerticalAlignment="Center">
+                    <Border Background="#141B22" BorderBrush="#33434E" BorderThickness="1"
+                            CornerRadius="4" Padding="8" MinWidth="440">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="header" Text="Local WoW 3.3.5a client" />
+                            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="Client path" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Classes="mono" Text="{Binding WoWClientPath}"
+                                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding WoWClientPath}" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="Version/build" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding WoWClientVersion}" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Classes="label" Text="Locale" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding WoWClientLocale}" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Classes="label" Text="Status" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Classes="value" Text="{Binding WoWClientStatus}"
+                                           TextWrapping="Wrap" />
+                            </Grid>
+                            <TextBlock Classes="mono" Text="{Binding StockAssetsSummary}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="Browse…" Click="OnBrowseWoWClientClick" />
+                                <Button Content="Clear" Click="OnClearWoWClientClick"
+                                        IsEnabled="{Binding HasWoWClientSelection}" />
+                                <Button Content="Revalidate" Click="OnRevalidateWoWClientClick"
+                                        IsEnabled="{Binding HasWoWClientSelection}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="Resolve Missing Assets" Click="OnResolveStockAssetsClick"
+                                        IsEnabled="{Binding CanResolveStockAssets}" />
+                                <Button Content="Clear Stock Cache" Click="OnClearStockCacheClick" />
+                            </StackPanel>
+                            <TextBlock Classes="label" Text="Reads client MPQs without modifying them; preview copies stay local." />
+                        </StackPanel>
+                    </Border>
+                </Expander>
             </StackPanel>
         </Border>
 

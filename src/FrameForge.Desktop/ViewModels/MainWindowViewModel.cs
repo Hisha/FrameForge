@@ -139,13 +139,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private TreeProjection? _treeProjection;
     private readonly AssetSettingsStore _assetSettings;
+    private readonly IWoWClientAssetProvider _wowAssets;
     private string? _assetSourcePath;
+    private WowClientValidation _wowClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
+        "No WoW client is configured.");
 
     /// <summary>Application-local roots searched after source-relative content.</summary>
     public ObservableCollection<string> AssetRoots { get; } = [];
 
     /// <summary>The reusable resolver shared by the inspector and canvas.</summary>
     public TextureAssetResolver Assets { get; } = new();
+
+    public IWoWClientAssetProvider WoWAssets => _wowAssets;
+
+    public string WoWClientPath => _wowClient.ClientPath ?? string.Empty;
+    public string WoWClientVersion => _wowClient.Build?.ToString() ?? "Unknown";
+    public string WoWClientLocale => _wowClient.Locale ?? "Unknown";
+    public string WoWClientStatus => _wowClient.Message;
+    public bool HasWoWClientSelection => _wowClient.ClientPath is { Length: > 0 };
+    public bool CanResolveStockAssets => _wowClient.IsValid && MissingStockAssetReferences().Count > 0;
+    public string StockAssetsSummary
+    {
+        get
+        {
+            var stock = StockAssetReferences();
+            var available = stock.Count(reference => Assets.Resolve(reference).CanRender);
+            return $"Stock assets: {stock.Count} required, {available} available";
+        }
+    }
 
     public string AssetRootsSummary => AssetRoots.Count == 0
         ? "Asset roots (none)"
@@ -222,16 +243,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
             option.Refresh();
     }
 
-    public MainWindowViewModel() : this(null)
+    public MainWindowViewModel() : this(null, null)
     {
     }
 
-    public MainWindowViewModel(string? settingsPath)
+    public MainWindowViewModel(string? settingsPath, IWoWClientAssetProvider? wowAssets = null)
     {
-        _assetSettings = new AssetSettingsStore(settingsPath);
-        foreach (var root in _assetSettings.Load())
+        _assetSettings = new AssetSettingsStore(settingsPath
+            ?? Environment.GetEnvironmentVariable("FRAMEFORGE_SETTINGS_PATH"));
+        _wowAssets = wowAssets ?? new WoWClientAssetProvider();
+        var configuration = _assetSettings.LoadConfiguration();
+        foreach (var root in configuration.AssetRoots)
             AssetRoots.Add(root);
-        Assets.Configure(null, AssetRoots);
+        _wowClient = _wowAssets.ValidateClient(configuration.WowClientPath);
+        Assets.Configure(null, EffectiveAssetRoots());
         ModeOptions = [.. Enum.GetValues<CanvasViewMode>().Select(m => new CanvasModeOption(this, m))];
         LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
         TreeFilterOptions = [.. TreeFilters.All.Select(f => new TreeFilterOption(this, f))];
@@ -352,11 +377,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ImportDiagnostics = [];
         LastImport = null;
         _assetSourcePath = ResolveSourcePath(project, path);
-        Assets.Configure(_assetSourcePath, AssetRoots);
+        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
         RelaidOut(project, keep, status);
+        NotifyWoWClientState();
     }
 
     /// <summary>Creates a fresh project.</summary>
@@ -430,7 +456,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // path: null, so Save never targets the source file; it routes through Save As.
         Load(project, null, result.SummaryText);
         _assetSourcePath = path;
-        Assets.Configure(_assetSourcePath, AssetRoots);
+        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
 
         // Published AFTER Load, because Load is what clears the previous document's provenance.
         Source = SourceSummary.Imported(FileName(path), path, result);
@@ -622,7 +648,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
         AssetRoots.Add(fullPath);
-        Assets.Configure(_assetSourcePath, AssetRoots);
+        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
         SaveAssetRoots();
         RefreshAssetPresentation($"Added asset root {fullPath}.");
     }
@@ -631,7 +657,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (!AssetRoots.Remove(path))
             return;
-        Assets.Configure(_assetSourcePath, AssetRoots);
+        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
         SaveAssetRoots();
         RefreshAssetPresentation($"Removed asset root {path}.");
     }
@@ -642,12 +668,84 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshAssetPresentation("Asset caches refreshed.");
     }
 
-    private void SaveAssetRoots()
+    public void SetWoWClientPath(string path)
     {
-        try { _assetSettings.Save(AssetRoots); }
+        _wowClient = _wowAssets.ValidateClient(path);
+        SaveLocalSettings();
+        RefreshAssetPresentation(_wowClient.Message);
+        NotifyWoWClientState();
+    }
+
+    public void ClearWoWClientPath()
+    {
+        _wowClient = _wowAssets.ValidateClient(null);
+        SaveLocalSettings();
+        RefreshAssetPresentation("WoW client selection cleared; existing managed cache remains available.");
+        NotifyWoWClientState();
+    }
+
+    public void RevalidateWoWClient()
+    {
+        _wowClient = _wowAssets.ValidateClient(_wowClient.ClientPath);
+        RefreshAssetPresentation(_wowClient.Message);
+        NotifyWoWClientState();
+    }
+
+    public IReadOnlyList<AssetMaterializationResult> ResolveMissingStockAssets()
+    {
+        if (!_wowClient.IsValid)
+        {
+            Status = "Select a valid WoW 3.3.5a build 12340 client first.";
+            return [];
+        }
+        var requested = MissingStockAssetReferences();
+        AssetMaterializationResult[] results;
+        try
+        {
+            results = [.. requested.Select(reference => _wowAssets.Materialize(reference, _wowClient))];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Status = $"Could not resolve stock assets safely: {ex.Message}";
+            return [];
+        }
+        Assets.Refresh();
+        var succeeded = results.Count(result => result.Success);
+        RefreshAssetPresentation($"Resolved {succeeded} of {results.Length} missing stock assets from the local WoW client.");
+        NotifyWoWClientState();
+        return results;
+    }
+
+    public void ClearManagedStockCache()
+    {
+        try
+        {
+            _wowAssets.ClearCache();
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Status = $"Could not save asset roots: {ex.Message}";
+            Status = $"Could not clear the managed stock cache: {ex.Message}";
+            return;
+        }
+        Assets.Refresh();
+        RefreshAssetPresentation("FrameForge-managed stock asset cache cleared.");
+        NotifyWoWClientState();
+    }
+
+    private void SaveAssetRoots()
+    {
+        SaveLocalSettings();
+    }
+
+    private void SaveLocalSettings()
+    {
+        try
+        {
+            _assetSettings.SaveConfiguration(new FrameForgeLocalSettings([.. AssetRoots], _wowClient.ClientPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Status = $"Could not save local settings: {ex.Message}";
         }
     }
 
@@ -655,8 +753,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         Editor.RefreshAssetLines();
         OnPropertyChanged(nameof(AssetRootsSummary));
+        OnPropertyChanged(nameof(StockAssetsSummary));
+        OnPropertyChanged(nameof(CanResolveStockAssets));
         OnPropertyChanged(nameof(Assets));
         Status = status;
+    }
+
+    private IReadOnlyList<string> EffectiveAssetRoots() => [.. AssetRoots, _wowAssets.CacheRoot];
+
+    private IReadOnlyList<string> StockAssetReferences() => EnumerateAssetReferences()
+        .Where(reference => Assets.Resolve(reference).SourceKind != AssetSourceKind.SourceRelative)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    private IReadOnlyList<string> MissingStockAssetReferences() => StockAssetReferences()
+        .Where(reference => !Assets.Resolve(reference).CanRender)
+        .ToArray();
+
+    private IEnumerable<string> EnumerateAssetReferences()
+    {
+        foreach (var frame in Project.Frames)
+        {
+            if (frame.Visual?.Texture?.File is { Length: > 0 } texture)
+                yield return texture;
+            if (frame.Visual?.StatusBar?.BarTexture is { Length: > 0 } barTexture)
+                yield return barTexture;
+        }
+    }
+
+    private void NotifyWoWClientState()
+    {
+        OnPropertyChanged(nameof(WoWClientPath));
+        OnPropertyChanged(nameof(WoWClientVersion));
+        OnPropertyChanged(nameof(WoWClientLocale));
+        OnPropertyChanged(nameof(WoWClientStatus));
+        OnPropertyChanged(nameof(HasWoWClientSelection));
+        OnPropertyChanged(nameof(StockAssetsSummary));
+        OnPropertyChanged(nameof(CanResolveStockAssets));
     }
 
     private IEnumerable<string> DescribeAsset(FrameDef frame)
@@ -681,6 +814,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             yield return $"image {width} x {height}";
         if (asset.Texture?.Image.Description is { } decoder)
             yield return $"decoder {decoder}";
+        if (asset.PhysicalPath is { } physical && _wowAssets.GetProvenance(physical) is { } provenance)
+        {
+            yield return $"client {provenance.Build} / {provenance.Locale}";
+            yield return $"archive {provenance.ArchivePath}";
+            yield return $"sha256 {provenance.Sha256}";
+        }
         if (!asset.CanRender)
             yield return $"fallback {asset.Diagnostic.Message}";
     }

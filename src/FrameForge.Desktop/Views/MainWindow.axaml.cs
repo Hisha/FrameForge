@@ -132,6 +132,38 @@ public partial class MainWindow : Window
         Canvas.InvalidateVisual();
     }
 
+    private async void OnBrowseWoWClientClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+            return;
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Select a World of Warcraft 3.3.5a client folder",
+            AllowMultiple = false,
+        });
+        if (folders.Count > 0 && folders[0].Path.LocalPath is { Length: > 0 } path)
+        {
+            vm.SetWoWClientPath(path);
+            Canvas.InvalidateVisual();
+        }
+    }
+
+    private void OnClearWoWClientClick(object? sender, RoutedEventArgs e) => ViewModel?.ClearWoWClientPath();
+
+    private void OnRevalidateWoWClientClick(object? sender, RoutedEventArgs e) => ViewModel?.RevalidateWoWClient();
+
+    private void OnResolveStockAssetsClick(object? sender, RoutedEventArgs e)
+    {
+        ViewModel?.ResolveMissingStockAssets();
+        Canvas.InvalidateVisual();
+    }
+
+    private void OnClearStockCacheClick(object? sender, RoutedEventArgs e)
+    {
+        ViewModel?.ClearManagedStockCache();
+        Canvas.InvalidateVisual();
+    }
+
     private async void OnOpenClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is not { } vm)

@@ -767,14 +767,45 @@ public static class SmokeTest
                           $"\"screenshot\":\"{importedOutput}\"}}");
 
         // Optional development acceptance against the user's real read-only addon checkout and
-        // separately extracted stock Interface root. The packaged smoke remains self-contained;
-        // these environment variables opt into evidence the repository must never require.
+        // either the Phase 4B manual root or the Phase 5A local client provider. The packaged smoke
+        // remains self-contained; these environment variables opt into external evidence.
         var nativeXml = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_HUNTS_XML");
         var stockRoot = Environment.GetEnvironmentVariable("FRAMEFORGE_NATIVE_HUNTS_ASSET_ROOT");
-        if (!string.IsNullOrWhiteSpace(nativeXml) && !string.IsNullOrWhiteSpace(stockRoot))
+        var wowClient = Environment.GetEnvironmentVariable("FRAMEFORGE_WOW_CLIENT");
+        if (!string.IsNullOrWhiteSpace(nativeXml)
+            && (!string.IsNullOrWhiteSpace(stockRoot) || !string.IsNullOrWhiteSpace(wowClient)))
         {
+            AssetMaterializationResult[] clientResults = [];
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                Check("client-provider acceptance has no manual asset root active", vm.AssetRoots.Count == 0,
+                    string.Join(", ", vm.AssetRoots));
+                vm.SetWoWClientPath(wowClient);
+                Check("client provider validates WoW 3.3.5a build 12340",
+                    vm.WoWClientVersion == "3.3.5a / 12340", vm.WoWClientStatus);
+                Check("client provider detects enUS", vm.WoWClientLocale == "enUS", vm.WoWClientLocale);
+                vm.ClearManagedStockCache();
+            }
             vm.ImportFromFile(nativeXml);
-            vm.Assets.Configure(nativeXml, [stockRoot]);
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                Check("three unique stock dependencies are missing before explicit resolution",
+                    vm.StockAssetsSummary == "Stock assets: 3 required, 0 available", vm.StockAssetsSummary);
+                clientResults = [.. vm.ResolveMissingStockAssets()];
+                Check("client provider materializes three unique stock dependencies",
+                    clientResults.Length == 3 && clientResults.All(result => result.Success),
+                    string.Join(" | ", clientResults.Select(result => result.Message)));
+                Check("client path stays out of portable project JSON",
+                    !ProjectCodec.Serialize(vm.Project).Contains(wowClient, StringComparison.Ordinal));
+                Check("effective MPQs match 3.3.5a patch precedence",
+                    clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/patch-enUS-2.MPQ") == 2
+                    && clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/locale-enUS.MPQ") == 1,
+                    string.Join(" | ", clientResults.Select(result => result.Provenance?.ArchivePath)));
+            }
+            else
+            {
+                vm.Assets.Configure(nativeXml, [stockRoot!]);
+            }
             var nativeDecodeStart = vm.Assets.DecodeCount;
             window.SyncCanvas();
             canvas.AssetResolver = vm.Assets;
@@ -791,6 +822,18 @@ public static class SmokeTest
             Check("the 8 custom declarations still render decoded TGA",
                 resolvedAssets.Count(asset => asset.CanRender && asset.Format == TextureFileFormat.Tga) == 8);
             var nativeUniqueDecodes = vm.Assets.DecodeCount - nativeDecodeStart;
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                using var decodeAudit = new TextureAssetResolver();
+                decodeAudit.Configure(nativeXml, [vm.WoWAssets.CacheRoot]);
+                foreach (var frame in declaredFrames)
+                    decodeAudit.Resolve(frame.Visual!.Texture!.File);
+                nativeUniqueDecodes = decodeAudit.DecodeCount;
+                foreach (var frame in declaredFrames)
+                    decodeAudit.Resolve(frame.Visual!.Texture!.File);
+                Check("repeated stock declarations reuse the provider cache decode",
+                    decodeAudit.DecodeCount == nativeUniqueDecodes && decodeAudit.CacheHitCount > 0);
+            }
             Check("eleven physical custom/stock files decoded once each", nativeUniqueDecodes == 11,
                 $"decoded {nativeUniqueDecodes}");
 
@@ -800,6 +843,12 @@ public static class SmokeTest
                 && vm.Editor.VisualLines.Any(line => line == "image 512 x 512")
                 && vm.Editor.VisualLines.Any(line => line.Contains("BLP2 DXT5", StringComparison.Ordinal)),
                 string.Join(" | ", vm.Editor.VisualLines));
+            if (!string.IsNullOrWhiteSpace(wowClient))
+                Check("BLP inspector reports client archive provenance",
+                    vm.Editor.VisualLines.Any(line => line == "client 3.3.5a / 12340 / enUS")
+                    && vm.Editor.VisualLines.Any(line => line == "archive Data/enUS/patch-enUS-2.MPQ")
+                    && vm.Editor.VisualLines.Any(line => line.StartsWith("sha256 ", StringComparison.Ordinal)),
+                    string.Join(" | ", vm.Editor.VisualLines));
 
             vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelHuntStateProgress");
             Check("StatusBar inspector resolves retained BarTexture metadata",

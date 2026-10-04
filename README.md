@@ -31,6 +31,8 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Tree structure/visual filters, case-insensitive search with ancestor context, direct canvas
   selection, overlap cycling, and Reveal Selection
 - Retained texture/text/button/status-bar metadata with honest Preview stand-ins
+- Real TGA and verified WoW 3.3.5a BLP texture rendering from project assets, manual roots, or an
+  application-managed cache populated on demand from the user's own client
 - Strict lossless `.fforge.json` project serialization (v1)
 - Native Hunts example included
 - **Read-only FrameXML import** (see below)
@@ -94,6 +96,25 @@ against it; the desktop smoke test also imports it from disk and hashes the file
 prove it was not modified.
 
 The visual artifact roadmap is in [docs/VISUAL_RENDERING_PLAN.md](docs/VISUAL_RENDERING_PLAN.md).
+
+## Local WoW Client Assets
+
+The normal stock-art workflow is deliberately short:
+
+1. Open FrameForge.
+2. Select your WoW 3.3.5a build 12340 client once in **WoW Client**.
+3. Open FrameXML.
+4. Choose **Resolve Missing Assets**.
+5. FrameForge stores only the required preview assets in its machine-local cache.
+
+FrameForge ships **no Blizzard artwork** and never writes to the WoW installation or its MPQs.
+The selected client path and extracted preview copies stay on the local machine and are never put
+in `.fforge.json`. Opening and editing still works with no client configured: custom artwork and
+existing cache entries render, while uncached stock artwork keeps an honest stand-in. Manual asset
+roots remain available as an advanced/fallback feature.
+
+See [docs/WOW_CLIENT_ASSETS.md](docs/WOW_CLIENT_ASSETS.md) for validation, storage locations,
+archive precedence, security behavior, dependency rationale, and manual extraction troubleshooting.
 
 ```bash
 dotnet restore FrameForge.slnx
@@ -170,9 +191,9 @@ the file-type dropdown only re-lists the current directory if the backend choose
 
 ## Current Limitations
 
-Preview currently uses restrained stand-ins when real WoW textures, fonts, templates, or Lua-driven
-values are unavailable. It does not execute Lua or emulate a WoW client. See the visual rendering
-plan for the practical path to real client-artifact rendering.
+Preview uses restrained stand-ins when artwork is unresolved or unsupported and when fonts,
+templates, or Lua-driven values are unavailable. It does not execute Lua or emulate a WoW client.
+See the visual rendering plan for the remaining work.
 
 ## License
 

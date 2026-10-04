@@ -41,6 +41,9 @@ chmod +x "$PACKAGE_DIR/FrameForge" "$PACKAGE_DIR/FrameForge.bin" 2>/dev/null || 
 
 cp "$ROOT/README.md" "$PACKAGE_DIR/README.md" 2>/dev/null || true
 cp "$ROOT/LICENSE" "$PACKAGE_DIR/LICENSE" 2>/dev/null || true
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$PACKAGE_DIR/THIRD_PARTY_NOTICES.md" 2>/dev/null || true
+mkdir -p "$PACKAGE_DIR/third_party"
+cp "$ROOT/third_party/Nmpq.Standard-LICENSE.txt" "$PACKAGE_DIR/third_party/Nmpq.Standard-LICENSE.txt"
 cp "$ROOT/assets/branding/frameforge-icon.png" "$PACKAGE_DIR/frameforge-icon.png" 2>/dev/null || true
 
 # Remove development-only files
