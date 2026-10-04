@@ -1073,7 +1073,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             })
             .ToArray();
 
-        var parent = removed.Parent ?? "the root";
+        // A deleted root has no surviving selection.  "the root" is status text, not a
+        // frame identity; letting it escape into SelectedName creates a dangling selection.
+        var survivingParent = removed.Parent is { } parentName && frames.Any(frame => frame.Name == parentName)
+            ? parentName
+            : null;
+        var parentDescription = survivingParent ?? "the root";
         Project = Project with
         {
             Frames = frames,
@@ -1089,10 +1094,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
         RefreshGroups(Project);
         IsDirty = true;
-        SelectedName = parent;
-        RelaidOut(Project, SelectedName, descendants.Count == 0
+        SelectedName = survivingParent;
+        RelaidOut(Project, survivingParent, descendants.Count == 0
             ? $"Deleted \"{name}\"."
-            : $"Deleted \"{name}\"; re-parented {descendants.Count} descendant(s) to {parent}.");
+            : $"Deleted \"{name}\"; re-parented {descendants.Count} descendant(s) to {parentDescription}.");
     }
 
     /// <summary>Canvas hit-test entry point; also used to keep the tree in sync.</summary>
@@ -1461,6 +1466,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RelaidOut(Project project, string? selection, string? status)
     {
+        // Selection is a model identity.  Normalize it at the refresh boundary so every
+        // caller (delete, load, tree, or canvas) gets the same explicit no-selection state.
+        if (selection is not null && !project.Contains(selection))
+            selection = null;
+        SelectedName = selection;
+
         _activePreviewOverrides = _previewStates.Resolve(project, SelectedPreviewState?.Id);
         var previewProject = _previewStates.Apply(project, _activePreviewOverrides);
         if (project.Editor.ActiveDesignStateId is { } activeState)
@@ -1490,7 +1501,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RebuildTree(project);
         SelectedTreeNode = FindNode(selection);
         Editor.Refresh(project, selection);
-        Editor.RefreshResolved(selection is null ? null : Layout.Frames.GetValueOrDefault(selection));
+        Editor.RefreshResolved(selection is not null && Layout.Frames.TryGetValue(selection, out var selectedLayout)
+            ? selectedLayout
+            : null);
         RefreshComposition(selection);
         _syncingDesignUi = true;
         DesignNameDraft = selection is null ? string.Empty : project.Editor.DisplayNameFor(project.Find(selection)!);

@@ -252,6 +252,165 @@ public sealed class CompositionUsabilityTests
         Assert.Contains("not added", vm.Status);
     }
 
+    [Theory]
+    [InlineData(FrameKind.FRAME)]
+    [InlineData(FrameKind.FONTSTRING)]
+    [InlineData(FrameKind.TEXTURE)]
+    public void Deleting_the_final_custom_object_clears_selection_and_inspector_and_allows_add_again(FrameKind kind)
+    {
+        var vm = ViewModel();
+        vm.NewProject();
+        AddDesignObject(vm, kind);
+        var deleted = vm.SelectedName!;
+        Assert.True(vm.Editor.HasSelection);
+
+        vm.DeleteFrame();
+
+        Assert.Null(vm.Project.Find(deleted));
+        Assert.Null(vm.SelectedName);
+        Assert.Null(vm.SelectedTreeNode);
+        Assert.False(vm.Editor.HasSelection);
+        Assert.Null(vm.Editor.Frame);
+        Assert.Null(vm.Editor.Resolved);
+        Assert.Equal("No frame selected.", vm.Editor.ResolvedSummary);
+        Assert.Empty(vm.Editor.ExtraAnchors);
+        Assert.Empty(vm.Editor.VisualLines);
+        Assert.Empty(vm.VisualComposition);
+        Assert.Empty(vm.CompositionSizeSource);
+        Assert.Empty(vm.CompositionAppearanceSource);
+        Assert.Empty(vm.ResizeGuidance);
+        Assert.DoesNotContain(deleted, vm.CanvasSelectionNames);
+
+        AddDesignObject(vm, kind);
+        Assert.NotNull(vm.SelectedFrame);
+        Assert.True(vm.Editor.HasSelection);
+
+        var path = Path.Combine(Path.GetTempPath(), $"frameforge-delete-{Guid.NewGuid():N}.frameforge.json");
+        try
+        {
+            Assert.True(vm.SaveToFile(path));
+            var reopened = ProjectCodec.Parse(File.ReadAllText(path));
+            Assert.True(reopened.Ok, reopened.ErrorText);
+            Assert.Single(reopened.Project!.Frames);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(WorkspaceExperience.Design)]
+    [InlineData(WorkspaceExperience.Inspect)]
+    public void Deletion_is_safe_in_both_workspaces(WorkspaceExperience workspace)
+    {
+        var vm = ViewModel();
+        vm.NewProject();
+        vm.AddDesignFrame();
+        vm.SetWorkspace(workspace);
+
+        vm.DeleteFrame();
+
+        Assert.Null(vm.SelectedName);
+        Assert.False(vm.Editor.HasSelection);
+        Assert.Empty(vm.VisualComposition);
+    }
+
+    [Fact]
+    public void Delete_cleans_state_and_group_metadata_without_touching_locked_stock()
+    {
+        const string stock = "LFDParentFrame";
+        const string custom = "DesignObject";
+        var vm = ViewModel();
+        vm.Load(new Project
+        {
+            Frames =
+            [
+                new FrameDef { Name = stock, Width = 355, Height = 440 },
+                new FrameDef { Name = custom, Width = 100, Height = 40 },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups =
+                [
+                    new EditorGroup { Name = "Blizzard", Members = [stock], Locked = true, Concept = "stock-framework" },
+                    new EditorGroup { Name = "Custom", Members = [custom] },
+                ],
+                DesignStates = [new DesignState { Id = "active", Name = "Active" }],
+                DesignObjects = [new DesignObjectMetadata { FrameName = custom, StateIds = ["active"] }],
+            },
+        }, null, "test");
+        vm.Select(custom);
+
+        vm.DeleteFrame();
+
+        Assert.NotNull(vm.Project.Find(stock));
+        Assert.True(vm.Project.Editor.IsLocked(stock));
+        Assert.DoesNotContain(vm.Project.Editor.DesignObjects, item => item.FrameName == custom);
+        Assert.DoesNotContain(vm.Project.Editor.Groups.SelectMany(group => group.Members), item => item == custom);
+        Assert.Single(vm.Project.Editor.DesignStates);
+
+        vm.NewObjectName = "Hunt Record";
+        vm.AddDesignFrame();
+        Assert.Equal("Hunt Record", vm.Project.Editor.DisplayNameFor(vm.SelectedFrame!));
+        Assert.NotNull(vm.Project.Find(stock));
+        Assert.True(vm.Project.Editor.IsLocked(stock));
+    }
+
+    [Fact]
+    public void Locked_element_and_locked_stock_member_cannot_be_deleted_until_unlocked()
+    {
+        const string stock = "LFDParentFrame";
+        const string custom = "Custom";
+        var vm = ViewModel();
+        vm.Load(new Project
+        {
+            Frames =
+            [
+                new FrameDef { Name = stock, Width = 355, Height = 440 },
+                new FrameDef { Name = custom, Width = 100, Height = 40 },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup { Name = "Blizzard", Members = [stock], Locked = true, Concept = "stock-framework" }],
+                LockedElements = [custom],
+            },
+        }, null, "test");
+
+        vm.Select(custom);
+        vm.DeleteFrame();
+        Assert.NotNull(vm.Project.Find(custom));
+        vm.SetElementLocked(custom, false);
+        vm.DeleteFrame();
+        Assert.Null(vm.Project.Find(custom));
+
+        vm.Select(stock);
+        vm.DeleteFrame();
+        Assert.NotNull(vm.Project.Find(stock));
+        vm.SetConceptualStockLocked(false);
+        vm.DeleteFrame();
+        Assert.Null(vm.Project.Find(stock));
+    }
+
+    private static void AddDesignObject(MainWindowViewModel vm, FrameKind kind)
+    {
+        switch (kind)
+        {
+            case FrameKind.FRAME:
+                // Exercise the toolbar's exact New Blank -> Add Frame path.
+                vm.AddFrame();
+                break;
+            case FrameKind.FONTSTRING:
+                vm.AddDesignText();
+                break;
+            case FrameKind.TEXTURE:
+                vm.AddDesignImage();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, null);
+        }
+    }
+
     private static MainWindowViewModel ViewModel() => new(
         Path.Combine(Path.GetTempPath(), $"frameforge-usability-{Guid.NewGuid():N}.json"),
         stockTemplates: new FocusedStockTemplates());
