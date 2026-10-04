@@ -29,6 +29,9 @@ public sealed record Project
 
     public ProjectSource? Source { get; init; }
 
+    /// <summary>FrameForge-only groups and locks; never projected into FrameXML semantics.</summary>
+    public EditorMetadata Editor { get; init; } = new();
+
     /// <summary>Finds a frame by name, or null.</summary>
     public FrameDef? Find(string? name) =>
         name is null ? null : Frames.FirstOrDefault(f => f.Name == name);
@@ -37,7 +40,17 @@ public sealed record Project
     public bool Contains(string? name) => name is not null && Frames.Any(f => f.Name == name);
 
     /// <summary>A deep copy, so editor state can never mutate a shared project instance.</summary>
-    public Project DeepCopy() => this with { Frames = Frames.Select(f => f with { }).ToArray() };
+    public Project DeepCopy() => this with
+    {
+        Frames = Frames.Select(f => f with { }).ToArray(),
+        Editor = Editor with
+        {
+            Groups = Editor.Groups.Select(group => group with { Members = [.. group.Members] }).ToArray(),
+            LockedElements = [.. Editor.LockedElements],
+            DesignObjects = Editor.DesignObjects.Select(item => item with { StateIds = [.. item.StateIds] }).ToArray(),
+            DesignStates = Editor.DesignStates.Select(item => item with { }).ToArray(),
+        },
+    };
 
     /// <summary>
     /// Value equality over the frame list, frame by frame.
@@ -57,6 +70,23 @@ public sealed record Project
         return Name == other.Name
                && Screen == other.Screen
                && Equals(Source, other.Source)
+               && Editor.LockedElements.SequenceEqual(other.Editor.LockedElements)
+               && Editor.Workspace == other.Editor.Workspace
+               && Editor.ActiveDesignStateId == other.Editor.ActiveDesignStateId
+               && Editor.DesignStates.SequenceEqual(other.Editor.DesignStates)
+               && Editor.DesignObjects.Count == other.Editor.DesignObjects.Count
+               && Editor.DesignObjects.Zip(other.Editor.DesignObjects).All(pair =>
+                   pair.First.FrameName == pair.Second.FrameName
+                   && pair.First.DisplayName == pair.Second.DisplayName
+                   && pair.First.StateIds.SequenceEqual(pair.Second.StateIds))
+               && Editor.Groups.Count == other.Editor.Groups.Count
+               && Editor.Groups.Zip(other.Editor.Groups).All(pair =>
+                   pair.First.Name == pair.Second.Name
+                   && pair.First.Locked == pair.Second.Locked
+                   && pair.First.Concept == pair.Second.Concept
+                   && pair.First.StockIdentity == pair.Second.StockIdentity
+                   && pair.First.Expanded == pair.Second.Expanded
+                   && pair.First.Members.SequenceEqual(pair.Second.Members))
                && Frames.SequenceEqual(other.Frames);
     }
 
@@ -67,6 +97,29 @@ public sealed record Project
         hash.Add(Name);
         hash.Add(Screen);
         hash.Add(Source);
+        hash.Add(Editor.Workspace);
+        hash.Add(Editor.ActiveDesignStateId);
+        foreach (var locked in Editor.LockedElements)
+            hash.Add(locked);
+        foreach (var group in Editor.Groups)
+        {
+            hash.Add(group.Name);
+            hash.Add(group.Locked);
+            hash.Add(group.Concept);
+            hash.Add(group.StockIdentity);
+            hash.Add(group.Expanded);
+            foreach (var member in group.Members)
+                hash.Add(member);
+        }
+        foreach (var state in Editor.DesignStates)
+            hash.Add(state);
+        foreach (var item in Editor.DesignObjects)
+        {
+            hash.Add(item.FrameName);
+            hash.Add(item.DisplayName);
+            foreach (var stateId in item.StateIds)
+                hash.Add(stateId);
+        }
         foreach (var frame in Frames)
             hash.Add(frame);
         return hash.ToHashCode();

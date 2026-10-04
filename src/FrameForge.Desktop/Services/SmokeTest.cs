@@ -16,6 +16,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
+using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Templates;
 using FrameForge.Desktop.ViewModels;
@@ -413,6 +414,9 @@ public static class SmokeTest
                 .OfType<RadioButton>()
                 .FirstOrDefault(button => string.Equals(button.Content?.ToString(), "Preview", StringComparison.Ordinal));
             Check("Preview toolbar button exists", previewButton is not null);
+            Check("Native Hunts example is not primary toolbar branding",
+                !window.GetVisualDescendants().OfType<Button>()
+                    .Any(button => string.Equals(button.Content?.ToString(), "Load Native Hunts Example", StringComparison.Ordinal)));
             if (previewButton is not null)
             {
                 previewButton.IsChecked = true;
@@ -428,6 +432,9 @@ public static class SmokeTest
                     new[] { "XML Defaults", "Idle", "Standard Hunt", "Elite Hunt", "Hunt Complete" }),
                 string.Join(", ", vm.PreviewStateOptions.Select(state => state.Label)));
 
+            Check("DESIGN is the default workspace", vm.IsDesignWorkspace);
+            vm.SetWorkspace(WorkspaceExperience.Inspect);
+            await PumpAsync(1);
             var hiddenToggle = window.GetVisualDescendants()
                 .OfType<CheckBox>()
                 .FirstOrDefault(checkBox => string.Equals(checkBox.Content?.ToString(), "Hidden", StringComparison.Ordinal));
@@ -486,6 +493,7 @@ public static class SmokeTest
                     CountPixelsChanged(artworkBitmap, fallbackBitmap) > 100);
                 canvas.AssetResolver = vm.Assets;
             }
+            vm.SetWorkspace(WorkspaceExperience.Design);
 
             // The placeholder is a stand-in, so its size is FrameForge's estimate and must be
             // labelled as such rather than presented as something the file said.
@@ -774,6 +782,7 @@ public static class SmokeTest
                           $"\"rects\":{vm.Layout.Rects.Count}," +
                           $"\"paintedPixels\":{importedPainted}," +
                           $"\"screenshot\":\"{importedOutput}\"}}");
+        var importedProjectFrameCount = vm.Project.Frames.Count;
 
         // Optional development acceptance against the user's real read-only addon checkout and
         // either the Phase 4B manual root or the Phase 5A local client provider. The packaged smoke
@@ -1057,6 +1066,240 @@ public static class SmokeTest
                 Console.WriteLine($"SMOKE_PREVIEW_STATES {{\"directory\":\"{stateDirectory}\"," +
                                   $"\"states\":5,\"xmlDefaultsExact\":true," +
                                   $"\"standardProgress\":60,\"eliteProgress\":65}}");
+
+                // Phase 6 editor-usability acceptance: source provenance, direct composition,
+                // editor-only groups/locks, origin isolation, and project-format persistence.
+                var usabilityDirectory = Environment.GetEnvironmentVariable("FRAMEFORGE_USABILITY_DIR")
+                                         ?? "/tmp/frameforge-usability";
+                Directory.CreateDirectory(usabilityDirectory);
+                vm.SelectedPreviewState = vm.PreviewStateOptions.Single(state => state.Id == "idle");
+                vm.SetCategoryVisible(VisibilityFilter.HIDDEN, false);
+                vm.GroupNameDraft = "Blizzard Chrome";
+                vm.CreateGroup();
+                var stockMembers = vm.Project.Frames.Where(frame =>
+                        frame.Name == StockTemplateResolver.LfdParentFrame
+                        || frame.Inherits == StockTemplateResolver.TabTemplate
+                        || (frame.Visual?.Texture?.File is { } reference
+                            && vm.Assets.Resolve(reference).PhysicalPath is { } physical
+                            && Path.GetFullPath(physical).StartsWith(Path.GetFullPath(vm.WoWAssets.CacheRoot), StringComparison.Ordinal)))
+                    .Take(8).Select(frame => frame.Name).ToArray();
+                foreach (var member in stockMembers)
+                {
+                    vm.Select(member);
+                    vm.AddSelectionToGroup();
+                }
+                vm.SelectedGroupLocked = true;
+                Check("Blizzard Chrome group contains representative stock shell pieces",
+                    vm.Project.Editor.Groups.Single(group => group.Name == "Blizzard Chrome").Members.Count >= 3,
+                    string.Join(", ", stockMembers));
+                Check("locking the group protects all its members",
+                    stockMembers.All(member => vm.Project.Editor.IsLocked(member)));
+                var lockedMember = stockMembers.First();
+                var beforeLockedDrag = vm.Project.Find(lockedMember)!;
+                vm.DragFrame(lockedMember, 25, -25);
+                Check("canvas drag cannot move a locked stock member", vm.Project.Find(lockedMember) == beforeLockedDrag);
+
+                vm.SetWorkspace(WorkspaceExperience.Design);
+                vm.Select("NativeHuntsFrameContentPanelRecord");
+                window.SyncCanvas();
+                await PumpAsync(2);
+                var nativeDesignPath = Path.Combine(usabilityDirectory, "native-hunts-design.png");
+                var nativeDesignBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                nativeDesignBitmap.Render(root);
+                nativeDesignBitmap.Save(nativeDesignPath, new PngBitmapEncoderOptions());
+                nativeDesignBitmap.Dispose();
+                Check("Native Hunts DESIGN screenshot written", File.Exists(nativeDesignPath), nativeDesignPath);
+                Check("friendly record artwork name is available without changing internal identity",
+                    vm.Project.Frames.Any(frame => frame.Anonymous
+                        && frame.Visual?.Texture?.File?.Contains("hunt_panel_record.tga", StringComparison.OrdinalIgnoreCase) == true
+                        && vm.Project.Editor.DisplayNameFor(frame) == "Hunt Panel Record"));
+
+                vm.SetWorkspace(WorkspaceExperience.Inspect);
+                vm.Select("NativeHuntsFrameContentPanelRecord");
+                Check("PanelRecord reports imported XML source and parser location",
+                    vm.SelectedSourceFile == "NativeHuntsFrame.xml"
+                    && vm.SelectedSourcePath.EndsWith("NativeHuntsFrame.xml", StringComparison.Ordinal)
+                    && vm.SelectedFrame?.SourceLocation is { Line: 71 });
+                Check("PanelRecord direct composition reports record and seal TGA artwork",
+                    vm.VisualComposition.Any(item => item.AssetPath.Contains("hunt_panel_record.tga", StringComparison.Ordinal))
+                    && vm.VisualComposition.Any(item => item.AssetPath.Contains("hunt_icon_seal.tga", StringComparison.Ordinal))
+                    && vm.VisualComposition.Any(item => item.Resolution.Contains("Source-relative project asset", StringComparison.Ordinal)));
+                Check("PanelRecord resize guidance distinguishes cropped artwork without claiming distortion",
+                    vm.ResizeGuidance.Contains("cropped/atlas", StringComparison.Ordinal)
+                    && !vm.ResizeGuidance.Contains("may stretch", StringComparison.Ordinal));
+
+                window.SyncCanvas();
+                canvas.FitToContent();
+                await PumpAsync(3);
+                var inspectorPath = Path.Combine(usabilityDirectory, "native-hunts-inspect.png");
+                var inspectorBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                inspectorBitmap.Render(root);
+                inspectorBitmap.Save(inspectorPath, new PngBitmapEncoderOptions());
+                inspectorBitmap.Dispose();
+                Check("PanelRecord provenance/composition screenshot written", File.Exists(inspectorPath), inspectorPath);
+
+                var geometryBeforeFilter = vm.Project.Frames.Select(frame =>
+                    (frame.Name, frame.Width, frame.Height, frame.OffsetX, frame.OffsetY, frame.Visible)).ToArray();
+                vm.SetOriginVisible(OriginVisibility.BlizzardStock, false);
+                window.SyncCanvas();
+                canvas.InvalidateVisual();
+                await PumpAsync(3);
+                Check("stock-origin presentation can be hidden without hiding custom descendants",
+                    vm.HiddenByOrigin.Contains("LFDParentFrame")
+                    && !vm.HiddenByOrigin.Contains("NativeHuntsFrameContentPanelRecord"));
+                var isolatedPath = Path.Combine(usabilityDirectory, "native-hunts-stock-hidden.png");
+                var isolatedBitmap = new RenderTargetBitmap(
+                    new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                    new Vector(96, 96));
+                isolatedBitmap.Render(canvas);
+                isolatedBitmap.Save(isolatedPath, new PngBitmapEncoderOptions());
+                isolatedBitmap.Dispose();
+                Check("stock-hidden Native Hunts screenshot written", File.Exists(isolatedPath), isolatedPath);
+                vm.SetOriginVisible(OriginVisibility.BlizzardStock, true);
+                Check("restoring stock origin visibility does not change source geometry",
+                    geometryBeforeFilter.SequenceEqual(vm.Project.Frames.Select(frame =>
+                        (frame.Name, frame.Width, frame.Height, frame.OffsetX, frame.OffsetY, frame.Visible))));
+
+                var usabilityProject = Path.Combine(Path.GetTempPath(), $"frameforge-usability-{Guid.NewGuid():N}.fforge.json");
+                try
+                {
+                    Check("grouped/locked project saves", vm.SaveToFile(usabilityProject));
+                    vm.OpenFromFile(usabilityProject);
+                    Check("groups and locks reopen from .fforge.json",
+                        vm.Project.Editor.Groups.SingleOrDefault(group => group.Name == "Blizzard Chrome") is { Locked: true } reopenedGroup
+                        && reopenedGroup.Members.SequenceEqual(stockMembers));
+                Check("all five design-time states remain available after reopening grouped project",
+                        vm.PreviewStateOptions.Select(state => state.Label).SequenceEqual(
+                            new[] { "XML Defaults", "Idle", "Standard Hunt", "Elite Hunt", "Hunt Complete" }));
+                }
+                finally
+                {
+                    if (File.Exists(usabilityProject))
+                        File.Delete(usabilityProject);
+                }
+
+                Check("clean LFD project creation succeeds from the validated client", vm.NewDungeonFinderProject(), vm.Status);
+                Check("clean LFD project has a conceptual stock framework",
+                    vm.ConceptualStockFramework is { Locked: true, Expanded: false, StockIdentity: not null });
+                Check("clean LFD DESIGN initially shows one conceptual stock object",
+                    vm.IsDesignWorkspace && vm.TreeRoots.Count == 1
+                    && vm.TreeRoots[0].DisplayName.Contains("Blizzard Dungeon Finder Frame", StringComparison.Ordinal));
+                var lfdDirectArt = vm.Project.Frames.Where(frame => frame.Kind == FrameKind.TEXTURE
+                    && frame.Visual?.Texture?.File is { Length: > 0 }).ToArray();
+                Check("clean LFD framework retains and resolves stock artwork",
+                    lfdDirectArt.Length >= 2 && lfdDirectArt.All(frame => vm.Assets.Resolve(frame.Visual!.Texture!.File).CanRender),
+                    string.Join(" | ", lfdDirectArt.Select(frame =>
+                        $"{frame.Name}:{frame.Visual?.Texture?.File}:{vm.Assets.Resolve(frame.Visual!.Texture!.File).Status}")));
+                Check("clean LFD primary frame artwork is effectively visible",
+                    lfdDirectArt.Where(frame => frame.Visual?.Texture?.File?.Contains("UI-LFG-FRAME", StringComparison.OrdinalIgnoreCase) == true)
+                        .All(frame => vm.Layout.Frames[frame.Name].EffectiveVisible));
+                var lfdGroup = vm.ConceptualStockFramework!;
+                var lockedStockName = lfdGroup.Members.First(name => vm.Project.Find(name) is { Width: > 0, Height: > 0 });
+                var lockedStockBefore = vm.Project.Find(lockedStockName)!;
+                vm.DragFrame(lockedStockName, 20, -20);
+                Check("locked conceptual stock cannot be dragged", vm.Project.Find(lockedStockName) == lockedStockBefore);
+
+                vm.NewObjectName = "Hunt Record";
+                vm.AddDesignFrame();
+                var huntRecord = vm.SelectedName!;
+                vm.NewObjectName = "Paw Emblem";
+                vm.AddDesignImage();
+                var pawEmblem = vm.SelectedName!;
+                Check("custom Hunt Record and Paw Emblem are added without unlocking Blizzard",
+                    vm.Project.Editor.DisplayNameFor(vm.Project.Find(huntRecord)!) == "Hunt Record"
+                    && vm.Project.Editor.DisplayNameFor(vm.Project.Find(pawEmblem)!) == "Paw Emblem"
+                    && vm.ConceptualStockFramework!.Locked);
+                Check("custom objects are preferred canvas selections over locked stock",
+                    vm.PreferredSelectionNames.Contains(huntRecord) && vm.PreferredSelectionNames.Contains(pawEmblem));
+
+                vm.StateNameDraft = "Idle"; vm.CreateDesignState();
+                vm.StateNameDraft = "Standard Hunt"; vm.CreateDesignState();
+                vm.StateNameDraft = "Elite Hunt"; vm.CreateDesignState();
+                vm.StateNameDraft = "Hunt Complete"; vm.CreateDesignState();
+                vm.Select(huntRecord);
+                vm.AssignSelectionToAllStates();
+                vm.NewObjectName = "Standard Only Test";
+                vm.AddDesignText();
+                var standardOnly = vm.SelectedName!;
+                vm.SelectedAuthoredState = vm.AuthoredStateOptions.Single(state => state.Name == "Standard Hunt");
+                vm.AssignSelectionToSelectedState();
+                vm.ActiveDesignState = vm.DesignStateOptions.Single(state => state.Name == "Idle");
+                Check("authored Idle hides a Standard-Hunt-only object",
+                    vm.Layout.Frames[standardOnly].EffectiveVisible == false);
+
+                vm.Select(huntRecord);
+                window.SyncCanvas();
+                canvas.FitToContent();
+                await PumpAsync(2);
+                var lfdDesignPath = Path.Combine(usabilityDirectory, "clean-lfd-design.png");
+                var lfdDesignBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                lfdDesignBitmap.Render(root);
+                lfdDesignBitmap.Save(lfdDesignPath, new PngBitmapEncoderOptions());
+                lfdDesignBitmap.Dispose();
+                Check("clean LFD DESIGN screenshot written", File.Exists(lfdDesignPath), lfdDesignPath);
+
+                var idleStatePath = Path.Combine(usabilityDirectory, "design-state-idle.png");
+                var idleStateBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                idleStateBitmap.Render(root);
+                idleStateBitmap.Save(idleStatePath, new PngBitmapEncoderOptions());
+                idleStateBitmap.Dispose();
+                vm.ActiveDesignState = vm.DesignStateOptions.Single(state => state.Name == "Standard Hunt");
+                Check("authored Standard Hunt shows its assigned object",
+                    vm.Layout.Frames[standardOnly].EffectiveVisible);
+                vm.Select(standardOnly);
+                window.SyncCanvas();
+                await PumpAsync(2);
+                var standardStatePath = Path.Combine(usabilityDirectory, "design-state-standard.png");
+                var standardStateBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                standardStateBitmap.Render(root);
+                standardStateBitmap.Save(standardStatePath, new PngBitmapEncoderOptions());
+                standardStateBitmap.Dispose();
+                Check("two authored design-state screenshots written",
+                    File.Exists(idleStatePath) && File.Exists(standardStatePath));
+
+                vm.SetConceptualStockExpanded(true);
+                Check("conceptual stock expands without unlocking",
+                    vm.ConceptualStockFramework is { Expanded: true, Locked: true }
+                    && vm.TreeRoots.First().Children.Count > 0);
+                await PumpAsync(2);
+                foreach (var item in window.GetVisualDescendants().OfType<TreeViewItem>()) item.IsExpanded = true;
+                await PumpAsync(2);
+                var expandedPath = Path.Combine(usabilityDirectory, "lfd-expanded-locked.png");
+                var expandedBitmap = new RenderTargetBitmap(new PixelSize(windowWidth, windowHeight), new Vector(96, 96));
+                expandedBitmap.Render(root);
+                expandedBitmap.Save(expandedPath, new PngBitmapEncoderOptions());
+                expandedBitmap.Dispose();
+                Check("expanded-but-locked Blizzard screenshot written", File.Exists(expandedPath), expandedPath);
+
+                vm.SetConceptualStockLocked(false);
+                var editableStock = vm.Project.Find(lockedStockName)!;
+                vm.DragFrame(lockedStockName, 1, 0);
+                Check("explicit unlock permits an individual stock edit",
+                    vm.Project.Find(lockedStockName)!.OffsetX == editableStock.OffsetX + 1);
+                vm.SetConceptualStockLocked(true);
+                Check("stock framework relocks in one action", vm.Project.Editor.IsLocked(lockedStockName));
+
+                var lfdProjectPath = Path.Combine(Path.GetTempPath(), $"frameforge-lfd-design-{Guid.NewGuid():N}.fforge.json");
+                try
+                {
+                    var geometry = vm.Project.Find(huntRecord)!;
+                    Check("clean LFD design project saves", vm.SaveToFile(lfdProjectPath));
+                    vm.OpenFromFile(lfdProjectPath);
+                    Check("clean LFD project reopens with stock identity, presentation, locks, objects, states, memberships and geometry",
+                        vm.ConceptualStockFramework is { Locked: true, Expanded: true, StockIdentity: not null }
+                        && vm.Project.Editor.DisplayNameFor(vm.Project.Find(huntRecord)!) == "Hunt Record"
+                        && vm.Project.Editor.DisplayNameFor(vm.Project.Find(pawEmblem)!) == "Paw Emblem"
+                        && vm.Project.Editor.DesignStates.Count == 4
+                        && vm.Project.Editor.DesignObjectFor(standardOnly)?.StateIds.Count == 1
+                        && vm.Project.Find(huntRecord) == geometry);
+                }
+                finally
+                {
+                    if (File.Exists(lfdProjectPath)) File.Delete(lfdProjectPath);
+                }
+                Console.WriteLine($"SMOKE_COMPOSITION {{\"directory\":\"{usabilityDirectory}\"," +
+                                  $"\"components\":11,\"group\":\"Blizzard Chrome\",\"locked\":true," +
+                                  $"\"designScreenshots\":6,\"lfdStates\":4}}");
             }
         }
 
@@ -1094,7 +1337,6 @@ public static class SmokeTest
             pickerTypes.All(t => !string.IsNullOrWhiteSpace(t.Name) && Globs(t).Length > 0));
 
         // 11. Both formats still open through OpenFromFile, which is what the picker calls.
-        var importedFrameCount = vm.Project.Frames.Count;
         var reopenJson = Path.Combine(Path.GetTempPath(), $"frameforge-smoke-{Guid.NewGuid():N}.fforge.json");
         var reopenXml = Path.Combine(Path.GetTempPath(), $"frameforge-smoke-{Guid.NewGuid():N}.xml");
         try
@@ -1120,8 +1362,8 @@ public static class SmokeTest
                 && vm.Source is { ImportFailed: false },
                 $"source {vm.Project.Source?.Type.ToString() ?? "none"} readonly {vm.Project.Source?.ReadOnly}");
             Check("re-opened XML import is still complete",
-                vm.Project.Frames.Count == importedFrameCount,
-                $"{vm.Project.Frames.Count} vs {importedFrameCount}");
+                vm.Project.Frames.Count == importedProjectFrameCount,
+                $"{vm.Project.Frames.Count} vs {importedProjectFrameCount}");
             Check("re-opened XML left the addon file untouched",
                 Sha256(reopenXml) == xmlDigestBefore);
             Check("re-opened XML refuses to overwrite itself", !vm.SaveToFile(reopenXml));

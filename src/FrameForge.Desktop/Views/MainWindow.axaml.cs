@@ -49,6 +49,10 @@ public partial class MainWindow : Window
             or nameof(MainWindowViewModel.ViewMode)
             or nameof(MainWindowViewModel.CanvasFilter)
             or nameof(MainWindowViewModel.LabelPolicy)
+            or nameof(MainWindowViewModel.OriginFilter)
+            or nameof(MainWindowViewModel.HiddenByOrigin)
+            or nameof(MainWindowViewModel.LockedNames)
+            or nameof(MainWindowViewModel.PreferredSelectionNames)
             or nameof(MainWindowViewModel.Assets))
         {
             SyncCanvas();
@@ -78,13 +82,80 @@ public partial class MainWindow : Window
         Canvas.AssetResolver = vm.Assets;
         Canvas.StockTemplates = vm.StockTemplates;
         Canvas.PreviewOverrides = vm.ActivePreviewOverrides;
+        Canvas.HiddenByOrigin = vm.HiddenByOrigin;
+        Canvas.LockedNames = vm.LockedNames;
+        Canvas.PreferredSelectionNames = vm.PreferredSelectionNames;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();
 
-    private void OnLoadExampleClick(object? sender, RoutedEventArgs e) => ViewModel?.LoadNativeHuntsExample();
+    private void OnNewLfdClick(object? sender, RoutedEventArgs e) => ViewModel?.NewDungeonFinderProject();
 
     private void OnAddFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddFrame();
+    private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
+    private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
+    private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();
+    private void OnCreateStateClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateDesignState();
+    private void OnRenameStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedDesignState();
+    private void OnDeleteStateClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteSelectedDesignState();
+    private void OnAssignAllStatesClick(object? sender, RoutedEventArgs e) => ViewModel?.AssignSelectionToAllStates();
+    private void OnAssignSelectedStateClick(object? sender, RoutedEventArgs e) => ViewModel?.AssignSelectionToSelectedState();
+    private void OnRemoveSelectedStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RemoveSelectionFromSelectedState();
+    private void OnExpandStockClick(object? sender, RoutedEventArgs e) => ViewModel?.SetConceptualStockExpanded(true);
+    private void OnCollapseStockClick(object? sender, RoutedEventArgs e) => ViewModel?.SetConceptualStockExpanded(false);
+
+    private async void OnStockLockActionClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || vm.ConceptualStockFramework is not { } group)
+            return;
+        if (!group.Locked)
+        {
+            vm.SetConceptualStockLocked(true);
+            return;
+        }
+        var accepted = await ConfirmStockUnlockAsync();
+        if (accepted)
+            vm.SetConceptualStockLocked(false);
+    }
+
+    private async Task<bool> ConfirmStockUnlockAsync()
+    {
+        var result = false;
+        var dialog = new Window
+        {
+            Title = "Unlock Blizzard framework?",
+            Width = 470,
+            Height = 190,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var cancel = new Button { Content = "Cancel", MinWidth = 88 };
+        var unlock = new Button { Content = "Unlock", MinWidth = 88 };
+        cancel.Click += (_, _) => dialog.Close();
+        unlock.Click += (_, _) => { result = true; dialog.Close(); };
+        dialog.Content = new StackPanel
+        {
+            Margin = new Avalonia.Thickness(18),
+            Spacing = 16,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Unlocking allows individual Blizzard components to be selected and modified. You can lock the framework again at any time.",
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                },
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Children = { cancel, unlock },
+                },
+            },
+        };
+        await dialog.ShowDialog(this);
+        return result;
+    }
 
     private void OnDeleteFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteFrame();
 
@@ -251,6 +322,17 @@ public partial class MainWindow : Window
     }
 
     private void OnCanvasDragCompleted(object? sender, EventArgs e) => ViewModel?.EndDrag();
+
+    private void OnCreateGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateGroup();
+    private void OnRenameGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedGroup();
+    private void OnDeleteGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteSelectedGroup();
+    private void OnAddSelectionToGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.AddSelectionToGroup();
+    private void OnRemoveSelectionFromGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.RemoveSelectionFromGroup();
+    private void OnSelectCompositionClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is Button { Tag: string name })
+            vm.Select(name);
+    }
 
     private void OnCanvasFitRequested(object? sender, EventArgs e)
     {

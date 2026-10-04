@@ -115,6 +115,7 @@ public static class ProjectCodec
         var screen = ParseScreen(root, errors);
         var frames = ParseFrames(root, errors);
         var source = ParseSource(root);
+        var editor = ParseEditor(root, frames, errors);
 
         if (errors.Count > 0)
             return ParseResult.Failure(errors);
@@ -125,6 +126,7 @@ public static class ProjectCodec
             Screen = screen,
             Frames = frames,
             Source = source,
+            Editor = editor,
         });
     }
 
@@ -235,6 +237,13 @@ public static class ProjectCodec
                     writer.WriteString("inherits", inherits);
                 if (frame.Placeholder)
                     writer.WriteBoolean("placeholder", true);
+                if (frame.SourceLocation is { } location)
+                {
+                    writer.WriteStartObject("sourceLocation");
+                    writer.WriteNumber("line", location.Line);
+                    writer.WriteNumber("column", location.Column);
+                    writer.WriteEndObject();
+                }
                 if (frame.Visual is { } visual && !visual.IsEmpty)
                     WriteVisual(writer, visual);
 
@@ -253,6 +262,80 @@ public static class ProjectCodec
                     writer.WriteString("referencePath", referencePath);
                 if (source.ReadOnly)
                     writer.WriteBoolean("readOnly", true);
+                writer.WriteEndObject();
+            }
+
+            if (project.Editor.Groups.Count > 0 || project.Editor.LockedElements.Count > 0
+                || project.Editor.DesignObjects.Count > 0 || project.Editor.DesignStates.Count > 0
+                || project.Editor.ActiveDesignStateId is not null || project.Editor.Workspace != "design")
+            {
+                writer.WriteStartObject("editor");
+                if (project.Editor.Workspace != "design")
+                    writer.WriteString("workspace", project.Editor.Workspace);
+                if (project.Editor.ActiveDesignStateId is { Length: > 0 } activeState)
+                    writer.WriteString("activeDesignState", activeState);
+                if (project.Editor.LockedElements.Count > 0)
+                {
+                    writer.WriteStartArray("lockedElements");
+                    foreach (var name in project.Editor.LockedElements)
+                        writer.WriteStringValue(name);
+                    writer.WriteEndArray();
+                }
+                if (project.Editor.Groups.Count > 0)
+                {
+                    writer.WriteStartArray("groups");
+                    foreach (var group in project.Editor.Groups)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("name", group.Name);
+                        if (group.Locked)
+                            writer.WriteBoolean("locked", true);
+                        if (group.Expanded)
+                            writer.WriteBoolean("expanded", true);
+                        if (group.Concept is { Length: > 0 } concept)
+                            writer.WriteString("concept", concept);
+                        if (group.StockIdentity is { Length: > 0 } stockIdentity)
+                            writer.WriteString("stockIdentity", stockIdentity);
+                        writer.WriteStartArray("members");
+                        foreach (var member in group.Members)
+                            writer.WriteStringValue(member);
+                        writer.WriteEndArray();
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
+                if (project.Editor.DesignStates.Count > 0)
+                {
+                    writer.WriteStartArray("designStates");
+                    foreach (var state in project.Editor.DesignStates)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("id", state.Id);
+                        writer.WriteString("name", state.Name);
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
+                if (project.Editor.DesignObjects.Count > 0)
+                {
+                    writer.WriteStartArray("designObjects");
+                    foreach (var item in project.Editor.DesignObjects)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("frame", item.FrameName);
+                        if (item.DisplayName is { Length: > 0 } displayName)
+                            writer.WriteString("displayName", displayName);
+                        if (item.StateIds.Count > 0)
+                        {
+                            writer.WriteStartArray("states");
+                            foreach (var stateId in item.StateIds)
+                                writer.WriteStringValue(stateId);
+                            writer.WriteEndArray();
+                        }
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
                 writer.WriteEndObject();
             }
 
@@ -504,8 +587,196 @@ public static class ProjectCodec
             Anonymous = anonymous,
             Inherits = ReadOptionalString(element, "inherits"),
             Placeholder = placeholder,
+            SourceLocation = ReadSourceLocation(element, path, errors),
             Visual = ReadVisual(element, path, errors),
         };
+    }
+
+    private static SourceLocation? ReadSourceLocation(JsonElement element, string path, List<string> errors)
+    {
+        if (!element.TryGetProperty("sourceLocation", out var location) || location.ValueKind == JsonValueKind.Null)
+            return null;
+        if (location.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.sourceLocation must be an object.");
+            return null;
+        }
+        var line = ReadNumber(location, "line", $"{path}.sourceLocation", errors, required: true);
+        var column = ReadNumber(location, "column", $"{path}.sourceLocation", errors, required: true);
+        if (line < 1 || column < 1 || line % 1 != 0 || column % 1 != 0)
+        {
+            errors.Add($"{path}.sourceLocation line and column must be positive whole numbers.");
+            return null;
+        }
+        return new SourceLocation((int)line, (int)column);
+    }
+
+    private static EditorMetadata ParseEditor(JsonElement root, IReadOnlyList<FrameDef> frames, List<string> errors)
+    {
+        if (!root.TryGetProperty("editor", out var editor) || editor.ValueKind == JsonValueKind.Null)
+            return new EditorMetadata();
+        if (editor.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("editor must be an object.");
+            return new EditorMetadata();
+        }
+
+        var names = frames.Select(frame => frame.Name).ToHashSet(StringComparer.Ordinal);
+        var locked = ReadNameArray(editor, "lockedElements", "editor", names, errors);
+        var groups = new List<EditorGroup>();
+        if (editor.TryGetProperty("groups", out var array) && array.ValueKind != JsonValueKind.Null)
+        {
+            if (array.ValueKind != JsonValueKind.Array)
+                errors.Add("editor.groups must be an array.");
+            else
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var index = 0;
+                foreach (var entry in array.EnumerateArray())
+                {
+                    var groupPath = $"editor.groups[{index++}]";
+                    if (entry.ValueKind != JsonValueKind.Object)
+                    {
+                        errors.Add($"{groupPath} must be an object.");
+                        continue;
+                    }
+                    var name = ReadOptionalString(entry, "name");
+                    if (name is null || !seen.Add(name))
+                    {
+                        errors.Add($"{groupPath}.name must be non-empty and unique.");
+                        continue;
+                    }
+                    groups.Add(new EditorGroup
+                    {
+                        Name = name,
+                        Locked = entry.TryGetProperty("locked", out var isLocked) && isLocked.ValueKind == JsonValueKind.True,
+                        Expanded = entry.TryGetProperty("expanded", out var expanded) && expanded.ValueKind == JsonValueKind.True,
+                        Concept = ReadOptionalString(entry, "concept"),
+                        StockIdentity = ReadOptionalString(entry, "stockIdentity"),
+                        Members = ReadNameArray(entry, "members", groupPath, names, errors),
+                    });
+                }
+            }
+        }
+        var states = new List<DesignState>();
+        if (editor.TryGetProperty("designStates", out var stateArray) && stateArray.ValueKind != JsonValueKind.Null)
+        {
+            if (stateArray.ValueKind != JsonValueKind.Array)
+                errors.Add("editor.designStates must be an array.");
+            else
+            {
+                var ids = new HashSet<string>(StringComparer.Ordinal);
+                var stateNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var index = 0;
+                foreach (var entry in stateArray.EnumerateArray())
+                {
+                    var statePath = $"editor.designStates[{index++}]";
+                    var id = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "id") : null;
+                    var stateName = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "name") : null;
+                    if (id is null || stateName is null || !ids.Add(id) || !stateNames.Add(stateName))
+                    {
+                        errors.Add($"{statePath} requires unique non-empty id and name values.");
+                        continue;
+                    }
+                    states.Add(new DesignState { Id = id, Name = stateName });
+                }
+            }
+        }
+        var validStateIds = states.Select(state => state.Id).ToHashSet(StringComparer.Ordinal);
+        var designObjects = new List<DesignObjectMetadata>();
+        if (editor.TryGetProperty("designObjects", out var objectArray) && objectArray.ValueKind != JsonValueKind.Null)
+        {
+            if (objectArray.ValueKind != JsonValueKind.Array)
+                errors.Add("editor.designObjects must be an array.");
+            else
+            {
+                var seenObjects = new HashSet<string>(StringComparer.Ordinal);
+                var index = 0;
+                foreach (var entry in objectArray.EnumerateArray())
+                {
+                    var objectPath = $"editor.designObjects[{index++}]";
+                    var frameName = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "frame") : null;
+                    if (frameName is null || !names.Contains(frameName) || !seenObjects.Add(frameName))
+                    {
+                        errors.Add($"{objectPath}.frame must reference one unique existing frame.");
+                        continue;
+                    }
+                    designObjects.Add(new DesignObjectMetadata
+                    {
+                        FrameName = frameName,
+                        DisplayName = ReadOptionalString(entry, "displayName"),
+                        StateIds = ReadStringArray(entry, "states", objectPath, validStateIds, errors),
+                    });
+                }
+            }
+        }
+        var activeState = ReadOptionalString(editor, "activeDesignState");
+        if (activeState is not null && !validStateIds.Contains(activeState))
+            errors.Add($"editor.activeDesignState references missing state \"{activeState}\".");
+        var workspace = ReadOptionalString(editor, "workspace") ?? "design";
+        if (workspace is not ("design" or "inspect"))
+            errors.Add("editor.workspace must be design or inspect.");
+        return new EditorMetadata
+        {
+            LockedElements = locked,
+            Groups = groups,
+            DesignStates = states,
+            DesignObjects = designObjects,
+            ActiveDesignStateId = activeState,
+            Workspace = workspace,
+        };
+    }
+
+    private static IReadOnlyList<string> ReadStringArray(JsonElement parent, string key, string path,
+        IReadOnlySet<string> validValues, List<string> errors)
+    {
+        if (!parent.TryGetProperty(key, out var array) || array.ValueKind == JsonValueKind.Null)
+            return [];
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add($"{path}.{key} must be an array.");
+            return [];
+        }
+        var values = new List<string>();
+        foreach (var item in array.EnumerateArray())
+        {
+            var value = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+            if (value is null || !validValues.Contains(value))
+                errors.Add($"{path}.{key} contains an unknown value.");
+            else if (!values.Contains(value, StringComparer.Ordinal))
+                values.Add(value);
+        }
+        return values;
+    }
+
+    private static IReadOnlyList<string> ReadNameArray(JsonElement parent, string key, string path,
+        IReadOnlySet<string> validNames, List<string> errors)
+    {
+        if (!parent.TryGetProperty(key, out var array) || array.ValueKind == JsonValueKind.Null)
+            return [];
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add($"{path}.{key} must be an array of frame names.");
+            return [];
+        }
+        var values = new List<string>();
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
+            {
+                errors.Add($"{path}.{key} entries must be non-empty strings.");
+                continue;
+            }
+            var name = item.GetString()!;
+            if (!validNames.Contains(name))
+            {
+                errors.Add($"{path}.{key} references missing frame \"{name}\".");
+                continue;
+            }
+            if (!values.Contains(name, StringComparer.Ordinal))
+                values.Add(name);
+        }
+        return values;
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core.Viewing;
+using FrameForge.Desktop.Inspection;
 
 namespace FrameForge.Desktop.ViewModels;
 
@@ -126,6 +127,38 @@ public sealed partial class VisibilityToggle : ObservableObject
     }
 
     /// <summary>Re-reads the owning view model's filter.</summary>
+    internal void Refresh() => OnPropertyChanged(nameof(IsOn));
+}
+
+/// <summary>One non-destructive origin visibility toggle.</summary>
+public sealed partial class OriginVisibilityToggle : ObservableObject
+{
+    private readonly MainWindowViewModel _owner;
+
+    internal OriginVisibilityToggle(MainWindowViewModel owner, string label, OriginVisibility flag, string toolTip)
+    {
+        _owner = owner;
+        Label = label;
+        Flag = flag;
+        ToolTip = toolTip;
+    }
+
+    public string Label { get; }
+    public OriginVisibility Flag { get; }
+    public string ToolTip { get; }
+
+    public bool IsOn
+    {
+        get => _owner.OriginFilter.HasFlag(Flag);
+        set
+        {
+            if (IsOn == value)
+                return;
+            _owner.SetOriginVisible(Flag, value);
+            OnPropertyChanged(nameof(IsOn));
+        }
+    }
+
     internal void Refresh() => OnPropertyChanged(nameof(IsOn));
 }
 

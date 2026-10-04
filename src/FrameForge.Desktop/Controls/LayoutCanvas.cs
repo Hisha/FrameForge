@@ -8,6 +8,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
+using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Controls;
@@ -59,6 +60,9 @@ public class LayoutCanvas : Control
     private ITextureAssetResolver? _assetResolver;
     private IStockTemplateResolver? _stockTemplates;
     private PreviewOverrideSet? _previewOverrides;
+    private IReadOnlySet<string> _hiddenByOrigin = new HashSet<string>();
+    private IReadOnlySet<string> _lockedNames = new HashSet<string>();
+    private IReadOnlySet<string> _preferredSelectionNames = new HashSet<string>();
 
     /// <summary>The completed render pass's policy, drawable, layer, and visual-paint counts.</summary>
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
@@ -236,6 +240,25 @@ public class LayoutCanvas : Control
         }
     }
 
+    /// <summary>Presentation-only exclusions by origin; descendants are evaluated independently.</summary>
+    public IReadOnlySet<string> HiddenByOrigin
+    {
+        get => _hiddenByOrigin;
+        set { _hiddenByOrigin = value; InvalidateVisual(); }
+    }
+
+    public IReadOnlySet<string> LockedNames
+    {
+        get => _lockedNames;
+        set { _lockedNames = value; InvalidateVisual(); }
+    }
+
+    public IReadOnlySet<string> PreferredSelectionNames
+    {
+        get => _preferredSelectionNames;
+        set => _preferredSelectionNames = value;
+    }
+
     /// <summary>Current zoom and pan, in model units.</summary>
     public Viewport Viewport
     {
@@ -365,6 +388,8 @@ public class LayoutCanvas : Control
             var effectiveVisible = detail.EffectiveVisible;
             var selected = name == _selectedName;
             var policyVisible = ViewPolicy.IsVisible(model, effectiveVisible, _filter);
+            if (_hiddenByOrigin.Contains(name))
+                policyVisible = false;
 
             if (policyVisible)
                 diagnostics.Accept(model.Kind);
@@ -432,7 +457,7 @@ public class LayoutCanvas : Control
 
         SelectionRequested?.Invoke(this, hit);
 
-        if (hit is not null && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (hit is not null && !_lockedNames.Contains(hit) && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             _dragging = true;
             _dragName = hit;
@@ -450,7 +475,12 @@ public class LayoutCanvas : Control
         if (_project is null || _layout is null)
             return [];
 
-        return HitTester.CandidatesAt(_project!, _layout, _viewport, Origin, _filter, canvasX, canvasY);
+        var candidates = HitTester.CandidatesAt(_project!, _layout, _viewport, Origin, _filter, canvasX, canvasY)
+            .Where(name => !_hiddenByOrigin.Contains(name))
+            .ToArray();
+        // Selection priority is independent of paint order: editable project content gets the
+        // first click, while repeat-click cycling still exposes every overlapping piece.
+        return SelectionPriority.Order(candidates, _preferredSelectionNames);
     }
 
     /// <summary>The single widget a click at this point should select, or null.</summary>

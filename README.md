@@ -31,6 +31,15 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Canvas category/hidden/helper toggles and None/Selected/All label policies
 - Tree structure/visual filters, case-insensitive search with ancestor context, direct canvas
   selection, overlap cycling, and Reveal Selection
+- Parser-backed XML file/line provenance and a jumpable direct visual-composition Inspector with
+  physical asset source, image dimensions, effective geometry, and cautious resize guidance
+- Editor-only groups and element/group locks persisted separately from WoW layout semantics
+- Default **DESIGN** workspace with friendly names, a concise property editor, basic Frame/Text/Image
+  creation, and authored Lua-free state composition; **INSPECT** retains the complete source hierarchy
+- New-project choices for a blank project or a protected conceptual Dungeon Finder framework resolved
+  on demand from the user's validated local 3.3.5a build-12340 client (no bundled Blizzard resources)
+- Presentation-only Project, Blizzard stock, Runtime/design-time, and Stand-in origin filters;
+  editable project content is preferred over locked stock chrome during overlap selection
 - Retained texture/text/button/status-bar metadata with honest Preview stand-ins
 - Real TGA and verified WoW 3.3.5a BLP texture rendering from project assets, manual roots, or an
   application-managed cache populated on demand from the user's own client
@@ -41,6 +50,9 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Strict lossless `.fforge.json` project serialization (v1)
 - Native Hunts example included
 - **Read-only FrameXML import** (see below)
+
+See `docs/DESIGN_WORKSPACE.md` for the progressive-disclosure model, stock-framework safety, and
+the separation between authored design states and imported preview states.
 
 ## FrameXML Import
 
@@ -104,6 +116,8 @@ prove it was not modified.
 The visual artifact roadmap is in [docs/VISUAL_RENDERING_PLAN.md](docs/VISUAL_RENDERING_PLAN.md).
 The preview-state behavior, sample-data boundary, and extension architecture are documented in
 [docs/PREVIEW_STATES.md](docs/PREVIEW_STATES.md).
+Editor provenance, composition, groups, locks, and origin filtering are documented in
+[docs/EDITOR_INSPECTION.md](docs/EDITOR_INSPECTION.md).
 
 ## Local WoW Client Assets
 

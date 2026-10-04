@@ -55,7 +55,14 @@
         <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
         <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="New" Click="OnNewClick" ToolTip.Tip="Start an empty project" />
+                <Button Content="New" ToolTip.Tip="Start a blank project or a client-resolved Blizzard framework">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuItem Header="Blank FrameForge Project" Click="OnNewClick" />
+                            <MenuItem Header="Blizzard UI  ›  Dungeon Finder / LFD" Click="OnNewLfdClick" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button Content="Open" Click="OnOpenClick"
                         ToolTip.Tip="Open a .fforge.json project or a WoW FrameXML file" />
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
@@ -63,8 +70,6 @@
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
-                <Button Content="Load Native Hunts Example" Click="OnLoadExampleClick"
-                        ToolTip.Tip="Load the built-in example layout" />
                 <Button Content="Add Frame" Click="OnAddFrameClick" />
                 <Button Content="Delete Frame" Click="OnDeleteFrameClick" />
                 <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
@@ -180,6 +185,18 @@
         -->
         <Border Grid.Row="2" Background="#0B1116" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,6">
             <StackPanel Orientation="Horizontal" Spacing="10">
+                <ItemsControl ItemsSource="{Binding WorkspaceOptions}" VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:WorkspaceOption">
+                            <RadioButton GroupName="Workspace" Content="{Binding Label}"
+                                         IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Rectangle Width="1" Fill="#315268" Margin="4,2" />
                 <TextBlock Classes="label" Text="View" VerticalAlignment="Center" />
 
                 <!-- A RadioButton group rather than a ComboBox: the three modes are mutually
@@ -203,12 +220,34 @@
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
-                <TextBlock Classes="label" Text="Show" VerticalAlignment="Center" />
+                <Expander Header="Origins" VerticalAlignment="Center" IsVisible="{Binding IsInspectWorkspace}"
+                          ToolTip.Tip="Editor presentation only; source visibility is unchanged">
+                    <Border Background="#141B22" BorderBrush="#33434E" BorderThickness="1"
+                            CornerRadius="4" Padding="8">
+                        <ItemsControl ItemsSource="{Binding OriginVisibilityToggles}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:OriginVisibilityToggle">
+                                    <CheckBox Content="{Binding Label}" ToolTip.Tip="{Binding ToolTip}"
+                                              IsChecked="{Binding IsOn, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </Expander>
+
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+
+                <TextBlock Classes="label" Text="Show" VerticalAlignment="Center" IsVisible="{Binding IsInspectWorkspace}" />
 
                 <!-- One checkbox per category. Turning a category off removes those widgets from
                      drawing AND from picking, so the toggle cannot appear to do nothing until the
                      user happens to click where the widget used to be. -->
-                <ItemsControl ItemsSource="{Binding VisibilityToggles}" VerticalAlignment="Center">
+                <ItemsControl ItemsSource="{Binding VisibilityToggles}" VerticalAlignment="Center" IsVisible="{Binding IsInspectWorkspace}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <StackPanel Orientation="Horizontal" Spacing="8" />
@@ -224,20 +263,28 @@
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
-                <TextBlock Classes="label" Text="Labels" VerticalAlignment="Center" />
+                <TextBlock Classes="label" Text="Labels" VerticalAlignment="Center" IsVisible="{Binding IsInspectWorkspace}" />
                 <ComboBox ItemsSource="{Binding LabelPolicyOptions}"
+                          IsVisible="{Binding IsInspectWorkspace}"
                           SelectedItem="{Binding SelectedLabelPolicyOption, Mode=TwoWay}"
                           DisplayMemberBinding="{Binding Label}"
                           ToolTip.Tip="Which widgets get a name label on the canvas" />
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
-                <TextBlock Classes="label" Text="Design-time state" VerticalAlignment="Center" />
+                <TextBlock Classes="label" Text="Imported preview" VerticalAlignment="Center" />
                 <ComboBox x:Name="PreviewStateSelector"
                           MinWidth="132"
                           ItemsSource="{Binding PreviewStateOptions}"
                           SelectedItem="{Binding SelectedPreviewState, Mode=TwoWay}"
                           DisplayMemberBinding="{Binding Label}"
                           ToolTip.Tip="Applies design-time values only. Source XML is unchanged." />
+
+                <TextBlock Classes="label" Text="Design state" VerticalAlignment="Center" IsVisible="{Binding IsDesignWorkspace}" />
+                <ComboBox MinWidth="132" IsVisible="{Binding IsDesignWorkspace}"
+                          ItemsSource="{Binding DesignStateOptions}"
+                          SelectedItem="{Binding ActiveDesignState, Mode=TwoWay}"
+                          DisplayMemberBinding="{Binding Name}"
+                          ToolTip.Tip="Lua-free authored composition state" />
 
                 <Button Content="Reset" Click="OnResetViewClick"
                         ToolTip.Tip="Restore this mode's default visibility and label settings" />
@@ -253,7 +300,8 @@
             <Border Grid.Column="0" Classes="panel" BorderThickness="0,0,1,0" Padding="10">
                 <DockPanel LastChildFill="True">
                     <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
-                        <TextBlock Classes="header" Text="FRAMES" Margin="0" />
+                        <TextBlock Classes="header" Text="OBJECTS" Margin="0" IsVisible="{Binding IsDesignWorkspace}" />
+                        <TextBlock Classes="header" Text="FRAME HIERARCHY" Margin="0" IsVisible="{Binding IsInspectWorkspace}" />
 
                         <!-- Search and structural filter only decide what the tree DISPLAYS. The
                              projection is recomputed from the project on every keystroke, so
@@ -269,7 +317,7 @@
                                     ToolTip.Tip="Center the selected widget without changing zoom" />
                         </Grid>
 
-                        <ItemsControl ItemsSource="{Binding TreeFilterOptions}">
+                        <ItemsControl ItemsSource="{Binding TreeFilterOptions}" IsVisible="{Binding IsInspectWorkspace}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal" Spacing="6" />
@@ -283,7 +331,56 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <TextBlock Classes="mono" Text="{Binding TreeFilterSummary}" Opacity="0.7" />
+                        <TextBlock Classes="mono" Text="{Binding TreeFilterSummary}" Opacity="0.7" IsVisible="{Binding IsInspectWorkspace}" />
+
+                        <Expander Header="Add object" IsVisible="{Binding IsDesignWorkspace}" IsExpanded="True">
+                            <StackPanel Spacing="5" Margin="0,6,0,0">
+                                <TextBox Text="{Binding NewObjectName, Mode=TwoWay}" PlaceholderText="Object name" />
+                                <TextBox Text="{Binding NewImageAsset, Mode=TwoWay}"
+                                         PlaceholderText="Project image path (for Image)" />
+                                <WrapPanel>
+                                    <Button Content="Frame" Click="OnAddDesignFrameClick" Margin="0,0,4,4" />
+                                    <Button Content="Text" Click="OnAddDesignTextClick" Margin="0,0,4,4" />
+                                    <Button Content="Image" Click="OnAddDesignImageClick" Margin="0,0,4,4" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Header="Design states" IsVisible="{Binding IsDesignWorkspace}">
+                            <StackPanel Spacing="5" Margin="0,6,0,0">
+                                <ComboBox ItemsSource="{Binding AuthoredStateOptions}"
+                                          SelectedItem="{Binding SelectedAuthoredState, Mode=TwoWay}"
+                                          DisplayMemberBinding="{Binding Name}" PlaceholderText="No authored states" />
+                                <TextBox Text="{Binding StateNameDraft, Mode=TwoWay}" PlaceholderText="State name" />
+                                <WrapPanel>
+                                    <Button Content="Create" Click="OnCreateStateClick" Margin="0,0,4,4" />
+                                    <Button Content="Rename" Click="OnRenameStateClick" Margin="0,0,4,4" />
+                                    <Button Content="Delete" Click="OnDeleteStateClick" Margin="0,0,4,4" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Header="Editor groups" Margin="0,4,0,0" IsVisible="{Binding IsInspectWorkspace}">
+                            <StackPanel Spacing="5" Margin="0,6,0,0">
+                                <ComboBox ItemsSource="{Binding Groups}"
+                                          SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
+                                          DisplayMemberBinding="{Binding Name}"
+                                          PlaceholderText="No groups" />
+                                <TextBox Text="{Binding GroupNameDraft, Mode=TwoWay}"
+                                         PlaceholderText="Group name" />
+                                <WrapPanel Orientation="Horizontal">
+                                    <Button Content="Create" Click="OnCreateGroupClick" Margin="0,0,4,4" />
+                                    <Button Content="Rename" Click="OnRenameGroupClick" Margin="0,0,4,4" />
+                                    <Button Content="Delete" Click="OnDeleteGroupClick" Margin="0,0,4,4" />
+                                </WrapPanel>
+                                <WrapPanel Orientation="Horizontal">
+                                    <Button Content="Add selected" Click="OnAddSelectionToGroupClick" Margin="0,0,4,4" />
+                                    <Button Content="Remove" Click="OnRemoveSelectionFromGroupClick" Margin="0,0,4,4" />
+                                </WrapPanel>
+                                <CheckBox Content="Lock group"
+                                          IsChecked="{Binding SelectedGroupLocked, Mode=TwoWay}" />
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
 
                     <TextBlock DockPanel.Dock="Bottom" Classes="mono" Text="{Binding ProjectDescription}"
@@ -292,26 +389,25 @@
                               SelectionMode="Single"
                               ItemsSource="{Binding TreeRoots}"
                               SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
-                        <TreeView.Styles>
-                            <Style Selector="TreeViewItem">
-                                <Setter Property="IsExpanded" Value="True" />
-                            </Style>
-                        </TreeView.Styles>
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
-                                <Grid ColumnDefinitions="Auto,*,Auto" MinWidth="180">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" MinWidth="180"
+                                      ToolTip.Tip="{Binding OriginLabel}">
                                     <!-- The kind and the "fills" tag are what distinguish a
                                          FontString from a Texture from a Frame. Importing 51
                                          widgets that all look like identical panels tells the
                                          user nothing about the file they just opened. -->
-                                    <Border Grid.Column="0" Classes="mono" Margin="0,0,6,0"
+                                    <Border Grid.Column="0" Classes="mono" Margin="0,0,6,0" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                             Padding="4,1" CornerRadius="3" VerticalAlignment="Center"
                                             Background="#1C2733">
                                         <TextBlock Text="{Binding KindBadge}" />
                                     </Border>
-                                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="2" Text="{Binding SizeText}" Classes="mono"
+                                    <TextBlock Grid.Column="2" Text="{Binding LockBadge}" Margin="4,0" />
+                                    <TextBlock Grid.Column="3" Text="{Binding GroupBadge}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
+                                               MaxWidth="70" TextTrimming="CharacterEllipsis" Opacity="0.75" />
+                                    <TextBlock Grid.Column="4" Text="{Binding SizeText}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                                VerticalAlignment="Center" Opacity="0.75" />
                                 </Grid>
                             </TreeDataTemplate>
@@ -332,18 +428,66 @@
             <!-- Inspector -->
             <Border Grid.Column="2" Classes="panel" BorderThickness="1,0,0,0" Padding="12">
                 <ScrollViewer>
-                    <StackPanel Spacing="6" IsEnabled="{Binding CanEditSelection}">
-                        <TextBlock Classes="header" Text="INSPECTOR" />
+                    <StackPanel Spacing="6" IsVisible="{Binding Editor.HasSelection}">
+                        <TextBlock Classes="header" Text="DESIGN PROPERTIES" IsVisible="{Binding IsDesignWorkspace}" />
+                        <TextBlock Classes="header" Text="INSPECTOR" IsVisible="{Binding IsInspectWorkspace}" />
+
+                        <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
+                                CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
+                            <StackPanel Spacing="5">
+                                <TextBlock Classes="label" Text="NAME" />
+                                <TextBox Text="{Binding DesignNameDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Text="STATE MEMBERSHIP" Margin="0,5,0,0" />
+                                <TextBlock Classes="value" Text="{Binding SelectedStateMembership}" TextWrapping="Wrap" />
+                                <WrapPanel>
+                                    <Button Content="All States" Click="OnAssignAllStatesClick" Margin="0,0,4,4" />
+                                    <Button Content="Add State" Click="OnAssignSelectedStateClick" Margin="0,0,4,4" />
+                                    <Button Content="Remove State" Click="OnRemoveSelectedStateClick" Margin="0,0,4,4" />
+                                </WrapPanel>
+                                <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
+                                <StackPanel IsVisible="{Binding IsStockFrameworkSelected}" Spacing="4" Margin="0,5,0,0">
+                                    <Button Content="Expand / inspect components" Click="OnExpandStockClick" />
+                                    <Button Content="Collapse components" Click="OnCollapseStockClick" />
+                                    <Button Content="{Binding StockFrameworkAction}" Click="OnStockLockActionClick" />
+                                    <TextBlock Classes="label" Text="Expansion changes tree presentation only; locking controls editability."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
+                                CornerRadius="4" Padding="8,6" IsVisible="{Binding IsInspectWorkspace}">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="header" Text="SOURCE / PROVENANCE" Margin="0,0,0,3" />
+                                <TextBlock Classes="value" Text="{Binding Editor.Name}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedElementKind, StringFormat='Kind: {0}'}" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedOrigin, StringFormat='Origin: {0}'}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedSourceFile, StringFormat='Source: {0}'}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedSourcePath}" TextWrapping="Wrap"
+                                           ToolTip.Tip="{Binding SelectedSourcePath}" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedSourceLocation}" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedParentName, StringFormat='Parent: {0}'}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedInheritance, StringFormat='Inherits: {0}'}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedPreviewProvenance}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedGroupMembership, StringFormat='Groups: {0}'}" TextWrapping="Wrap" />
+                                <CheckBox Content="Lock this element"
+                                          IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Text="Locked by an element or group; geometry editing is disabled."
+                                           IsVisible="{Binding IsSelectionLocked}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
 
                         <!-- Provenance, above the editable fields and outside their enabled state:
                              it describes the source, so it stays true while the fields below are
                              read-only because the frame belongs to an imported document. -->
                         <Border Background="#151B21" CornerRadius="4" Padding="8,6" Margin="0,0,0,8"
-                                IsVisible="{Binding Editor.SourceNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                IsVisible="{Binding IsInspectWorkspace}">
                             <TextBlock Classes="mono" TextWrapping="Wrap"
                                        Text="{Binding Editor.SourceNote}" Opacity="0.85" />
                         </Border>
 
+                        <Expander Header="POSITION · SIZE · ANCHOR · APPEARANCE" IsExpanded="{Binding IsDesignWorkspace}">
+                        <StackPanel Spacing="2" IsEnabled="{Binding CanEditSelection}" Margin="0,6,0,0">
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Name" />
                             <TextBox Grid.Column="1" Text="{Binding Editor.Name, Mode=TwoWay}" Margin="4,0,0,4" />
@@ -405,15 +549,17 @@
                         </Grid>
 
                         <CheckBox Margin="4,4,0,4" Content="Visible" IsChecked="{Binding Editor.IsVisible, Mode=TwoWay}" />
+                        </StackPanel>
+                        </Expander>
 
-                        <TextBlock Classes="header" Text="RESOLVED GEOMETRY" Margin="0,12,0,4" />
-                        <TextBlock Classes="mono" Text="{Binding Editor.ResolvedSummary}" TextWrapping="Wrap" />
+                        <TextBlock Classes="header" Text="RESOLVED GEOMETRY" Margin="0,12,0,4" IsVisible="{Binding IsInspectWorkspace}" />
+                        <TextBlock Classes="mono" Text="{Binding Editor.ResolvedSummary}" TextWrapping="Wrap" IsVisible="{Binding IsInspectWorkspace}" />
 
                         <!-- Extra anchors are shown, not editable. WoW applies several anchors
                              together and FrameForge will not rewrite one blind, so displaying them
                              is the honest option; hiding them would lose the only record of what
                              the source actually asked for. -->
-                        <StackPanel IsVisible="{Binding Editor.HasExtraAnchors}" Margin="0,10,0,0">
+                        <StackPanel IsVisible="{Binding IsInspectWorkspace}" Margin="0,10,0,0">
                             <TextBlock Classes="header" Text="ADDITIONAL ANCHORS (READ-ONLY)" Margin="0,0,0,4" />
                             <ItemsControl ItemsSource="{Binding Editor.ExtraAnchors}">
                                 <ItemsControl.ItemTemplate>
@@ -439,9 +585,40 @@
                             </ItemsControl>
                         </StackPanel>
 
-                        <TextBlock Classes="mono" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="{Binding Editor.AnchorNote}" Foreground="#E06C6C"
-                                   IsVisible="{Binding Editor.AnchorNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <StackPanel IsVisible="{Binding IsInspectWorkspace}" Margin="0,14,0,0">
+                            <TextBlock Classes="header" Text="VISUAL COMPOSITION" Margin="0,0,0,4" />
+                            <TextBlock Classes="mono" Text="{Binding CompositionSizeSource, StringFormat='Size controlled by: {0}'}"
+                                       TextWrapping="Wrap" Margin="0,0,0,3" />
+                            <TextBlock Classes="mono" Text="{Binding CompositionAppearanceSource, StringFormat='Appearance provided by: {0}'}"
+                                       TextWrapping="Wrap" Margin="0,0,0,5" />
+                            <ItemsControl ItemsSource="{Binding VisualComposition}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#141B22" BorderBrush="#22303A" BorderThickness="1"
+                                                CornerRadius="4" Padding="7,5" Margin="0,0,0,5">
+                                            <StackPanel Spacing="2">
+                                                <Button HorizontalAlignment="Left" Padding="4,1"
+                                                        Content="{Binding Heading}" Tag="{Binding FrameName}"
+                                                        Click="OnSelectCompositionClick"
+                                                        ToolTip.Tip="Select this visual component" />
+                                                <TextBlock Classes="mono" Text="{Binding Origin}" TextWrapping="Wrap" />
+                                                <TextBlock Classes="mono" Text="{Binding AssetPath}" TextWrapping="Wrap" />
+                                                <TextBlock Classes="mono" Text="{Binding Resolution}" TextWrapping="Wrap" />
+                                                <TextBlock Classes="mono" Text="{Binding Geometry}" TextWrapping="Wrap" />
+                                                <TextBlock Classes="mono" Text="{Binding Details}" TextWrapping="Wrap" Opacity="0.8" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Border Background="#242016" BorderBrush="#69592F" BorderThickness="1"
+                                    CornerRadius="4" Padding="7,5" Margin="0,3,0,0">
+                                <TextBlock Classes="mono" Text="{Binding ResizeGuidance}" TextWrapping="Wrap" />
+                            </Border>
+                        </StackPanel>
+
+                        <TextBlock Classes="mono" TextWrapping="Wrap" Margin="0,8,0,0" IsVisible="{Binding IsInspectWorkspace}"
+                                   Text="{Binding Editor.AnchorNote}" Foreground="#E06C6C" />
 
                         <!--
                             Retained visual metadata. Read-only on purpose, and stated as such:
@@ -451,7 +628,7 @@
                             more is the honest presentation - an inspector that rendered the texture
                             file as if it were the texture would be lying about what it can do.
                         -->
-                        <StackPanel IsVisible="{Binding Editor.HasVisual}" Margin="0,14,0,0">
+                        <StackPanel IsVisible="{Binding IsInspectWorkspace}" Margin="0,14,0,0">
                             <TextBlock Classes="header" Text="DECLARED VISUALS (READ-ONLY)" Margin="0,0,0,4" />
                             <Border Background="#141B22" BorderBrush="#22303A" BorderThickness="1"
                                     CornerRadius="4" Padding="8,6">

@@ -151,7 +151,20 @@ tabs reuse the stock disabled/active atlas and selected font data already presen
 template. Full behavior, sample values, limits, and future-catalog guidance are in
 `PREVIEW_STATES.md`.
 
-## 9. Recommended implementation order
+## 9. Editor usability and composition inspection
+
+The accepted rendering pipeline now feeds an editor-facing provenance and composition layer.
+Imported elements retain reliable parser line/column data; direct visual descendants report asset
+paths, physical resolution provenance, decoded dimensions, effective geometry, texCoords, tint,
+alpha, and template/runtime contributions. Fixed full-frame artwork receives cautious resize
+guidance, while sliced/atlas art is not mislabeled as distorted.
+
+Logical groups and element/group locks are optional `.fforge.json` editor metadata and never alter
+the source hierarchy. Origin categories can isolate project content from stock chrome without
+propagating the filter through ancestry. Selection priority favors unlocked project content over
+locked stock backgrounds without altering render order. See `EDITOR_INSPECTION.md`.
+
+## 10. Recommended implementation order
 
 1. Add another preview catalog only when a real interface and its Lua demonstrate the required
    states (for example Native Social, AQ UI, or vendors).
@@ -160,3 +173,12 @@ template. Full behavior, sample values, limits, and future-catalog guidance are 
 
 Lua execution, broad template emulation, unsupported BLP variants, and speculative artwork remain
 out of scope.
+
+## 11. Design workspace and stock starting framework
+
+The normal editor now opens in DESIGN, a projection over the same project, layout, and renderer used
+by INSPECT. Friendly display identity and conceptual stock groups never replace source identity.
+The Dungeon Finder starting framework is imported from the validated build-12340 client's managed
+cache, grouped as one locked editor concept, and rendered from machine-local resources. Authored
+design states filter a transient presentation clone and remain separate from Native Hunts' evidence-
+backed preview overrides. See `DESIGN_WORKSPACE.md`.

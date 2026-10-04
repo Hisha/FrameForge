@@ -16,10 +16,21 @@ public sealed record FrameOption(string? Name)
 /// <summary>A node in the frame tree.</summary>
 /// <param name="Frame">The frame this node shows.</param>
 /// <param name="Children">Direct children, so the tree mirrors the parent relationship.</param>
-public sealed record FrameTreeNode(FrameDef Frame, IReadOnlyList<FrameTreeNode> Children)
+public sealed record FrameTreeNode(
+    FrameDef Frame,
+    IReadOnlyList<FrameTreeNode> Children,
+    string OriginLabel,
+    bool IsLocked,
+    string GroupNames,
+    string? DisplayNameOverride = null,
+    bool IsConceptual = false,
+    bool IsExpanded = true)
 {
     /// <summary>Frame name, shown as the tree label.</summary>
     public string Name => Frame.Name;
+    public string DisplayName => IsConceptual
+        ? $"{(IsLocked ? "🔒" : "🔓")} {DisplayNameOverride ?? Frame.Name}"
+        : DisplayNameOverride ?? Frame.Name;
 
     /// <summary>
     /// What kind of FrameXML widget this is, so the tree does not imply a hierarchy of panels
@@ -32,6 +43,10 @@ public sealed record FrameTreeNode(FrameDef Frame, IReadOnlyList<FrameTreeNode> 
 
     /// <summary>True when the source element had no name of its own.</summary>
     public bool IsAnonymous => Frame.Anonymous;
+
+    public string LockBadge => IsLocked ? "🔒" : string.Empty;
+
+    public string GroupBadge => string.IsNullOrWhiteSpace(GroupNames) ? string.Empty : $"[{GroupNames}]";
 
     /// <summary>Size beside the name; parent-relative sizes are marked as such.</summary>
     public string SizeText

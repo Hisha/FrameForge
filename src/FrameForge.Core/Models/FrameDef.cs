@@ -137,6 +137,9 @@ public sealed record FrameDef
 
     public bool Placeholder { get; init; }
 
+    /// <summary>Reliable parser location of the declaring XML element, when imported.</summary>
+    public SourceLocation? SourceLocation { get; init; }
+
     /// <summary>
     /// Paint facts retained from the source. Never inferred: null means the document stated
     /// nothing, which is different from the document stating "no texture".
@@ -180,4 +183,10 @@ public sealed record FrameDef
 
     /// <summary>True when the widget actually has area, which is not guaranteed by the source.</summary>
     public bool HasArea => Width > 0 && Height > 0;
+}
+
+/// <summary>One-based source location reported by the XML parser.</summary>
+public sealed record SourceLocation(int Line, int Column)
+{
+    public override string ToString() => $"line {Line}, column {Column}";
 }

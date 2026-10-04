@@ -2,9 +2,9 @@
 
 `.fforge.json`, format version **1**.
 
-A project stores World of Warcraft model data and nothing else. There are no canvas positions,
-zoom levels, selection state or pixel measurements in it: the file is a description of the UI as
-WoW understands it, and the editor derives every view from it.
+A project stores World of Warcraft model data plus a deliberately separate optional `editor`
+metadata block. There are no canvas positions, zoom levels, selection state or pixel measurements.
+Groups and locks have no WoW runtime meaning and never alter the imported hierarchy or FrameXML.
 
 ## Compatibility rule
 
@@ -34,6 +34,7 @@ omits every key that holds its default. Two consequences are enforced by tests:
 | `screen` | object | Pixel size the layout was authored against. |
 | `frames` | array | Flat list; `parent` expresses the hierarchy. |
 | `source` | object? | Present only when the project was imported from an external file. |
+| `editor` | object? | Optional logical groups and locks; FrameForge-only metadata. |
 
 ## Frames
 
@@ -83,6 +84,7 @@ say *where a widget came from* instead of implying FrameForge invented it.
 | `anonymous` | bool | `true` when the source element had no name. |
 | `inherits` | string | The `inherits` template name, retained **unresolved**. |
 | `placeholder` | bool | `true` for a stand-in FrameForge synthesized for a frame the file references but does not define. |
+| `sourceLocation` | object | One-based parser-reported `line` and `column` of the declaring XML element. |
 
 `extraAnchors` entries use the same shape as the primary anchor minus `point`'s redundancy:
 
@@ -118,6 +120,41 @@ it to find source-relative artwork when the original XML still exists; the saved
 and uses texture fallbacks when it has been moved or deleted. When the project file is written, an
 absolute source reference is made relative to the project, falling back to just the file name, so no
 developer-machine absolute path is serialized and a project/XML pair can be copied together.
+
+## `editor`
+
+```json
+"editor": {
+  "workspace": "design",
+  "activeDesignState": "standard-hunt",
+  "lockedElements": ["CustomPanel"],
+  "groups": [
+    { "name": "Blizzard Dungeon Finder Frame", "locked": true, "expanded": false,
+      "concept": "stock-framework",
+      "stockIdentity": "wow-3.3.5a-12340:Interface/FrameXML/LFDFrame.xml:LFDParentFrame",
+      "members": ["LFDParentFrame", "Texture#1", "LFDParentFrameTab1"] }
+  ],
+  "designStates": [
+    { "id": "standard-hunt", "name": "Standard Hunt" }
+  ],
+  "designObjects": [
+    { "frame": "CustomPanel", "displayName": "Hunt Record", "states": ["standard-hunt"] }
+  ]
+}
+```
+
+Every field is optional. `workspace` defaults to `design`. A group is a logical set of frame names; deleting
+it never deletes its members or changes their `parent`. An element is protected when it appears in
+`lockedElements` or belongs to a locked group. Locks prevent ordinary editor geometry changes and
+canvas drag only. `expanded` is presentation state and never changes the lock. `concept` and
+`stockIdentity` identify an editor abstraction; they do not contain Blizzard XML or artwork.
+
+`designObjects` keeps user-facing names separate from internal/import identities. An absent or empty
+`states` array means **All States**; otherwise the object is visible only in the listed authored
+`designStates` when one is active. Authored states are independent from the read-only Native Hunts
+preview-state catalog, and neither executes Lua. Older v1 files without `editor`, or with only the
+earlier groups/locks fields, load with safe defaults, so these additive fields do not require a
+format-version bump.
 
 ## FrameXML is never a save target
 

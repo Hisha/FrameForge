@@ -9,6 +9,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 
@@ -42,6 +43,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
     ];
     private Project _project = ProjectFactory.Empty();
     private Project _presentationProject = ProjectFactory.Empty();
+    private bool _syncingDesignUi;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDesignWorkspace))]
+    [NotifyPropertyChangedFor(nameof(IsInspectWorkspace))]
+    private WorkspaceExperience _workspace = WorkspaceExperience.Design;
+
+    public bool IsDesignWorkspace => Workspace == WorkspaceExperience.Design;
+    public bool IsInspectWorkspace => Workspace == WorkspaceExperience.Inspect;
+    public IReadOnlyList<WorkspaceOption> WorkspaceOptions { get; private set; } = [];
+
+    [ObservableProperty] private string _designNameDraft = string.Empty;
+    [ObservableProperty] private string _newObjectName = string.Empty;
+    [ObservableProperty] private string _newImageAsset = string.Empty;
+    [ObservableProperty] private string _stateNameDraft = string.Empty;
+    [ObservableProperty] private DesignStateChoice? _activeDesignState;
+    [ObservableProperty] private DesignStateChoice? _selectedAuthoredState;
+    public ObservableCollection<DesignStateChoice> DesignStateOptions { get; } = [];
+    public ObservableCollection<DesignStateChoice> AuthoredStateOptions { get; } = [];
+    public string SelectedStateMembership => SelectedName is null ? "All States" :
+        Project.Editor.DesignObjectFor(SelectedName) is not { StateIds.Count: > 0 } item
+            ? "All States"
+            : string.Join(", ", item.StateIds.Select(id => Project.Editor.DesignStates.FirstOrDefault(s => s.Id == id)?.Name ?? id));
+    public bool HasConceptualStockFramework => Project.Editor.Groups.Any(group => group.Concept == "stock-framework");
+    public EditorGroup? ConceptualStockFramework => Project.Editor.Groups.FirstOrDefault(group => group.Concept == "stock-framework");
+    public bool IsStockFrameworkSelected => ConceptualStockFramework?.Members.Contains(SelectedName ?? string.Empty, StringComparer.Ordinal) == true;
+    public string StockFrameworkAction => ConceptualStockFramework?.Locked == true
+        ? "Unlock for Editing" : "Lock Blizzard Dungeon Finder Frame";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowTitle))]
@@ -85,6 +114,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Which categories of widget the canvas draws. Never changes the project.</summary>
     [ObservableProperty]
     private VisibilityFilter _canvasFilter = ViewPolicy.DefaultsFor(CanvasViewMode.DEBUG);
+
+    /// <summary>Presentation-only origin categories; never changes source visibility.</summary>
+    [ObservableProperty]
+    private OriginVisibility _originFilter = OriginVisibility.All;
 
     /// <summary>Which widgets get a name label on the canvas.</summary>
     [ObservableProperty]
@@ -130,6 +163,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The label for each visibility toggle, in toolbar order.</summary>
     public IReadOnlyList<VisibilityToggle> VisibilityToggles { get; }
 
+    public IReadOnlyList<OriginVisibilityToggle> OriginVisibilityToggles { get; }
+
     /// <summary>The label policies offered for the canvas.</summary>
     public IReadOnlyList<LabelPolicyOption> LabelPolicyOptions { get; }
 
@@ -154,6 +189,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PreviewStateRegistry.XmlDefaults,
         new Dictionary<string, PreviewFrameOverride>(StringComparer.Ordinal), []);
     private PreviewStateDefinition? _selectedPreviewState;
+    private ElementOriginClassifier _originClassifier = null!;
+    private VisualCompositionInspector _compositionInspector = null!;
+    private IReadOnlyDictionary<string, ElementOrigin> _elementOrigins = new Dictionary<string, ElementOrigin>();
     private string? _assetSourcePath;
     private WowClientValidation _wowClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
         "No WoW client is configured.");
@@ -168,6 +206,63 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public IStockTemplateResolver StockTemplates => _stockTemplates;
     public PreviewOverrideSet ActivePreviewOverrides => _activePreviewOverrides;
     public Project PresentationProject => _presentationProject;
+    public IReadOnlySet<string> HiddenByOrigin { get; private set; } = new HashSet<string>();
+    public IReadOnlySet<string> LockedNames { get; private set; } = new HashSet<string>();
+    public IReadOnlySet<string> PreferredSelectionNames { get; private set; } = new HashSet<string>();
+
+    public ObservableCollection<VisualComponentInfo> VisualComposition { get; } = [];
+    public bool HasVisualComposition => VisualComposition.Count > 0;
+    public string CompositionSizeSource { get; private set; } = string.Empty;
+    public string CompositionAppearanceSource { get; private set; } = string.Empty;
+    public string ResizeGuidance { get; private set; } = string.Empty;
+
+    public ObservableCollection<EditorGroup> Groups { get; } = [];
+    [ObservableProperty] private EditorGroup? _selectedGroup;
+    [ObservableProperty] private string _groupNameDraft = string.Empty;
+
+    public string SelectedOrigin
+    {
+        get
+        {
+            if (SelectedFrame is null)
+                return string.Empty;
+            var primary = _elementOrigins.GetValueOrDefault(SelectedFrame.Name, ElementOrigin.ProjectSource);
+            if (primary == ElementOrigin.RuntimeDesignTime && !SelectedFrame.Placeholder)
+                return "Project / imported source; Runtime / design-time override active";
+            return primary.Label();
+        }
+    }
+    public string SelectedElementKind => SelectedFrame?.Kind.TagName() ?? string.Empty;
+    public string SelectedSourceFile => SelectedFrame?.Placeholder == true
+        ? "Synthesized by FrameForge"
+        : Project.Source?.FileName ?? "FrameForge project";
+    public string SelectedSourcePath => SelectedFrame?.Placeholder == true
+        ? string.Empty
+        : _assetSourcePath ?? Project.Source?.ReferencePath ?? string.Empty;
+    public string SelectedSourceLocation => SelectedFrame?.SourceLocation?.ToString() ?? "Location unavailable";
+    public string SelectedInheritance => SelectedFrame?.Inherits ?? "(none)";
+    public string SelectedParentName => SelectedFrame?.Parent ?? "UIParent / screen";
+    public string SelectedGroupMembership => SelectedFrame is null
+        ? string.Empty
+        : string.Join(", ", Project.Editor.GroupsFor(SelectedFrame.Name).DefaultIfEmpty("(none)"));
+    public string SelectedPreviewProvenance => SelectedFrame is not null && _activePreviewOverrides.Find(SelectedFrame.Name) is not null
+        ? $"Effective values differ under {ActivePreviewOverrides.State.Label}; source data is unchanged."
+        : "No design-time override on this element.";
+    public bool IsSelectionLocked => Project.Editor.IsLocked(SelectedName);
+    public bool SelectedElementLocked
+    {
+        get => SelectedName is not null && Project.Editor.LockedElements.Contains(SelectedName, StringComparer.Ordinal);
+        set => SetElementLocked(SelectedName, value);
+    }
+    public bool SelectedGroupLocked
+    {
+        get => SelectedGroup?.Locked ?? false;
+        set
+        {
+            if (SelectedGroup is not null)
+                SetGroupLocked(SelectedGroup.Name, value);
+        }
+    }
 
     /// <summary>States applicable to this document; definitions are built-in and never serialized.</summary>
     public ObservableCollection<PreviewStateDefinition> PreviewStateOptions { get; } = [];
@@ -229,10 +324,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void SetCategoryVisible(VisibilityFilter flag, bool enabled) =>
         CanvasFilter = enabled ? CanvasFilter | flag : CanvasFilter & ~flag;
 
+    public void SetOriginVisible(OriginVisibility flag, bool enabled) =>
+        OriginFilter = enabled ? OriginFilter | flag : OriginFilter & ~flag;
+
     /// <summary>Returns the canvas to this mode's own defaults.</summary>
     public void ResetViewToModeDefaults()
     {
         CanvasFilter = ViewPolicy.DefaultsFor(ViewMode);
+        OriginFilter = OriginVisibility.All;
         LabelPolicy = ViewPolicy.DefaultLabelPolicyFor(ViewMode);
         Status = $"Canvas reset to {ViewMode.Label()} defaults.";
     }
@@ -273,6 +372,51 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"\"{frame.Name}\" is hidden by the current filter; it stays selected.";
     }
 
+    partial void OnOriginFilterChanged(OriginVisibility value)
+    {
+        foreach (var toggle in OriginVisibilityToggles)
+            toggle.Refresh();
+        RefreshOriginSets();
+        OnPropertyChanged(nameof(HiddenByOrigin));
+        Status = "Origin visibility changed. Project visibility and source XML are unchanged.";
+    }
+
+    partial void OnSelectedGroupChanged(EditorGroup? value)
+    {
+        GroupNameDraft = value?.Name ?? string.Empty;
+        OnPropertyChanged(nameof(SelectedGroupLocked));
+    }
+
+    partial void OnDesignNameDraftChanged(string value)
+    {
+        if (_syncingDesignUi || SelectedFrame is null || string.IsNullOrWhiteSpace(value))
+            return;
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == SelectedFrame.Name);
+        var item = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = SelectedFrame.Name };
+        item = item with { DisplayName = value.Trim() };
+        if (index >= 0) values[index] = item; else values.Add(item);
+        Project = Project with { Editor = Project.Editor with { DesignObjects = values } };
+        IsDirty = true;
+        RebuildTree(Project);
+        NotifySelectionInspection();
+    }
+
+    partial void OnActiveDesignStateChanged(DesignStateChoice? value)
+    {
+        if (_syncingDesignUi || value is null)
+            return;
+        Project = Project with { Editor = Project.Editor with { ActiveDesignStateId = value.Id } };
+        IsDirty = true;
+        RelaidOut(Project, SelectedName, $"Design state: {value.Name}. Lua was not executed.");
+    }
+
+    partial void OnSelectedAuthoredStateChanged(DesignStateChoice? value)
+    {
+        if (!_syncingDesignUi)
+            StateNameDraft = value?.Name ?? string.Empty;
+    }
+
     partial void OnLabelPolicyChanged(LabelPolicy value)
     {
         foreach (var option in LabelPolicyOptions)
@@ -305,14 +449,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _wowClient = _wowAssets.ValidateClient(configuration.WowClientPath);
         Assets.Configure(null, EffectiveAssetRoots());
         ModeOptions = [.. Enum.GetValues<CanvasViewMode>().Select(m => new CanvasModeOption(this, m))];
+        WorkspaceOptions = [.. Enum.GetValues<WorkspaceExperience>().Select(item => new WorkspaceOption(this, item))];
         LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
         TreeFilterOptions = [.. TreeFilters.All.Select(f => new TreeFilterOption(this, f))];
         VisibilityToggles = [.. VisibilityFilters.Toggles.Select(t => new VisibilityToggle(this, t.Label, t.Flag, t.ToolTip))];
+        OriginVisibilityToggles =
+        [
+            new(this, "Project", OriginVisibility.Project, "Imported/project-authored content"),
+            new(this, "Blizzard", OriginVisibility.BlizzardStock, "Stock artwork and resolved templates"),
+            new(this, "Runtime", OriginVisibility.RuntimeDesignTime, "Design-time runtime overrides"),
+            new(this, "Stand-ins", OriginVisibility.StandIn, "Synthesized unresolved external frames"),
+        ];
+        _originClassifier = new ElementOriginClassifier(Assets, _stockTemplates, _wowAssets.CacheRoot);
+        _compositionInspector = new VisualCompositionInspector(Assets, _stockTemplates, _originClassifier, _wowAssets.CacheRoot);
         RefreshPreviewStateOptions(_project);
+        RefreshDesignStates(_project);
 
         Editor = new FrameEditorViewModel((n, u, r) => ReplaceFrame(n, u, r), BuildFrameOptions, AnchorOptions,
             DescribeAsset);
-        RelaidOut(_project, null, "New project. Load the Native Hunts example from the toolbar.");
+        RelaidOut(_project, null, "New project. Open a FrameXML or FrameForge project to begin.");
     }
 
     /// <summary>The inspector bound panel for the selected frame.</summary>
@@ -403,7 +558,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public FrameDef? SelectedFrame => Project.Find(SelectedName);
 
     /// <summary>True when the inspector can be edited.</summary>
-    public bool CanEditSelection => SelectedFrame is not null;
+    public bool CanEditSelection => SelectedFrame is not null && !IsSelectionLocked;
 
     /// <summary>Replaces the whole project. Used by New / Open / Load Example.</summary>
     /// <remarks>
@@ -427,6 +582,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _assetSourcePath = ResolveSourcePath(project, path);
         Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
         RefreshPreviewStateOptions(project);
+        RefreshGroups(project);
+        Workspace = project.Editor.Workspace == "inspect" ? WorkspaceExperience.Inspect : WorkspaceExperience.Design;
+        foreach (var option in WorkspaceOptions) option.Refresh();
+        RefreshDesignStates(project);
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
@@ -435,7 +594,78 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>Creates a fresh project.</summary>
-    public void NewProject() => Load(ProjectFactory.Empty(), null, "New project created.");
+    public void NewProject() => Load(ProjectFactory.Blank(), null, "Blank FrameForge project created. Add a Frame, Text, or Image to begin.");
+
+    public bool NewDungeonFinderProject()
+    {
+        if (!_wowClient.IsValid)
+        {
+            Status = "Dungeon Finder requires a configured local WoW 3.3.5a build 12340 client. Open WoW Client settings and validate it first.";
+            return false;
+        }
+        try
+        {
+            var definitions = _stockTemplates.MaterializeRequired(_wowClient);
+            var xmlResult = definitions.FirstOrDefault(item => item.RequestedPath.Equals(@"Interface\FrameXML\LFDFrame.xml", StringComparison.OrdinalIgnoreCase));
+            var xmlPath = xmlResult?.CachePath ?? Path.Combine(_wowAssets.CacheRoot, "Interface", "FrameXML", "LFDFrame.xml");
+            if (!File.Exists(xmlPath))
+            {
+                Status = "The validated client did not provide Interface/FrameXML/LFDFrame.xml; no substitute artwork was used.";
+                return false;
+            }
+            var imported = FrameXmlImporter.ImportFile(xmlPath);
+            if (!imported.Ok || imported.Project is null)
+            {
+                Status = $"Could not create the Dungeon Finder framework: {string.Join(" ", imported.Errors.Select(error => error.Message))}";
+                return false;
+            }
+            var importedRoot = imported.Project.Find(StockTemplateResolver.LfdParentFrame);
+            if (importedRoot is null)
+            {
+                Status = "The client LFDFrame.xml did not define LFDParentFrame.";
+                return false;
+            }
+            var subtree = FrameHierarchy.Subtree(imported.Project, importedRoot.Name).ToHashSet(StringComparer.Ordinal);
+            var frames = imported.Project.Frames.Where(frame => subtree.Contains(frame.Name))
+                .Select(frame => frame.Name == importedRoot.Name ? frame with { Visible = true } : frame)
+                .ToArray();
+            var representative = frames.FirstOrDefault(frame => frame.Name == StockTemplateResolver.LfdParentFrame)
+                                 ?? frames.FirstOrDefault();
+            if (representative is null)
+            {
+                Status = "The client LFDFrame.xml contained no supported layout elements.";
+                return false;
+            }
+            var editor = new EditorMetadata
+            {
+                Groups =
+                [
+                    new EditorGroup
+                    {
+                        Name = "Blizzard Dungeon Finder Frame",
+                        Members = [.. frames.Select(frame => frame.Name)],
+                        Locked = true,
+                        Expanded = false,
+                        Concept = "stock-framework",
+                        StockIdentity = "wow-3.3.5a-12340:Interface/FrameXML/LFDFrame.xml:LFDParentFrame",
+                    },
+                ],
+                DesignObjects = [new DesignObjectMetadata { FrameName = representative.Name, DisplayName = "Blizzard Dungeon Finder Frame" }],
+            };
+            var project = imported.Project with { Name = "Dungeon Finder UI", Frames = frames, Source = null, Editor = editor };
+            Load(project, null, "Created a protected Dungeon Finder framework from the validated local WoW client.");
+            foreach (var reference in EnumerateAssetReferences().Distinct(StringComparer.OrdinalIgnoreCase))
+                _wowAssets.Materialize(reference, _wowClient);
+            Assets.Refresh();
+            RelaidOut(Project, representative.Name, Status);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Status = $"Could not create the Dungeon Finder framework safely: {ex.Message}";
+            return false;
+        }
+    }
 
     /// <summary>Loads the built-in Native Hunts example.</summary>
     public void LoadNativeHuntsExample() =>
@@ -611,6 +841,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var frame = Project.Find(name);
         if (frame is null)
             return;
+        if (Project.Editor.IsLocked(name))
+        {
+            Status = $"{name} is locked. Unlock the element or its group before moving it.";
+            return;
+        }
 
         var updated = frame with { OffsetX = frame.OffsetX + modelDx, OffsetY = frame.OffsetY + modelDy };
         ReplaceFrame(name, updated);
@@ -645,6 +880,171 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RelaidOut(Project, name, $"Added frame \"{name}\".");
     }
 
+    public void AddDesignFrame() => AddDesignObject(FrameKind.FRAME, "Frame / Container");
+    public void AddDesignText() => AddDesignObject(FrameKind.FONTSTRING, "Text");
+    public void AddDesignImage() => AddDesignObject(FrameKind.TEXTURE, "Image");
+
+    private void AddDesignObject(FrameKind kind, string fallbackName)
+    {
+        var displayName = string.IsNullOrWhiteSpace(NewObjectName) ? fallbackName : NewObjectName.Trim();
+        if (kind == FrameKind.TEXTURE && !string.IsNullOrWhiteSpace(NewImageAsset)
+            && !TextureAssetResolver.TryNormalize(NewImageAsset, out _, out var assetError))
+        {
+            Status = $"Image was not added: {assetError}";
+            return;
+        }
+        var internalName = UniqueName("DesignObject");
+        // Basic DESIGN creation starts at the conceptual project level. Parent changes remain
+        // available in the property editor when deliberate nesting is wanted.
+        string? parent = null;
+        FrameVisual? visual = kind switch
+        {
+            FrameKind.FONTSTRING => new FrameVisual { Text = new TextVisual("Text", "CENTER", "MIDDLE", null) },
+            FrameKind.TEXTURE => new FrameVisual { Texture = new TextureVisual(
+                string.IsNullOrWhiteSpace(NewImageAsset) ? null : NewImageAsset.Trim(), TexCoords.Full, null, null, null, null) },
+            _ => null,
+        };
+        var frame = new FrameDef
+        {
+            Name = internalName,
+            Parent = parent,
+            Kind = kind,
+            Width = kind == FrameKind.TEXTURE ? 64 : 120,
+            Height = kind == FrameKind.FONTSTRING ? 24 : 64,
+            Point = AnchorPoint.CENTER,
+            RelativePoint = AnchorPoint.CENTER,
+            Visual = visual,
+        };
+        var designObject = new DesignObjectMetadata { FrameName = internalName, DisplayName = displayName };
+        Project = Project with
+        {
+            Frames = [.. Project.Frames, frame],
+            Editor = Project.Editor with { DesignObjects = [.. Project.Editor.DesignObjects, designObject] },
+        };
+        NewObjectName = string.Empty;
+        NewImageAsset = string.Empty;
+        IsDirty = true;
+        SelectedName = internalName;
+        RelaidOut(Project, internalName, $"Added {kind.TagName()} \"{displayName}\" in All States.");
+    }
+
+    public void SetWorkspace(WorkspaceExperience workspace)
+    {
+        if (Workspace == workspace)
+            return;
+        Workspace = workspace;
+        Project = Project with { Editor = Project.Editor with { Workspace = workspace == WorkspaceExperience.Design ? "design" : "inspect" } };
+        IsDirty = true;
+        foreach (var option in WorkspaceOptions) option.Refresh();
+        RebuildTree(Project);
+        SelectedTreeNode = FindNode(SelectedName);
+        NotifySelectionInspection();
+        Status = workspace == WorkspaceExperience.Design
+            ? "DESIGN: concise objects and authoring controls."
+            : "INSPECT: source hierarchy, provenance, composition, and diagnostics.";
+    }
+
+    public void SetConceptualStockExpanded(bool expanded)
+    {
+        var group = ConceptualStockFramework;
+        if (group is null) return;
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Select(item => item.Name == group.Name ? item with { Expanded = expanded } : item)],
+        }, expanded
+            ? "Expanded the Blizzard framework for inspection; it remains locked."
+            : "Collapsed the Blizzard framework; its lock state is unchanged.");
+    }
+
+    public void SetConceptualStockLocked(bool locked)
+    {
+        var group = ConceptualStockFramework;
+        if (group is null) return;
+        SetGroupLocked(group.Name, locked);
+    }
+
+    public void CreateDesignState()
+    {
+        var name = StateNameDraft.Trim();
+        if (name.Length == 0 || Project.Editor.DesignStates.Any(state => state.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            Status = "Enter a unique design-state name.";
+            return;
+        }
+        var baseId = string.Concat(name.ToLowerInvariant().Select(character => char.IsLetterOrDigit(character) ? character : '-')).Trim('-');
+        if (baseId.Length == 0) baseId = "state";
+        var id = baseId;
+        var suffix = 2;
+        while (Project.Editor.DesignStates.Any(state => state.Id == id)) id = $"{baseId}-{suffix++}";
+        UpdateEditor(Project.Editor with { DesignStates = [.. Project.Editor.DesignStates, new DesignState { Id = id, Name = name }] },
+            $"Created design state \"{name}\".");
+        StateNameDraft = name;
+        SelectedAuthoredState = AuthoredStateOptions.FirstOrDefault(item => item.Id == id);
+    }
+
+    public void RenameSelectedDesignState()
+    {
+        if (SelectedAuthoredState?.Id is not { } id || string.IsNullOrWhiteSpace(StateNameDraft)) return;
+        var name = StateNameDraft.Trim();
+        if (Project.Editor.DesignStates.Any(state => state.Id != id && state.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            Status = "Enter a unique design-state name.";
+            return;
+        }
+        UpdateEditor(Project.Editor with
+        {
+            DesignStates = [.. Project.Editor.DesignStates.Select(state => state.Id == id ? state with { Name = name } : state)],
+        }, $"Renamed design state to \"{name}\".");
+        SelectedAuthoredState = AuthoredStateOptions.FirstOrDefault(item => item.Id == id);
+    }
+
+    public void DeleteSelectedDesignState()
+    {
+        if (SelectedAuthoredState?.Id is not { } id) return;
+        var name = SelectedAuthoredState.Name;
+        var objects = Project.Editor.DesignObjects.Select(item => item with
+        {
+            StateIds = [.. item.StateIds.Where(stateId => stateId != id)],
+        }).ToArray();
+        UpdateEditor(Project.Editor with
+        {
+            DesignStates = [.. Project.Editor.DesignStates.Where(state => state.Id != id)],
+            DesignObjects = objects,
+            ActiveDesignStateId = Project.Editor.ActiveDesignStateId == id ? null : Project.Editor.ActiveDesignStateId,
+        }, $"Deleted design state \"{name}\"; affected objects now use their remaining memberships or All States.");
+    }
+
+    public void AssignSelectionToAllStates() => SetSelectionStateIds([]);
+
+    public void AssignSelectionToSelectedState()
+    {
+        if (SelectedAuthoredState?.Id is { } id)
+        {
+            var current = Project.Editor.DesignObjectFor(SelectedName)?.StateIds ?? [];
+            SetSelectionStateIds(current.Contains(id, StringComparer.Ordinal) ? current : [.. current, id]);
+        }
+    }
+
+    public void RemoveSelectionFromSelectedState()
+    {
+        if (SelectedAuthoredState?.Id is not { } id) return;
+        var current = Project.Editor.DesignObjectFor(SelectedName)?.StateIds ?? [];
+        SetSelectionStateIds([.. current.Where(item => item != id)]);
+    }
+
+    private void SetSelectionStateIds(IReadOnlyList<string> stateIds)
+    {
+        if (SelectedName is null) return;
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == SelectedName);
+        var existing = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = SelectedName };
+        var updated = existing with { StateIds = [.. stateIds] };
+        if (index >= 0) values[index] = updated; else values.Add(updated);
+        UpdateEditor(Project.Editor with { DesignObjects = values }, stateIds.Count == 0
+            ? $"Assigned {Project.Editor.DisplayNameFor(SelectedFrame!)} to All States."
+            : $"Assigned {Project.Editor.DisplayNameFor(SelectedFrame!)} to {SelectedAuthoredState?.Name}.");
+    }
+
     /// <summary>
     /// Removes the selected frame.
     /// </summary>
@@ -657,6 +1057,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (SelectedName is not { } name || Project.Find(name) is not { } removed)
             return;
+        if (Project.Editor.IsLocked(name))
+        {
+            Status = $"{name} is locked. Unlock it before deleting it.";
+            return;
+        }
 
         var descendants = FrameHierarchy.Subtree(Project, name).Skip(1).ToHashSet(StringComparer.Ordinal);
         var frames = Project.Frames
@@ -669,7 +1074,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
             .ToArray();
 
         var parent = removed.Parent ?? "the root";
-        Project = Project with { Frames = frames };
+        Project = Project with
+        {
+            Frames = frames,
+            Editor = Project.Editor with
+            {
+                LockedElements = [.. Project.Editor.LockedElements.Where(item => item != name)],
+                Groups = [.. Project.Editor.Groups.Select(group => group with
+                {
+                    Members = [.. group.Members.Where(item => item != name)],
+                })],
+                DesignObjects = [.. Project.Editor.DesignObjects.Where(item => item.FrameName != name)],
+            },
+        };
+        RefreshGroups(Project);
         IsDirty = true;
         SelectedName = parent;
         RelaidOut(Project, SelectedName, descendants.Count == 0
@@ -679,6 +1097,99 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>Canvas hit-test entry point; also used to keep the tree in sync.</summary>
     public void OnCanvasSelectionRequested(string? name) => Select(name);
+
+    public void CreateGroup()
+    {
+        var name = string.IsNullOrWhiteSpace(GroupNameDraft) ? UniqueGroupName("Group") : GroupNameDraft.Trim();
+        if (Project.Editor.Groups.Any(group => group.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            Status = $"A group named \"{name}\" already exists.";
+            return;
+        }
+        var group = new EditorGroup { Name = name };
+        UpdateEditor(Project.Editor with { Groups = [.. Project.Editor.Groups, group] }, $"Created editor group \"{name}\".");
+        SelectedGroup = Groups.FirstOrDefault(item => item.Name == name);
+    }
+
+    public void RenameSelectedGroup()
+    {
+        if (SelectedGroup is null || string.IsNullOrWhiteSpace(GroupNameDraft))
+            return;
+        var oldName = SelectedGroup.Name;
+        var newName = GroupNameDraft.Trim();
+        if (Project.Editor.Groups.Any(group => group.Name != oldName && group.Name.Equals(newName, StringComparison.OrdinalIgnoreCase)))
+        {
+            Status = $"A group named \"{newName}\" already exists.";
+            return;
+        }
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Select(group => group.Name == oldName ? group with { Name = newName } : group)],
+        }, $"Renamed editor group \"{oldName}\" to \"{newName}\".");
+        SelectedGroup = Groups.FirstOrDefault(item => item.Name == newName);
+    }
+
+    public void DeleteSelectedGroup()
+    {
+        if (SelectedGroup is null)
+            return;
+        var name = SelectedGroup.Name;
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Where(group => group.Name != name)],
+        }, $"Deleted editor group \"{name}\"; its elements were not deleted.");
+        SelectedGroup = Groups.FirstOrDefault();
+    }
+
+    public void AddSelectionToGroup()
+    {
+        if (SelectedName is null || SelectedGroup is null)
+            return;
+        var groupName = SelectedGroup.Name;
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Select(group => group.Name == groupName
+                ? group with { Members = group.Members.Contains(SelectedName, StringComparer.Ordinal)
+                    ? group.Members : [.. group.Members, SelectedName] }
+                : group)],
+        }, $"Added {SelectedName} to \"{groupName}\".");
+        SelectedGroup = Groups.FirstOrDefault(item => item.Name == groupName);
+    }
+
+    public void RemoveSelectionFromGroup()
+    {
+        if (SelectedName is null || SelectedGroup is null)
+            return;
+        var groupName = SelectedGroup.Name;
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Select(group => group.Name == groupName
+                ? group with { Members = [.. group.Members.Where(item => item != SelectedName)] }
+                : group)],
+        }, $"Removed {SelectedName} from \"{groupName}\".");
+        SelectedGroup = Groups.FirstOrDefault(item => item.Name == groupName);
+    }
+
+    public void SetGroupLocked(string groupName, bool locked)
+    {
+        UpdateEditor(Project.Editor with
+        {
+            Groups = [.. Project.Editor.Groups.Select(group => group.Name == groupName ? group with { Locked = locked } : group)],
+        }, $"{(locked ? "Locked" : "Unlocked")} group \"{groupName}\".");
+        SelectedGroup = Groups.FirstOrDefault(item => item.Name == groupName);
+    }
+
+    public void SetElementLocked(string? name, bool locked)
+    {
+        if (name is null)
+            return;
+        var values = Project.Editor.LockedElements.ToList();
+        if (locked && !values.Contains(name, StringComparer.Ordinal))
+            values.Add(name);
+        if (!locked)
+            values.RemoveAll(item => item == name);
+        UpdateEditor(Project.Editor with { LockedElements = values }, $"{(locked ? "Locked" : "Unlocked")} {name}.");
+    }
 
     /// <summary>Fits the layout to the canvas viewport.</summary>
     public void RequestFit() => Status = "Fitted the layout to the canvas.";
@@ -909,6 +1420,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void ReplaceFrame(string name, FrameDef updated, string? rename = null)
     {
+        if (Project.Editor.IsLocked(name))
+        {
+            Status = $"{name} is locked. Unlock the element or its group before editing geometry.";
+            RelaidOut(Project, name, null);
+            return;
+        }
         var targetName = rename ?? updated.Name;
 
         var frames = Project.Frames.Select(f => f.Name == name
@@ -921,7 +1438,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (frames.Select(f => f with { }).SequenceEqual(Project.Frames.Select(f => f with { })))
             return;
 
-        Project = Project with { Frames = frames };
+        var editor = Project.Editor;
+        if (targetName != name)
+        {
+            editor = editor with
+            {
+                LockedElements = [.. editor.LockedElements.Select(item => item == name ? targetName : item)],
+                Groups = [.. editor.Groups.Select(group => group with
+                {
+                    Members = [.. group.Members.Select(item => item == name ? targetName : item)],
+                })],
+                DesignObjects = [.. editor.DesignObjects.Select(item => item.FrameName == name
+                    ? item with { FrameName = targetName }
+                    : item)],
+            };
+        }
+        Project = Project with { Frames = frames, Editor = editor };
+        RefreshGroups(Project);
         IsDirty = true;
         RelaidOut(Project, name, null);
     }
@@ -930,19 +1463,44 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         _activePreviewOverrides = _previewStates.Resolve(project, SelectedPreviewState?.Id);
         var previewProject = _previewStates.Apply(project, _activePreviewOverrides);
+        if (project.Editor.ActiveDesignStateId is { } activeState)
+        {
+            previewProject = previewProject with
+            {
+                Frames = [.. previewProject.Frames.Select(frame =>
+                {
+                    var membership = project.Editor.DesignObjectFor(frame.Name)?.StateIds ?? [];
+                    return membership.Count == 0 || membership.Contains(activeState, StringComparer.Ordinal)
+                        ? frame
+                        : frame with { Visible = false };
+                })],
+            };
+        }
         _presentationProject = _stockTemplates.ApplyEffectiveGeometry(previewProject);
         OnPropertyChanged(nameof(PresentationProject));
         OnPropertyChanged(nameof(ActivePreviewOverrides));
         Layout = LayoutResolver.Resolve(_presentationProject);
+        var conceptualStock = project.Editor.Groups.Where(group => group.Concept == "stock-framework")
+            .SelectMany(group => group.Members).ToHashSet(StringComparer.Ordinal);
+        _elementOrigins = project.Frames.ToDictionary(frame => frame.Name,
+            frame => conceptualStock.Contains(frame.Name)
+                ? ElementOrigin.BlizzardStock
+                : _originClassifier.Classify(frame, _activePreviewOverrides), StringComparer.Ordinal);
+        RefreshOriginSets();
         RebuildTree(project);
         SelectedTreeNode = FindNode(selection);
         Editor.Refresh(project, selection);
         Editor.RefreshResolved(selection is null ? null : Layout.Frames.GetValueOrDefault(selection));
+        RefreshComposition(selection);
+        _syncingDesignUi = true;
+        DesignNameDraft = selection is null ? string.Empty : project.Editor.DisplayNameFor(project.Find(selection)!);
+        _syncingDesignUi = false;
         CanvasSelectionNames.Clear();
         foreach (var name in Layout.PaintOrder)
             CanvasSelectionNames.Add(name);
 
         OnPropertyChanged(nameof(ProjectDescription));
+        NotifySelectionInspection();
         SelectionSummary = Editor.ResolvedSummary;
 
         if (status is not null)
@@ -953,6 +1511,106 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{selection}: {Editor.ResolvedSummary}";
         else
             Status = project.IssueSummary();
+    }
+
+    private void RefreshComposition(string? selection)
+    {
+        var inspection = _compositionInspector.Inspect(Project, PresentationProject, Layout, selection, ActivePreviewOverrides);
+        VisualComposition.Clear();
+        foreach (var component in inspection.Components)
+            VisualComposition.Add(component);
+        CompositionSizeSource = inspection.SizeSource;
+        CompositionAppearanceSource = inspection.AppearanceSource;
+        ResizeGuidance = inspection.ResizeGuidance;
+        OnPropertyChanged(nameof(HasVisualComposition));
+        OnPropertyChanged(nameof(CompositionSizeSource));
+        OnPropertyChanged(nameof(CompositionAppearanceSource));
+        OnPropertyChanged(nameof(ResizeGuidance));
+    }
+
+    private void RefreshOriginSets()
+    {
+        HiddenByOrigin = _elementOrigins.Where(pair => !ElementOriginClassifier.IsVisible(pair.Value, OriginFilter))
+            .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
+        LockedNames = Project.Frames.Where(frame => Project.Editor.IsLocked(frame.Name))
+            .Select(frame => frame.Name).ToHashSet(StringComparer.Ordinal);
+        PreferredSelectionNames = Project.Frames.Where(frame => !Project.Editor.IsLocked(frame.Name)
+                && _elementOrigins.GetValueOrDefault(frame.Name, ElementOrigin.ProjectSource)
+                    is ElementOrigin.ProjectSource or ElementOrigin.RuntimeDesignTime)
+            .Select(frame => frame.Name).ToHashSet(StringComparer.Ordinal);
+        OnPropertyChanged(nameof(HiddenByOrigin));
+        OnPropertyChanged(nameof(LockedNames));
+        OnPropertyChanged(nameof(PreferredSelectionNames));
+    }
+
+    private void RefreshGroups(Project project)
+    {
+        var selectedName = SelectedGroup?.Name;
+        Groups.Clear();
+        foreach (var group in project.Editor.Groups)
+            Groups.Add(group);
+        SelectedGroup = Groups.FirstOrDefault(group => group.Name == selectedName) ?? Groups.FirstOrDefault();
+    }
+
+    private void RefreshDesignStates(Project project)
+    {
+        _syncingDesignUi = true;
+        DesignStateOptions.Clear();
+        DesignStateOptions.Add(DesignStateChoice.All);
+        AuthoredStateOptions.Clear();
+        foreach (var state in project.Editor.DesignStates)
+        {
+            var choice = DesignStateChoice.From(state);
+            DesignStateOptions.Add(choice);
+            AuthoredStateOptions.Add(choice);
+        }
+        ActiveDesignState = DesignStateOptions.FirstOrDefault(item => item.Id == project.Editor.ActiveDesignStateId)
+                            ?? DesignStateChoice.All;
+        SelectedAuthoredState = SelectedAuthoredState?.Id is { } selectedId
+            ? AuthoredStateOptions.FirstOrDefault(item => item.Id == selectedId)
+            : AuthoredStateOptions.FirstOrDefault();
+        _syncingDesignUi = false;
+        OnPropertyChanged(nameof(SelectedStateMembership));
+    }
+
+    private void UpdateEditor(EditorMetadata editor, string status)
+    {
+        Project = Project with { Editor = editor };
+        IsDirty = true;
+        RefreshGroups(Project);
+        RefreshDesignStates(Project);
+        RelaidOut(Project, SelectedName, status);
+    }
+
+    private string UniqueGroupName(string prefix)
+    {
+        var candidate = prefix;
+        var index = 1;
+        while (Project.Editor.Groups.Any(group => group.Name.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            candidate = $"{prefix} {++index}";
+        return candidate;
+    }
+
+    private void NotifySelectionInspection()
+    {
+        OnPropertyChanged(nameof(CanEditSelection));
+        OnPropertyChanged(nameof(SelectedOrigin));
+        OnPropertyChanged(nameof(SelectedElementKind));
+        OnPropertyChanged(nameof(SelectedSourceFile));
+        OnPropertyChanged(nameof(SelectedSourcePath));
+        OnPropertyChanged(nameof(SelectedSourceLocation));
+        OnPropertyChanged(nameof(SelectedInheritance));
+        OnPropertyChanged(nameof(SelectedParentName));
+        OnPropertyChanged(nameof(SelectedGroupMembership));
+        OnPropertyChanged(nameof(SelectedPreviewProvenance));
+        OnPropertyChanged(nameof(IsSelectionLocked));
+        OnPropertyChanged(nameof(SelectedElementLocked));
+        OnPropertyChanged(nameof(SelectedGroupLocked));
+        OnPropertyChanged(nameof(SelectedStateMembership));
+        OnPropertyChanged(nameof(HasConceptualStockFramework));
+        OnPropertyChanged(nameof(ConceptualStockFramework));
+        OnPropertyChanged(nameof(IsStockFrameworkSelected));
+        OnPropertyChanged(nameof(StockFrameworkAction));
     }
 
     private void RefreshPreviewStateOptions(Project project)
@@ -979,7 +1637,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var visible = _treeProjection.Visible;
 
         TreeRoots.Clear();
-        foreach (var root in FrameHierarchy.Children(project, null))
+        var stock = Workspace == WorkspaceExperience.Design ? ConceptualStockFramework : null;
+        var stockMembers = stock?.Members.ToHashSet(StringComparer.Ordinal) ?? [];
+        if (stock is not null)
+        {
+            var representative = project.Find(StockTemplateResolver.LfdParentFrame)
+                                 ?? stock.Members.Select(project.Find).FirstOrDefault(frame => frame is not null);
+            if (representative is not null)
+            {
+                var children = stock.Expanded
+                    ? BuildChildren(project, representative.Name, visible, stockMembers)
+                    : [];
+                TreeRoots.Add(new FrameTreeNode(representative, children, "Blizzard stock / conceptual framework",
+                    stock.Locked, stock.Name, stock.Name, true, stock.Expanded));
+            }
+        }
+
+        var roots = Workspace == WorkspaceExperience.Design && stock is not null
+            ? project.Frames.Where(frame => !stockMembers.Contains(frame.Name)
+                && (frame.Parent is null || stockMembers.Contains(frame.Parent)))
+            : FrameHierarchy.Children(project, null);
+        foreach (var root in roots)
         {
             if (BuildNode(project, root, visible) is { } node)
                 TreeRoots.Add(node);
@@ -999,7 +1677,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// for the latter is what makes STRUCTURE and VISUAL actually narrow the tree instead of
     /// re-including everything as context.
     /// </remarks>
-    private static FrameTreeNode? BuildNode(Project project, FrameDef frame, IReadOnlySet<string> visible)
+    private FrameTreeNode? BuildNode(Project project, FrameDef frame, IReadOnlySet<string> visible)
     {
         if (!visible.Contains(frame.Name))
             return null;
@@ -1011,7 +1689,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 children.Add(node);
         }
 
-        return new FrameTreeNode(frame, children);
+        var origin = _elementOrigins.GetValueOrDefault(frame.Name, ElementOrigin.ProjectSource);
+        return new FrameTreeNode(frame, children, origin.Label(), project.Editor.IsLocked(frame.Name),
+            string.Join(", ", project.Editor.GroupsFor(frame.Name)),
+            Workspace == WorkspaceExperience.Design ? project.Editor.DisplayNameFor(frame) : frame.Name);
+    }
+
+    private IReadOnlyList<FrameTreeNode> BuildChildren(Project project, string parent,
+        IReadOnlySet<string> visible, IReadOnlySet<string> allowed)
+    {
+        var children = new List<FrameTreeNode>();
+        foreach (var child in FrameHierarchy.Children(project, parent).Where(frame => allowed.Contains(frame.Name)))
+            if (BuildNode(project, child, visible) is { } node)
+                children.Add(node);
+        return children;
     }
 
     private IReadOnlyList<FrameOption> BuildFrameOptions()

@@ -35,4 +35,7 @@ public static class ProjectFactory
             RelativePoint = AnchorPoint.TOPLEFT,
         },
     ]);
+
+    /// <summary>A genuinely blank design workspace; objects are added explicitly by the designer.</summary>
+    public static Project Blank(string name = "Untitled") => Create(name, []);
 }

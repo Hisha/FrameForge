@@ -75,7 +75,7 @@ public static class FrameXmlImporter
             };
 
             using var reader = XmlReader.Create(new StringReader(xml), readerSettings);
-            document = XDocument.Load(reader);
+            document = XDocument.Load(reader, LoadOptions.SetLineInfo);
         }
         catch (XmlException ex)
         {
@@ -483,6 +483,7 @@ public static class FrameXmlImporter
                 SourceName = sourceName,
                 Anonymous = anonymous,
                 Inherits = inherits,
+                SourceLocation = LocationOf(element),
                 Visual = visual,
             };
 
@@ -794,7 +795,12 @@ public static class FrameXmlImporter
             if (size is null)
                 return (0, 0, false);
 
-            return (ReadNumber(size, "x", name, "Size"), ReadNumber(size, "y", name, "Size"), true);
+            // FrameXML uses both compact <Size x="…" y="…"/> and the older
+            // <Size><AbsDimension x="…" y="…"/></Size> form. Blizzard's build-12340
+            // LFDFrame.xml primarily uses the latter, while Native Hunts primarily uses the
+            // former; treating either form as zero would retain identities but erase the art.
+            var dimensions = Child(size, "AbsDimension") ?? size;
+            return (ReadNumber(dimensions, "x", name, "Size"), ReadNumber(dimensions, "y", name, "Size"), true);
         }
 
         /// <summary>
@@ -948,6 +954,14 @@ public static class FrameXmlImporter
             var attribute = element.Attribute(name) ?? element.Attributes().FirstOrDefault(a => a.Name.LocalName == name);
             var value = attribute?.Value;
             return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
+        private static SourceLocation? LocationOf(XElement element)
+        {
+            var info = (IXmlLineInfo)element;
+            return info.HasLineInfo() && info.LineNumber > 0
+                ? new SourceLocation(info.LineNumber, info.LinePosition)
+                : null;
         }
 
         /// <summary>
