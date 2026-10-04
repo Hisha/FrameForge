@@ -4,7 +4,8 @@ FrameForge is a WoW UI frame layout editor. This repository contains a clean .NE
 
 ## Current Version
 
-v0.1.0 — geometry/editor foundation, read-only FrameXML import, and the Phase 3 visual-designer foundation.
+v0.1.0 — geometry/editor foundation, read-only FrameXML import, real local-client assets, and the
+focused Phase 5B stock template/font presentation layer.
 
 ## Architecture
 
@@ -33,6 +34,8 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Retained texture/text/button/status-bar metadata with honest Preview stand-ins
 - Real TGA and verified WoW 3.3.5a BLP texture rendering from project assets, manual roots, or an
   application-managed cache populated on demand from the user's own client
+- Focused build-12340 stock-definition resolution for Native Hunts' external parent, character-tab
+  template, and six `GameFont*` styles, with machine-local Friz Quadrata loading and provenance
 - Strict lossless `.fforge.json` project serialization (v1)
 - Native Hunts example included
 - **Read-only FrameXML import** (see below)
@@ -59,7 +62,7 @@ where a widget ends up:
 | omitted `relativePoint` | treated as the same value as `point` |
 | `$parentName` | expanded against the enclosing frame |
 | `setAllPoints` | fills its anchor target, ignoring size and offsets |
-| `inherits` | recorded; templates are **not** resolved, and that is reported |
+| `inherits` | always recorded; the focused Native Hunts build-12340 stock subset is resolved at presentation time, while other templates are reported unresolved |
 | `hidden` | recorded and inherited by children |
 | unnamed elements | given a canonical identity (`Texture#1`, `FontString#12`, …) |
 | `Layers`/`Layer`, `Frames`, `Size`, `AbsDimension` | parsed |
@@ -68,9 +71,10 @@ where a widget ends up:
 
 ### Support levels and diagnostics
 
-Full / Partial / Unsupported describes **geometry fidelity only**. A `FontString` that inherits
-`GameFontHighlightSmall` is fully supported: FrameForge reproduces where it sits and how big it
-is, and separately reports that it does not measure fonts. Scripts are never executed.
+Full / Partial / Unsupported on import describes **declared project geometry fidelity only**.
+Machine-local stock resolution is a separate presentation layer: when the user's client definitions
+are cached, Native Hunts' six required `GameFont*` styles provide authoritative size, color,
+justification, shadow, and local font metrics. Scripts are never executed.
 
 Nothing layout-affecting is dropped silently. Every finding carries a stable code and a
 severity, and the import banner lists them:
@@ -105,16 +109,19 @@ The normal stock-art workflow is deliberately short:
 2. Select your WoW 3.3.5a build 12340 client once in **WoW Client**.
 3. Open FrameXML.
 4. Choose **Resolve Missing Assets**.
-5. FrameForge stores only the required preview assets in its machine-local cache.
+5. FrameForge stores only the required preview assets, focused XML/Lua definitions, and font in its
+   machine-local cache.
 
 FrameForge ships **no Blizzard artwork** and never writes to the WoW installation or its MPQs.
 The selected client path and extracted preview copies stay on the local machine and are never put
 in `.fforge.json`. Opening and editing still works with no client configured: custom artwork and
-existing cache entries render, while uncached stock artwork keeps an honest stand-in. Manual asset
-roots remain available as an advanced/fallback feature.
+existing cache entries render, while uncached stock artwork/templates/fonts keep honest stand-ins
+and diagnostics. Manual asset roots remain available as an advanced/fallback feature.
 
 See [docs/WOW_CLIENT_ASSETS.md](docs/WOW_CLIENT_ASSETS.md) for validation, storage locations,
-archive precedence, security behavior, dependency rationale, and manual extraction troubleshooting.
+archive precedence, security behavior, dependency rationale, template/font scope, and manual
+extraction troubleshooting. The exact Native Hunts dependency evidence is in
+[docs/NATIVE_HUNTS_TEMPLATE_INVENTORY.md](docs/NATIVE_HUNTS_TEMPLATE_INVENTORY.md).
 
 ```bash
 dotnet restore FrameForge.slnx

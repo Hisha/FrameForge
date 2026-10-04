@@ -100,10 +100,12 @@ In each file the first mip begins after the 148-byte BLP2 header and its 1024-by
 Because encoding 2 stores S3TC blocks, that palette field is not used for decoding. FrameForge
 decodes only the highest-resolution/base mip needed by Preview.
 
-Phase 4B deliberately implements only the demonstrated subset: BLP2 encoding 2 with opaque or
+Phase 4B deliberately implemented only the then-demonstrated subset: BLP2 encoding 2 with opaque or
 1-bit-alpha DXT1 (`alphaDepth` 0 or 1 and `alphaEncoding` 0), and DXT5
-(`alphaDepth` 8 and `alphaEncoding` 7). BLP1, paletted BLP2, JPEG, raw ARGB, DXT3, and every other
-encoding/alpha tuple are explicitly unsupported rather than decoded speculatively.
+(`alphaDepth` 8 and `alphaEncoding` 7). Phase 5B subsequently demonstrated and added DXT3
+(`alphaDepth` 8 and `alphaEncoding` 1) for the real character-tab atlases. BLP1, paletted BLP2,
+JPEG, raw ARGB, and every other encoding/alpha tuple remain explicitly unsupported rather than
+decoded speculatively. See `NATIVE_HUNTS_TEMPLATE_INVENTORY.md` for the new tab evidence.
 
 ## Phase 4A acceptance accounting
 

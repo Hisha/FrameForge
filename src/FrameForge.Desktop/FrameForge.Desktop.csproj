@@ -31,6 +31,8 @@
     <!-- Pure-managed, read-only use behind IWoWArchiveReader; no native MPQ runtime is shipped. -->
     <PackageReference Include="Nmpq.Standard" Version="1.0.0" />
     <PackageReference Include="War3Net.IO.Mpq" Version="6.0.3" />
+    <!-- Used directly for authoritative local TTF metrics; already part of Avalonia's render stack. -->
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>

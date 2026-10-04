@@ -218,7 +218,7 @@ public sealed class WoWClientAssetProvider : IWoWClientAssetProvider
     {
         if (!client.IsValid || client.ClientPath is null || client.Build is null || client.Locale is null)
             return Failure(reference, "A validated WoW 3.3.5a client is required.");
-        if (!TryNormalizeInterfacePath(reference, out var segments, out var error))
+        if (!TryNormalizeClientResourcePath(reference, out var segments, out var error))
             return Failure(reference, error);
 
         foreach (var candidate in CandidatePaths(segments))
@@ -300,6 +300,16 @@ public sealed class WoWClientAssetProvider : IWoWClientAssetProvider
     }
 
     public static bool TryNormalizeInterfacePath(string? reference, out string[] segments, out string error)
+        => TryNormalizeClientResourcePath(reference, out segments, out error, interfaceOnly: true);
+
+    public static bool TryNormalizeClientResourcePath(string? reference, out string[] segments, out string error)
+        => TryNormalizeClientResourcePath(reference, out segments, out error, interfaceOnly: false);
+
+    private static bool TryNormalizeClientResourcePath(
+        string? reference,
+        out string[] segments,
+        out string error,
+        bool interfaceOnly)
     {
         segments = [];
         error = "Texture reference is empty.";
@@ -312,13 +322,18 @@ public sealed class WoWClientAssetProvider : IWoWClientAssetProvider
             return false;
         }
         var parts = normalized.Split('/');
-        if (parts.Length < 2 || !parts[0].Equals("Interface", StringComparison.OrdinalIgnoreCase)
+        var root = parts.Length > 0 ? parts[0] : string.Empty;
+        var allowedRoot = root.Equals("Interface", StringComparison.OrdinalIgnoreCase)
+                          || (!interfaceOnly && root.Equals("Fonts", StringComparison.OrdinalIgnoreCase));
+        if (parts.Length < 2 || !allowedRoot
             || parts.Any(part => part is "." or ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
         {
-            error = "Only safe archive-relative Interface paths are accepted.";
+            error = interfaceOnly
+                ? "Only safe archive-relative Interface paths are accepted."
+                : "Only safe archive-relative Interface or Fonts paths are accepted.";
             return false;
         }
-        segments = ["Interface", .. parts.Skip(1)];
+        segments = [root.Equals("Fonts", StringComparison.OrdinalIgnoreCase) ? "Fonts" : "Interface", .. parts.Skip(1)];
         error = string.Empty;
         return true;
     }

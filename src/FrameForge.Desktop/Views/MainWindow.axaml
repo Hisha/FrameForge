@@ -113,6 +113,7 @@
                                            TextWrapping="Wrap" />
                             </Grid>
                             <TextBlock Classes="mono" Text="{Binding StockAssetsSummary}" />
+                            <TextBlock Classes="mono" Text="{Binding StockDefinitionsSummary}" />
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <Button Content="Browse…" Click="OnBrowseWoWClientClick" />
                                 <Button Content="Clear" Click="OnClearWoWClientClick"

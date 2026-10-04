@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 namespace FrameForge.Desktop.Assets;
 
 public enum BlpCompression { Jpeg = 0, Direct = 1, Dxt = 2, Argb = 3 }
-public enum BlpDxtSubtype { Dxt1, Dxt5 }
+public enum BlpDxtSubtype { Dxt1, Dxt3, Dxt5 }
 
 public sealed record BlpHeader(
     string Magic,
@@ -22,6 +22,7 @@ public sealed record BlpHeader(
     public BlpDxtSubtype RequiredSubtype => (Encoding, AlphaDepth, AlphaEncoding) switch
     {
         (2, 0 or 1, 0) => BlpDxtSubtype.Dxt1,
+        (2, 8, 1) => BlpDxtSubtype.Dxt3,
         (2, 8, 7) => BlpDxtSubtype.Dxt5,
         _ => throw new UnsupportedTextureEncodingException(
             $"Unsupported BLP2 encoding tuple: encoding={Encoding}, alphaDepth={AlphaDepth}, alphaEncoding={AlphaEncoding}."),
@@ -30,12 +31,13 @@ public sealed record BlpHeader(
     public string Description => RequiredSubtype switch
     {
         BlpDxtSubtype.Dxt1 => $"BLP2 DXT1 ({(AlphaDepth == 1 ? "1-bit alpha" : "opaque")}, base mip, {MipCount} mip levels)",
+        BlpDxtSubtype.Dxt3 => $"BLP2 DXT3 (4-bit explicit alpha, base mip, {MipCount} mip levels)",
         BlpDxtSubtype.Dxt5 => $"BLP2 DXT5 (8-bit interpolated alpha, base mip, {MipCount} mip levels)",
         _ => "BLP2",
     };
 }
 
-/// <summary>Decodes only the BLP2 DXT1 and DXT5 forms demonstrated by Native Hunts stock art.</summary>
+/// <summary>Decodes only the BLP2 DXT1, DXT3, and DXT5 forms demonstrated by required stock art.</summary>
 public sealed class BlpTextureDecoder : ITextureDecoder
 {
     public const int HeaderSize = 148;
@@ -62,9 +64,13 @@ public sealed class BlpTextureDecoder : ITextureDecoder
         stream.Position = offset;
         var compressed = new byte[checked((int)size)];
         ReadExactly(stream, compressed);
-        var pixels = subtype == BlpDxtSubtype.Dxt1
-            ? DecodeDxt1(compressed, header.Width, header.Height, header.AlphaDepth == 1)
-            : DecodeDxt5(compressed, header.Width, header.Height);
+        var pixels = subtype switch
+        {
+            BlpDxtSubtype.Dxt1 => DecodeDxt1(compressed, header.Width, header.Height, header.AlphaDepth == 1),
+            BlpDxtSubtype.Dxt3 => DecodeDxt3(compressed, header.Width, header.Height),
+            BlpDxtSubtype.Dxt5 => DecodeDxt5(compressed, header.Width, header.Height),
+            _ => throw new UnsupportedTextureEncodingException($"Unsupported DXT subtype {subtype}."),
+        };
         return new DecodedImageData(header.Width, header.Height, pixels, header.Description, TextureFileFormat.Blp);
     }
 
@@ -130,6 +136,22 @@ public sealed class BlpTextureDecoder : ITextureDecoder
                 var index = (int)((colorIndices >> (pixel * 2)) & 3);
                 colors[index * 4 + 3] = alpha[pixel];
             }
+        }, output);
+        return output;
+    }
+
+    public static byte[] DecodeDxt3(ReadOnlySpan<byte> data, int width, int height)
+    {
+        var output = new byte[checked(width * height * 4)];
+        DecodeBlocks(data, width, height, 16, (block, colors, alpha) =>
+        {
+            for (var pixel = 0; pixel < 16; pixel++)
+            {
+                var packed = block[pixel / 2];
+                var nibble = pixel % 2 == 0 ? packed & 0x0f : packed >> 4;
+                alpha[pixel] = (byte)(nibble * 17);
+            }
+            BuildColorPalette(block[8..], colors, forceFourColors: true);
         }, output);
         return output;
     }

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Templates;
 using Xunit;
 
 namespace FrameForge.Desktop.Tests;
@@ -95,6 +96,16 @@ public sealed class WoWClientAssetProviderTests : IDisposable
     public void Unsafe_archive_paths_are_rejected(string reference)
     {
         Assert.False(WoWClientAssetProvider.TryNormalizeInterfacePath(reference, out _, out _));
+    }
+
+    [Fact]
+    public void Focused_client_resources_allow_safe_fonts_but_reject_other_roots()
+    {
+        Assert.True(WoWClientAssetProvider.TryNormalizeClientResourcePath(
+            @"Fonts\FRIZQT__.TTF", out var font, out _));
+        Assert.Equal(new[] { "Fonts", "FRIZQT__.TTF" }, font);
+        Assert.False(WoWClientAssetProvider.TryNormalizeClientResourcePath(
+            @"WDB\enUS\creaturecache.wdb", out _, out _));
     }
 
     [Fact]
@@ -214,6 +225,25 @@ public sealed class WoWClientAssetProviderTests : IDisposable
         var validation = provider.ValidateClient(clientRoot);
         Assert.True(validation.IsValid, validation.Message);
         Assert.Equal("enUS", validation.Locale);
+        using var stock = new StockTemplateResolver(provider);
+        var stockResults = stock.MaterializeRequired(validation);
+        Assert.Equal(11, stockResults.Count);
+        Assert.All(stockResults, result => Assert.True(result.Success, result.Message));
+        Assert.Equal(StockDefinitionStatus.FullyResolved,
+            stock.ResolveButton(StockTemplateResolver.TabTemplate)!.Status);
+        Assert.Equal(10, stock.ResolveFont("GameFontNormalSmall")!.Size);
+        Assert.Equal(16, stock.ResolveFont("GameFontHighlightLarge")!.Size);
+        Assert.Equal((355d, 440d),
+            (stock.ResolveExternalFrame(StockTemplateResolver.LfdParentFrame)!.Width,
+                stock.ResolveExternalFrame(StockTemplateResolver.LfdParentFrame)!.Height));
+
+        using (var stockTextures = new TextureAssetResolver())
+        {
+            stockTextures.Configure(xml, [provider.CacheRoot]);
+            var tab = stockTextures.Resolve(@"Interface\PaperDollInfoFrame\UI-Character-InactiveTab");
+            Assert.True(tab.CanRender, tab.Diagnostic.Message);
+            Assert.Contains("DXT3", tab.Texture!.Image.Description, StringComparison.Ordinal);
+        }
         var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [@"Interface\LFGFrame\UI-LFG-FRAME"] = "817264ed7787223d362cfafd504ce103d8773a6e7f8c4fb6cd338a183f236047",

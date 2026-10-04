@@ -1,8 +1,9 @@
 # Local WoW Client Assets
 
-FrameForge can read required stock Interface textures from a user-owned World of Warcraft 3.3.5a
-client. FrameForge distributes no Blizzard artwork, never changes the client or its MPQs, and does
-not place extracted files in projects or releases.
+FrameForge can read required stock Interface textures and a focused set of stock UI definitions and
+fonts from a user-owned World of Warcraft 3.3.5a client. FrameForge distributes no Blizzard
+content, never changes the client or its MPQs, and does not place extracted files in projects or
+releases.
 
 ## Normal workflow
 
@@ -11,13 +12,14 @@ not place extracted files in projects or releases.
 2. FrameForge validates exactly WoW 3.3.5a build 12340 and detects one locale.
 3. Open FrameXML. Source-relative and manually configured assets resolve as usual.
 4. FrameForge reports unresolved stock references. Choose **Resolve Missing Assets** to copy only
-   those unique files into the managed cache, refresh resolution, and repaint Preview.
+   those unique files plus the focused definition/font dependency set into the managed cache,
+   rebuild the in-memory definition index, and repaint Preview.
 5. Use **Revalidate**, **Clear**, or **Clear Stock Cache** to refresh the client state, forget the
    selection, or remove only FrameForge-owned cached stock files.
 
 Client configuration is optional. With no valid client, custom artwork and existing cached stock
-art continue to render; uncached stock references use the normal explicit stand-in. FrameXML import
-never depends on client configuration and works offline.
+art, definitions, and fonts continue to render; uncached stock references use explicit stand-ins
+and diagnostics. FrameXML import never depends on client configuration and works offline.
 
 ## Validation and locale discovery
 
@@ -94,7 +96,8 @@ troubleshooting without letting the managed cache shadow project-owned art.
 
 ## Materialization, provenance, and safety
 
-Only safe archive-relative paths below `Interface` are accepted. Rooted paths, drive syntax,
+Only safe archive-relative paths below `Interface` or `Fonts` are accepted. The `Fonts` root is
+needed only for the explicitly requested local client font; unrelated roots remain rejected. Rooted paths, drive syntax,
 traversal (`.`/`..`), empty segments, malformed/doubled separators, and cache escapes are rejected.
 Archive lookup is case-insensitive and extensionless references try `.tga`, `.blp`, then `.png`.
 
@@ -103,6 +106,24 @@ temporary file, flushes it, and atomically moves it into the owned cache while r
 escapes. The MPQ is opened for reading only. A machine-local provenance manifest records the
 requested reference, client/build, locale, source MPQ, size, SHA-256, time, and cache path. The
 inspector shows available provenance. Cache hits avoid reopening/extracting the entry.
+
+## Focused stock definitions and fonts
+
+Phase 5B requests only eleven additional resources needed by Native Hunts: five XML files, two Lua
+files inspected as static evidence but never executed, `Fonts/FRIZQT__.TTF`, and three character-tab
+atlases. `StockTemplateResolver` builds a deterministic in-memory index from those cached files. It
+resolves the demonstrated font inheritance chains and `CharacterFrameTabButtonTemplate`, applies
+effective geometry to a transient project clone, and preserves the imported project's declared
+values unchanged. Reloading or clearing the managed cache invalidates the index.
+
+The locally cached TrueType font is registered with Avalonia at runtime and measured with Skia. If
+registration is unavailable, FrameForge retains the authoritative nominal metrics and reports that
+the host fallback is being used; it does not claim pixel-perfect fidelity. Inspector lines identify
+the stock definition and inheritance chain behind effective values.
+
+This is not a general FrameXML runtime. Lua click/state behavior, live Dungeon Finder children,
+runtime text, dynamic icons, and selected/disabled tab state remain explicit boundaries. See
+`NATIVE_HUNTS_TEMPLATE_INVENTORY.md` for exact files, archive origins, and supported properties.
 
 **Clear Stock Cache** refuses a symlink cache root and removes only the build-specific directory
 owned by FrameForge. It never deletes the selected client, an MPQ, manual root, or project file.

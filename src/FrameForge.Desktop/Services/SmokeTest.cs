@@ -16,6 +16,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Rendering;
+using FrameForge.Desktop.Templates;
 using FrameForge.Desktop.ViewModels;
 using FrameForge.Desktop.Views;
 
@@ -792,15 +793,51 @@ public static class SmokeTest
                 Check("three unique stock dependencies are missing before explicit resolution",
                     vm.StockAssetsSummary == "Stock assets: 3 required, 0 available", vm.StockAssetsSummary);
                 clientResults = [.. vm.ResolveMissingStockAssets()];
-                Check("client provider materializes three unique stock dependencies",
-                    clientResults.Length == 3 && clientResults.All(result => result.Success),
+                Check("client provider materializes the focused stock definition set and three direct assets",
+                    clientResults.Length == 14 && clientResults.All(result => result.Success),
                     string.Join(" | ", clientResults.Select(result => result.Message)));
-                Check("client path stays out of portable project JSON",
-                    !ProjectCodec.Serialize(vm.Project).Contains(wowClient, StringComparison.Ordinal));
+                var portableJson = ProjectCodec.Serialize(vm.Project);
+                Check("client/cache paths and Blizzard definition contents stay out of portable project JSON",
+                    !portableJson.Contains(wowClient, StringComparison.Ordinal)
+                    && !portableJson.Contains(vm.WoWAssets.CacheRoot, StringComparison.Ordinal)
+                    && !portableJson.Contains("FRIZQT__", StringComparison.Ordinal)
+                    && !portableJson.Contains("<Ui", StringComparison.Ordinal));
                 Check("effective MPQs match 3.3.5a patch precedence",
-                    clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/patch-enUS-2.MPQ") == 2
-                    && clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/locale-enUS.MPQ") == 1,
+                    clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/patch-enUS-3.MPQ") == 6
+                    && clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/patch-enUS.MPQ") == 1
+                    && clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/patch-enUS-2.MPQ") == 2
+                    && clientResults.Count(result => result.Provenance?.ArchivePath == "Data/enUS/locale-enUS.MPQ") == 5,
                     string.Join(" | ", clientResults.Select(result => result.Provenance?.ArchivePath)));
+
+                var tabStyle = vm.StockTemplates.ResolveButton(StockTemplateResolver.TabTemplate);
+                Check("CharacterFrameTabButtonTemplate resolves fully with three normal slices",
+                    tabStyle is { Status: StockDefinitionStatus.FullyResolved, NormalSlices.Count: 3 },
+                    tabStyle?.Status.ToString() ?? "unresolved");
+                var expectedFonts = new Dictionary<string, double>(StringComparer.Ordinal)
+                {
+                    ["GameFontNormal"] = 12,
+                    ["GameFontHighlight"] = 12,
+                    ["GameFontNormalSmall"] = 10,
+                    ["GameFontNormalLarge"] = 16,
+                    ["GameFontHighlightSmall"] = 10,
+                    ["GameFontHighlightLarge"] = 16,
+                };
+                Check("all six Native Hunts stock font styles resolve with authoritative sizes and local font",
+                    expectedFonts.All(pair => vm.StockTemplates.ResolveFont(pair.Key) is { PhysicalFontPath: not null } font
+                                              && font.Size == pair.Value),
+                    string.Join(" | ", expectedFonts.Keys.Select(name =>
+                        $"{name}={vm.StockTemplates.ResolveFont(name)?.Size.ToString() ?? "missing"}")));
+                var lfdStyle = vm.StockTemplates.ResolveExternalFrame(StockTemplateResolver.LfdParentFrame);
+                Check("LFDParentFrame stock context records the authoritative static size and scoped runtime boundary",
+                    lfdStyle is { Width: 355, Height: 440, Status: StockDefinitionStatus.PartiallyResolved }
+                    && lfdStyle.ScopeNote.Contains("355 x 500", StringComparison.Ordinal),
+                    lfdStyle?.ScopeNote ?? "unresolved");
+
+                var inactiveTab = vm.Assets.Resolve(@"Interface\PaperDollInfoFrame\UI-Character-InactiveTab");
+                Check("required tab atlas decodes the demonstrated BLP2 DXT3 subtype",
+                    inactiveTab is { CanRender: true, Format: TextureFileFormat.Blp, Width: 128, Height: 32 }
+                    && inactiveTab.Texture!.Image.Description.Contains("DXT3", StringComparison.Ordinal),
+                    inactiveTab.Texture?.Image.Description ?? inactiveTab.Diagnostic.Message);
             }
             else
             {
@@ -837,6 +874,32 @@ public static class SmokeTest
             Check("eleven physical custom/stock files decoded once each", nativeUniqueDecodes == 11,
                 $"decoded {nativeUniqueDecodes}");
 
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                Check("effective template geometry sizes both Native Hunts tabs without mutating declarations",
+                    vm.Layout.Rects.TryGetValue("LFDParentFrameTab1", out var firstTab)
+                    && vm.Layout.Rects.TryGetValue("LFDParentFrameTab2", out var secondTab)
+                    && firstTab.Width > secondTab.Width && firstTab.Height == 32 && secondTab.Height == 32
+                    && vm.Project.Find("LFDParentFrameTab1") is { Width: 0, Height: 0 }
+                    && vm.Project.Find("LFDParentFrameTab2") is { Width: 0, Height: 0 },
+                    $"tab1 {vm.Layout.Rects.GetValueOrDefault("LFDParentFrameTab1")}, tab2 {vm.Layout.Rects.GetValueOrDefault("LFDParentFrameTab2")}");
+
+                vm.OnCanvasSelectionRequested("LFDParentFrameTab1");
+                Check("tab inspector reports effective template state, size, and provenance",
+                    vm.Editor.VisualLines.Any(line => line.Contains("effective template CharacterFrameTabButtonTemplate", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("PanelTemplates_TabResize", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("normal/unselected", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("CharacterFrameTemplates.xml", StringComparison.Ordinal)),
+                    string.Join(" | ", vm.Editor.VisualLines));
+
+                vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelIdentityPrey");
+                Check("font inspector reports effective style, local font, and transitive provenance",
+                    vm.Editor.VisualLines.Any(line => line.Contains("effective font GameFontHighlightLarge: 16px", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("local client cache", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("SystemFont_Shadow_Large", StringComparison.Ordinal)),
+                    string.Join(" | ", vm.Editor.VisualLines));
+            }
+
             vm.OnCanvasSelectionRequested("Texture#4");
             Check("BLP inspector reports format, dimensions, and demonstrated subtype",
                 vm.Editor.VisualLines.Any(line => line == "format BLP")
@@ -867,6 +930,18 @@ public static class SmokeTest
                 new Vector(96, 96));
             realPreview.Render(canvas);
 
+            var phase5bPixelDifference = 0;
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                canvas.StockTemplates = null;
+                var phase5aBaseline = new RenderTargetBitmap(realPreview.PixelSize, new Vector(96, 96));
+                phase5aBaseline.Render(canvas);
+                phase5bPixelDifference = CountPixelsChanged(realPreview, phase5aBaseline);
+                Check("stock template/font resolution visibly changes Preview from the Phase 5A baseline",
+                    phase5bPixelDifference > 500, $"{phase5bPixelDifference} changed pixels");
+                canvas.StockTemplates = vm.StockTemplates;
+            }
+
             canvas.AssetResolver = null;
             var fallbackPreview = new RenderTargetBitmap(realPreview.PixelSize, new Vector(96, 96));
             fallbackPreview.Render(canvas);
@@ -885,6 +960,10 @@ public static class SmokeTest
                               $"\"blp\":{resolvedAssets.Count(a => a.CanRender && a.Format == TextureFileFormat.Blp)}," +
                               $"\"uniqueDecodes\":{nativeUniqueDecodes},\"pixelDifference\":{realPixelDifference}," +
                               $"\"screenshot\":\"{nativePreviewOutput}\"}}");
+            if (!string.IsNullOrWhiteSpace(wowClient))
+                Console.WriteLine($"SMOKE_NATIVE_TEMPLATES {{\"template\":\"{StockTemplateResolver.TabTemplate}\"," +
+                                  $"\"fonts\":6,\"phase5bPixelDifference\":{phase5bPixelDifference}," +
+                                  $"\"screenshot\":\"{nativePreviewOutput}\"}}");
         }
 
         // 10. The Open picker contract. Last, because re-opening replaces vm's project.

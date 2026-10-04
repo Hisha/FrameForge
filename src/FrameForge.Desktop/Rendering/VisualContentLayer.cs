@@ -4,6 +4,7 @@ using Avalonia.Media;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -12,9 +13,9 @@ namespace FrameForge.Desktop.Rendering;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This layer draws decoded TGA artwork when the desktop asset service can resolve it. It does not
-/// decode BLP or emulate Blizzard's fonts, so unresolved visuals retain an explicit stand-in. It can
-/// also draw the part of the appearance
+/// This layer draws decoded TGA/BLP artwork when the desktop asset service can resolve it and uses
+/// the user's locally materialized stock font when the focused build-12340 resolver provides it.
+/// Unresolved visuals retain an explicit stand-in. It can also draw the part of the appearance
 /// the geometry and the retained values actually determine: the rectangle, the declared colour and
 /// alpha, a literal text string, and a status bar's declared fill.
 /// </para>
@@ -153,7 +154,11 @@ public sealed class VisualContentLayer : ICanvasLayer
     {
         if (text is { HasLiteralText: true })
         {
-            DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, Color.Parse("#E8F1F5"));
+            if (canvas.StockTemplates?.ResolveFont(text.FontTemplate) is { } style)
+                DrawStyledText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical, style);
+            else
+                DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
+                    Color.Parse("#E8F1F5"));
             return;
         }
 
@@ -172,11 +177,60 @@ public sealed class VisualContentLayer : ICanvasLayer
         Rect rect,
         TextVisual? text)
     {
-        context.FillRectangle(new SolidColorBrush(Color.Parse("#C08A4A")) { Opacity = 0.16 }, rect);
-        context.DrawRectangle(null, new Pen(new SolidColorBrush(Color.Parse("#C08A4A")) { Opacity = 0.8 }, 1), rect);
+        var stock = canvas.StockTemplates?.ResolveButton(frame.Model?.Inherits);
+        var drewStock = stock is not null && DrawStockButton(context, canvas, rect, stock);
+        if (!drewStock)
+        {
+            context.FillRectangle(new SolidColorBrush(Color.Parse("#C08A4A")) { Opacity = 0.16 }, rect);
+            context.DrawRectangle(null, new Pen(new SolidColorBrush(Color.Parse("#C08A4A")) { Opacity = 0.8 }, 1), rect);
+        }
 
         if (text is { HasLiteralText: true })
-            DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, Color.Parse("#F0DCC0"));
+        {
+            if (stock is not null && canvas.StockTemplates?.ResolveFont(stock.FontStyle) is { } style)
+                DrawStyledText(context, canvas,
+                    rect.Translate(new Vector(stock.TextOffsetX * canvas.Viewport.Zoom,
+                        -stock.TextOffsetY * canvas.Viewport.Zoom)),
+                    text.Text!, "CENTER", "MIDDLE", style);
+            else
+                DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
+                    Color.Parse("#F0DCC0"));
+        }
+    }
+
+    private static bool DrawStockButton(
+        DrawingContext context,
+        CanvasRenderContext canvas,
+        Rect rect,
+        StockButtonStyle style)
+    {
+        if (canvas.AssetResolver is not { } resolver || style.NormalSlices.Count != 3)
+            return false;
+        var ordered = new[]
+        {
+            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Left", StringComparison.Ordinal)),
+            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Middle", StringComparison.Ordinal)),
+            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Right", StringComparison.Ordinal)),
+        };
+        if (ordered.Any(slice => slice is null))
+            return false;
+        var asset = resolver.Resolve(ordered[0]!.File);
+        if (!asset.CanRender || asset.Texture is not { } decoded)
+            return false;
+
+        var side = Math.Min(rect.Width / 2, ordered[0]!.Width * canvas.Viewport.Zoom);
+        var destinations = new[]
+        {
+            new Rect(rect.X, rect.Y, side, rect.Height),
+            new Rect(rect.X + side, rect.Y, Math.Max(0, rect.Width - side * 2), rect.Height),
+            new Rect(rect.Right - side, rect.Y, side, rect.Height),
+        };
+        for (var i = 0; i < 3; i++)
+        {
+            var source = TextureSourceRect.Map(ordered[i]!.TexCoords, decoded.Image.Width, decoded.Image.Height);
+            context.DrawImage(decoded.Bitmap, source, destinations[i]);
+        }
+        return true;
     }
 
     /// <summary>
@@ -248,15 +302,15 @@ public sealed class VisualContentLayer : ICanvasLayer
     /// Draws a literal string inside its widget's box, justified the way the document asked.
     /// </summary>
     /// <remarks>
-    /// No wrapping, no ellipsis and no font substitution pretending to be GameFont. The text is
-    /// drawn at a fixed readable size and simply clipped by the canvas, because the alternative -
-    /// measuring it against a font FrameForge does not have - would invent line breaks.
+    /// No wrapping or ellipsis is invented when the stock font is unavailable. The fallback text
+    /// is drawn at a fixed readable size and clipped by the canvas.
     /// </remarks>
     private static void DrawClippedText(
         DrawingContext context,
         Rect host,
         string text,
         string? justifyH,
+        string? justifyV,
         Color color)
     {
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
@@ -270,8 +324,71 @@ public sealed class VisualContentLayer : ICanvasLayer
             _ => host.X,
         };
 
-        context.DrawText(label, new Point(x, host.Y + Math.Max(0, (host.Height - label.Height) / 2)));
+        var y = justifyV switch
+        {
+            "TOP" => host.Y,
+            "BOTTOM" => host.Bottom - label.Height,
+            _ => host.Y + Math.Max(0, (host.Height - label.Height) / 2),
+        };
+        using (context.PushClip(host))
+            context.DrawText(label, new Point(x, y));
     }
+
+    private static void DrawStyledText(
+        DrawingContext context,
+        CanvasRenderContext canvas,
+        Rect host,
+        string text,
+        string? declaredJustifyH,
+        string? declaredJustifyV,
+        StockFontStyle style)
+    {
+        var size = Math.Max(1, style.Size * canvas.Viewport.Zoom);
+        var color = ToColor(style.Color);
+        var typeface = new Typeface(style.AvaloniaFamily, FontStyle.Normal, FontWeight.Normal);
+        var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            typeface, size, new SolidColorBrush(color));
+        var justifyH = declaredJustifyH ?? style.JustifyH;
+        var justifyV = declaredJustifyV ?? style.JustifyV;
+        var x = justifyH switch
+        {
+            "CENTER" => host.X + (host.Width - label.Width) / 2,
+            "RIGHT" => host.Right - label.Width,
+            _ => host.X,
+        };
+        var y = justifyV switch
+        {
+            "TOP" => host.Y,
+            "BOTTOM" => host.Bottom - label.Height,
+            _ => host.Y + (host.Height - label.Height) / 2,
+        };
+        using (context.PushClip(host))
+        {
+            if (style.ShadowColor is { } shadow)
+            {
+                var shadowText = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    typeface, size, new SolidColorBrush(ToColor(shadow)));
+                context.DrawText(shadowText, new Point(
+                    x + style.ShadowX * canvas.Viewport.Zoom,
+                    y - style.ShadowY * canvas.Viewport.Zoom));
+            }
+            if (style.Outline is "NORMAL" or "THICK")
+            {
+                var radius = style.Outline == "THICK" ? 2d : 1d;
+                var outline = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    typeface, size, Brushes.Black);
+                foreach (var offset in new[] { new Point(-radius, 0), new Point(radius, 0), new Point(0, -radius), new Point(0, radius) })
+                    context.DrawText(outline, new Point(x + offset.X, y + offset.Y));
+            }
+            context.DrawText(label, new Point(x, y));
+        }
+    }
+
+    private static Color ToColor(ColorRgba color) => Color.FromArgb(
+        (byte)Math.Round(Math.Clamp(color.A, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.R, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.G, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.B, 0, 1) * 255));
 
     private static string Num(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 }

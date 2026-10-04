@@ -9,6 +9,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.ViewModels;
 
@@ -33,6 +34,11 @@ namespace FrameForge.Desktop.ViewModels;
 /// </remarks>
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    private static readonly string[] NativeHuntsStockFonts =
+    [
+        "GameFontNormal", "GameFontHighlight", "GameFontNormalSmall", "GameFontNormalLarge",
+        "GameFontHighlightSmall", "GameFontHighlightLarge",
+    ];
     private Project _project = ProjectFactory.Empty();
 
     [ObservableProperty]
@@ -140,6 +146,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private TreeProjection? _treeProjection;
     private readonly AssetSettingsStore _assetSettings;
     private readonly IWoWClientAssetProvider _wowAssets;
+    private readonly IStockTemplateResolver _stockTemplates;
     private string? _assetSourcePath;
     private WowClientValidation _wowClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
         "No WoW client is configured.");
@@ -151,13 +158,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public TextureAssetResolver Assets { get; } = new();
 
     public IWoWClientAssetProvider WoWAssets => _wowAssets;
+    public IStockTemplateResolver StockTemplates => _stockTemplates;
 
     public string WoWClientPath => _wowClient.ClientPath ?? string.Empty;
     public string WoWClientVersion => _wowClient.Build?.ToString() ?? "Unknown";
     public string WoWClientLocale => _wowClient.Locale ?? "Unknown";
     public string WoWClientStatus => _wowClient.Message;
     public bool HasWoWClientSelection => _wowClient.ClientPath is { Length: > 0 };
-    public bool CanResolveStockAssets => _wowClient.IsValid && MissingStockAssetReferences().Count > 0;
+    public bool CanResolveStockAssets => _wowClient.IsValid
+                                         && (MissingStockAssetReferences().Count > 0 || !StockDefinitionsReady());
     public string StockAssetsSummary
     {
         get
@@ -167,6 +176,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return $"Stock assets: {stock.Count} required, {available} available";
         }
     }
+
+    public string StockDefinitionsSummary => !RequiresStockDefinitions()
+        ? "Stock definitions: not required by this project"
+        : StockDefinitionsReady()
+            ? $"Stock definitions: template and 6 font styles ready ({_stockTemplates.Diagnostics.Count} boundary/compatibility diagnostics)"
+            : $"Stock definitions: unavailable or incomplete ({_stockTemplates.Diagnostics.Count} diagnostics)";
 
     public string AssetRootsSummary => AssetRoots.Count == 0
         ? "Asset roots (none)"
@@ -243,15 +258,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
             option.Refresh();
     }
 
-    public MainWindowViewModel() : this(null, null)
+    public MainWindowViewModel() : this(null, null, null)
     {
     }
 
-    public MainWindowViewModel(string? settingsPath, IWoWClientAssetProvider? wowAssets = null)
+    public MainWindowViewModel(string? settingsPath, IWoWClientAssetProvider? wowAssets = null,
+        IStockTemplateResolver? stockTemplates = null)
     {
         _assetSettings = new AssetSettingsStore(settingsPath
             ?? Environment.GetEnvironmentVariable("FRAMEFORGE_SETTINGS_PATH"));
         _wowAssets = wowAssets ?? new WoWClientAssetProvider();
+        _stockTemplates = stockTemplates ?? new StockTemplateResolver(_wowAssets);
         var configuration = _assetSettings.LoadConfiguration();
         foreach (var root in configuration.AssetRoots)
             AssetRoots.Add(root);
@@ -702,7 +719,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AssetMaterializationResult[] results;
         try
         {
-            results = [.. requested.Select(reference => _wowAssets.Materialize(reference, _wowClient))];
+            var definitions = RequiresStockDefinitions()
+                ? _stockTemplates.MaterializeRequired(_wowClient)
+                : [];
+            results = [.. definitions, .. requested.Select(reference => _wowAssets.Materialize(reference, _wowClient))];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -710,6 +730,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return [];
         }
         Assets.Refresh();
+        RelaidOut(Project, SelectedName, null);
         var succeeded = results.Count(result => result.Success);
         RefreshAssetPresentation($"Resolved {succeeded} of {results.Length} missing stock assets from the local WoW client.");
         NotifyWoWClientState();
@@ -728,6 +749,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
         Assets.Refresh();
+        _stockTemplates.Reload();
+        RelaidOut(Project, SelectedName, null);
         RefreshAssetPresentation("FrameForge-managed stock asset cache cleared.");
         NotifyWoWClientState();
     }
@@ -754,6 +777,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Editor.RefreshAssetLines();
         OnPropertyChanged(nameof(AssetRootsSummary));
         OnPropertyChanged(nameof(StockAssetsSummary));
+        OnPropertyChanged(nameof(StockDefinitionsSummary));
         OnPropertyChanged(nameof(CanResolveStockAssets));
         OnPropertyChanged(nameof(Assets));
         Status = status;
@@ -781,6 +805,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    private bool RequiresStockDefinitions() => Project.Frames.Any(frame =>
+        (frame.Placeholder && frame.Name == StockTemplateResolver.LfdParentFrame)
+        || frame.Inherits == StockTemplateResolver.TabTemplate
+        || frame.Visual?.Text?.FontTemplate is { } font && NativeHuntsStockFonts.Contains(font, StringComparer.Ordinal));
+
+    private bool StockDefinitionsReady() => !RequiresStockDefinitions()
+        || (_stockTemplates.ResolveExternalFrame(StockTemplateResolver.LfdParentFrame) is not null
+        && _stockTemplates.ResolveButton(StockTemplateResolver.TabTemplate) is { Status: StockDefinitionStatus.FullyResolved }
+        && NativeHuntsStockFonts.All(name => _stockTemplates.ResolveFont(name) is not null));
+
     private void NotifyWoWClientState()
     {
         OnPropertyChanged(nameof(WoWClientPath));
@@ -789,11 +823,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(WoWClientStatus));
         OnPropertyChanged(nameof(HasWoWClientSelection));
         OnPropertyChanged(nameof(StockAssetsSummary));
+        OnPropertyChanged(nameof(StockDefinitionsSummary));
         OnPropertyChanged(nameof(CanResolveStockAssets));
     }
 
     private IEnumerable<string> DescribeAsset(FrameDef frame)
     {
+        foreach (var line in _stockTemplates.Describe(frame))
+            yield return line;
         var texture = frame.Kind == FrameKind.TEXTURE ? frame.Visual?.Texture : null;
         var reference = texture?.File ?? frame.Visual?.StatusBar?.BarTexture;
         if (reference is null && texture is null)
@@ -857,7 +894,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RelaidOut(Project project, string? selection, string? status)
     {
-        Layout = LayoutResolver.Resolve(project);
+        Layout = LayoutResolver.Resolve(_stockTemplates.ApplyEffectiveGeometry(project));
         RebuildTree(project);
         SelectedTreeNode = FindNode(selection);
         Editor.Refresh(project, selection);

@@ -76,6 +76,7 @@ public partial class MainWindow : Window
         Canvas.Filter = vm.CanvasFilter;
         Canvas.Labels = vm.LabelPolicy;
         Canvas.AssetResolver = vm.Assets;
+        Canvas.StockTemplates = vm.StockTemplates;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();

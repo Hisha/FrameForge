@@ -52,6 +52,21 @@ public sealed class BlpTextureDecoderTests : IDisposable
     }
 
     [Fact]
+    public void Dxt3_decodes_explicit_four_bit_alpha_demonstrated_by_stock_tabs()
+    {
+        var block = new byte[16];
+        block[0] = 0xf0; // pixel 0 alpha 0, pixel 1 alpha 255
+        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(8, 2), 0xf800);
+        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(10, 2), 0x07e0);
+        var image = new BlpTextureDecoder().Decode(new MemoryStream(Blp2(4, 4, 8, 1, block)));
+        Assert.Equal(BlpDxtSubtype.Dxt3,
+            BlpTextureDecoder.ReadHeader(new MemoryStream(Blp2(4, 4, 8, 1, block))).RequiredSubtype);
+        Assert.Equal(0, image.Bgra[3]);
+        Assert.Equal(255, image.Bgra[7]);
+        Assert.Contains("DXT3", image.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Rejects_malformed_truncated_and_unsupported_Blp()
     {
         var malformed = Blp2(4, 4, 0, 0, Dxt1Block(0xf800, 0x07e0, 0));

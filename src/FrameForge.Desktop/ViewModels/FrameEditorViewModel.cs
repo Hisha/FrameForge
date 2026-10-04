@@ -202,7 +202,7 @@ public sealed partial class FrameEditorViewModel : ObservableObject
             parts.Add($"written as \"{source}\" before $parent expansion");
 
         if (frame.Inherits is { Length: > 0 } inherits)
-            parts.Add($"inherits \"{inherits}\", which was NOT resolved");
+            parts.Add($"declares inherits=\"{inherits}\"; effective machine-local resolution is reported below when available");
 
         if (frame.SetAllPoints)
             parts.Add("setAllPoints: fills its anchor target, ignoring size and offsets");

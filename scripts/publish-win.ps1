@@ -74,11 +74,14 @@ New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
 & dotnet publish $Project -c Release -r $Rid --self-contained true -o $PackageDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$AppExe = Join-Path $PackageDir 'FrameForge.Desktop.exe'
+$AppExe = Join-Path $PackageDir 'FrameForge.exe'
 if (-not (Test-Path -LiteralPath $AppExe -PathType Leaf)) {
-    throw "FrameForge.Desktop.exe missing from publish output: $AppExe"
+    $LegacyAppExe = Join-Path $PackageDir 'FrameForge.Desktop.exe'
+    if (-not (Test-Path -LiteralPath $LegacyAppExe -PathType Leaf)) {
+        throw "FrameForge.exe missing from publish output: $AppExe"
+    }
+    Rename-Item -Path $LegacyAppExe -NewName 'FrameForge.exe' -Force
 }
-Rename-Item -Path $AppExe -NewName 'FrameForge.exe' -Force
 
 if (Test-Path -LiteralPath (Join-Path $Root 'assets\branding\frameforge-icon.png')) {
     Copy-Item (Join-Path $Root 'assets\branding\frameforge-icon.png') (Join-Path $PackageDir 'frameforge-icon.png')

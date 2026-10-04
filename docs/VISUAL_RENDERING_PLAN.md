@@ -17,8 +17,9 @@ textures, 20 font strings, two buttons, and one status bar.
   diagnostics, selected bounds, all selected anchors, and offset labels.
 - Three views over one layered canvas: visual content, debug overlay, and selection overlay.
 - View filters for frames, buttons, text, textures, helpers, and hidden subtrees.
-- Literal FontString and Button text using a neutral host font.
-- Real source-relative and configured-root TGA artwork plus the demonstrated BLP2 DXT1/DXT5 stock
+- Literal FontString and Button text, using the resolved local build-12340 font for the supported
+  Native Hunts styles and a neutral host fallback otherwise.
+- Real source-relative and configured-root TGA artwork plus the demonstrated BLP2 DXT1/DXT3/DXT5 stock
   subset, including texCoords, RGB modulation, alpha, and imported paint order. Unresolved textures
   retain the Phase 3 stand-in.
 - Status-bar tracks and fills at their declared default fraction and color.
@@ -75,10 +76,11 @@ files the user already has access to.
   and BLP implementations independently extensible. The renderer still owns texCoords, tint,
   alpha, geometry, and paint order.
 - Phase 4B decodes the base mip of only the BLP forms demonstrated by the three supplied 3.3.5a
-  stock files: BLP2 encoding 2, opaque/1-bit-alpha DXT1 and 8-bit-alpha DXT5. Decoded pixels are
+  stock files: BLP2 encoding 2, opaque/1-bit-alpha DXT1 and 8-bit-alpha DXT5. Phase 5B added only
+  the demonstrated 8-bit-alpha-header/explicit-4-bit-alpha DXT3 tuple used by the character tabs. Decoded pixels are
   straight-alpha BGRA in top-left row order, matching the renderer's existing image contract.
 - Malformed headers and truncated mip data are decode failures. BLP1, paletted BLP2, JPEG, raw
-  ARGB, DXT3, and unrecognized encoding/alpha combinations receive explicit unsupported-format
+  ARGB and unrecognized encoding/alpha combinations receive explicit unsupported-format
   diagnostics. PNG remains identified but undecoded.
 - Native Hunts acceptance with the optional extracted root resolves all 19 direct file references:
   eight custom TGA declarations and eleven stock BLP declarations backed by three unique BLP files.
@@ -108,15 +110,27 @@ The extracted client files remain user-owned, opt-in inputs and are not redistri
   for all eleven stock declarations; together with eight project TGA declarations, all 19 direct
   texture declarations render without a manual extracted-assets root.
 
-## 7. Requires stock Blizzard template emulation
+## 7. Phase 5B focused stock template and font fidelity
 
 `LFDParentFrame`, `CharacterFrameTabButtonTemplate`, inherited texture paint, and `GameFont*`
-references are defined outside this XML. Resolve only the small, documented template subset needed
-by supported projects. Store resolved template contributions separately from the source-authored
-facts so the inspector can distinguish the two.
+references are defined outside project XML. The build-12340 resolver materializes eleven focused
+resources from the user's client and indexes only the definitions Native Hunts demonstrates.
+Resolved contributions stay separate from source-authored facts so the inspector can distinguish
+declared values, effective values, and source definition provenance.
 
-Avoid a general FrameXML/template runtime. A versioned library of specific 3.3.5a visual templates
-is sufficient for the designer goal.
+- The external parent records the stock XML's 355x440 size and the addon's explicit 355x500 Hunts
+  state, while omitting the irrelevant Lua-driven Dungeon Finder subtree.
+- Character tabs use the real normal three-slice atlas, authoritative texCoords, 32px height,
+  text offset, `GameFontNormalSmall`, and the demonstrated zero-padding `PanelTemplates_TabResize`
+  formula. Preview deliberately uses normal/unselected state.
+- Six Native Hunts styles resolve transitively through `Fonts.xml`/`FontStyles.xml` to the local
+  `FRIZQT__.TTF`, including nominal size, color, shadow, outline, and justification.
+- Effective auto-size/layout is computed on a transient clone; imported and serialized values are
+  not flattened or rewritten. Missing files, unresolved/circular/unsupported inheritance, texture
+  gaps, font registration failure, unsupported font flags, and Lua boundaries are diagnostic.
+
+This remains a focused compatibility layer, not a general FrameXML/template runtime. Exact evidence
+and omissions are recorded in `NATIVE_HUNTS_TEMPLATE_INVENTORY.md`.
 
 ## 8. Requires runtime/Lua state approximation
 
@@ -130,12 +144,10 @@ samples and never serialized as facts imported from the XML.
 
 ## 9. Recommended implementation order
 
-1. Add the small stock-template catalog needed for `LFDParentFrame` and the tab-button template.
-2. Add font metrics and styling for the referenced `GameFont*` subset, preserving the neutral-font
-   fallback when unavailable.
-3. Retain and render Button state textures and other currently skipped paint fields.
-4. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, and status values.
-5. Extend BLP decoding only when new, verified project assets demonstrate another required subtype.
+1. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, icons, tab state,
+   and status values (Phase 5C).
+2. Retain/render additional button states only when those preview controls need them.
+3. Extend stock compatibility or BLP decoding only when a real project demonstrates the need.
 
-Phase 4B adds verified stock artwork without broadening into a general BLP promise. Lua, broad
-template emulation, unsupported BLP variants, and speculative artwork remain out of scope.
+Lua execution, broad template emulation, unsupported BLP variants, and speculative artwork remain
+out of scope.

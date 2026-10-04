@@ -7,6 +7,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Controls;
 
@@ -55,6 +56,7 @@ public class LayoutCanvas : Control
     private LabelPolicy _labels = ViewPolicy.DefaultLabelPolicyFor(CanvasViewMode.DEBUG);
     private RenderPipeline _pipeline = RenderPipeline.Default();
     private ITextureAssetResolver? _assetResolver;
+    private IStockTemplateResolver? _stockTemplates;
 
     /// <summary>The completed render pass's policy, drawable, layer, and visual-paint counts.</summary>
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
@@ -206,6 +208,17 @@ public class LayoutCanvas : Control
         set
         {
             _assetResolver = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>Machine-local effective stock font/template presentation.</summary>
+    public IStockTemplateResolver? StockTemplates
+    {
+        get => _stockTemplates;
+        set
+        {
+            _stockTemplates = value;
             InvalidateVisual();
         }
     }
@@ -372,7 +385,8 @@ public class LayoutCanvas : Control
             _selectedName,
             drawable,
             diagnostics,
-            _assetResolver);
+            _assetResolver,
+            _stockTemplates);
     }
 
     /// <inheritdoc />
