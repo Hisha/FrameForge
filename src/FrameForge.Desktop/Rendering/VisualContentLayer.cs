@@ -4,6 +4,7 @@ using Avalonia.Media;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Rendering;
@@ -155,7 +156,8 @@ public sealed class VisualContentLayer : ICanvasLayer
         if (text is { HasLiteralText: true })
         {
             if (canvas.StockTemplates?.ResolveFont(text.FontTemplate) is { } style)
-                DrawStyledText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical, style);
+                DrawStyledText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical, style,
+                    canvas.PreviewOverrides?.Find(frame.Name)?.TextColor);
             else
                 DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
                     Color.Parse("#E8F1F5"));
@@ -178,7 +180,8 @@ public sealed class VisualContentLayer : ICanvasLayer
         TextVisual? text)
     {
         var stock = canvas.StockTemplates?.ResolveButton(frame.Model?.Inherits);
-        var drewStock = stock is not null && DrawStockButton(context, canvas, rect, stock);
+        var previewButton = canvas.PreviewOverrides?.Find(frame.Name)?.ButtonState ?? PreviewButtonState.Normal;
+        var drewStock = stock is not null && DrawStockButton(context, canvas, rect, stock, previewButton);
         if (!drewStock)
         {
             context.FillRectangle(new SolidColorBrush(Color.Parse("#C08A4A")) { Opacity = 0.16 }, rect);
@@ -187,7 +190,8 @@ public sealed class VisualContentLayer : ICanvasLayer
 
         if (text is { HasLiteralText: true })
         {
-            if (stock is not null && canvas.StockTemplates?.ResolveFont(stock.FontStyle) is { } style)
+            var fontName = previewButton == PreviewButtonState.Selected ? stock?.SelectedFontStyle : stock?.FontStyle;
+            if (stock is not null && canvas.StockTemplates?.ResolveFont(fontName) is { } style)
                 DrawStyledText(context, canvas,
                     rect.Translate(new Vector(stock.TextOffsetX * canvas.Viewport.Zoom,
                         -stock.TextOffsetY * canvas.Viewport.Zoom)),
@@ -202,15 +206,20 @@ public sealed class VisualContentLayer : ICanvasLayer
         DrawingContext context,
         CanvasRenderContext canvas,
         Rect rect,
-        StockButtonStyle style)
+        StockButtonStyle style,
+        PreviewButtonState buttonState)
     {
-        if (canvas.AssetResolver is not { } resolver || style.NormalSlices.Count != 3)
+        var slices = buttonState == PreviewButtonState.Selected ? style.DisabledSlices : style.NormalSlices;
+        if (canvas.AssetResolver is not { } resolver || slices.Count != 3)
             return false;
         var ordered = new[]
         {
-            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Left", StringComparison.Ordinal)),
-            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Middle", StringComparison.Ordinal)),
-            style.NormalSlices.FirstOrDefault(slice => slice.Name.EndsWith("Right", StringComparison.Ordinal)),
+            slices.FirstOrDefault(slice => slice.Name.EndsWith("Left", StringComparison.Ordinal)
+                                                || slice.Name.EndsWith("LeftDisabled", StringComparison.Ordinal)),
+            slices.FirstOrDefault(slice => slice.Name.EndsWith("Middle", StringComparison.Ordinal)
+                                                || slice.Name.EndsWith("MiddleDisabled", StringComparison.Ordinal)),
+            slices.FirstOrDefault(slice => slice.Name.EndsWith("Right", StringComparison.Ordinal)
+                                                || slice.Name.EndsWith("RightDisabled", StringComparison.Ordinal)),
         };
         if (ordered.Any(slice => slice is null))
             return false;
@@ -219,11 +228,13 @@ public sealed class VisualContentLayer : ICanvasLayer
             return false;
 
         var side = Math.Min(rect.Width / 2, ordered[0]!.Width * canvas.Viewport.Zoom);
+        var offsetX = ordered[0]!.OffsetX * canvas.Viewport.Zoom;
+        var offsetY = -ordered[0]!.OffsetY * canvas.Viewport.Zoom;
         var destinations = new[]
         {
-            new Rect(rect.X, rect.Y, side, rect.Height),
-            new Rect(rect.X + side, rect.Y, Math.Max(0, rect.Width - side * 2), rect.Height),
-            new Rect(rect.Right - side, rect.Y, side, rect.Height),
+            new Rect(rect.X + offsetX, rect.Y + offsetY, side, rect.Height),
+            new Rect(rect.X + side + offsetX, rect.Y + offsetY, Math.Max(0, rect.Width - side * 2), rect.Height),
+            new Rect(rect.Right - side + offsetX, rect.Y + offsetY, side, rect.Height),
         };
         for (var i = 0; i < 3; i++)
         {
@@ -341,10 +352,11 @@ public sealed class VisualContentLayer : ICanvasLayer
         string text,
         string? declaredJustifyH,
         string? declaredJustifyV,
-        StockFontStyle style)
+        StockFontStyle style,
+        ColorRgba? previewColor = null)
     {
         var size = Math.Max(1, style.Size * canvas.Viewport.Zoom);
-        var color = ToColor(style.Color);
+        var color = ToColor(previewColor ?? style.Color);
         var typeface = new Typeface(style.AvaloniaFamily, FontStyle.Normal, FontWeight.Normal);
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             typeface, size, new SolidColorBrush(color));

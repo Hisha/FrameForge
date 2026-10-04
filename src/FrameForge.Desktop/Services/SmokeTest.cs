@@ -15,6 +15,7 @@ using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Templates;
 using FrameForge.Desktop.ViewModels;
@@ -419,6 +420,13 @@ public static class SmokeTest
                 Check("Preview toolbar updates the view model", vm.ViewMode == CanvasViewMode.PREVIEW);
                 Check("Preview toolbar updates the canvas", canvas.Mode == CanvasViewMode.PREVIEW);
             }
+
+            var previewStateSelector = window.FindControl<ComboBox>("PreviewStateSelector");
+            Check("design-time Preview State selector exists", previewStateSelector is not null);
+            Check("Native Hunts exposes XML Defaults plus four evidence-backed states",
+                vm.PreviewStateOptions.Select(state => state.Label).SequenceEqual(
+                    new[] { "XML Defaults", "Idle", "Standard Hunt", "Elite Hunt", "Hunt Complete" }),
+                string.Join(", ", vm.PreviewStateOptions.Select(state => state.Label)));
 
             var hiddenToggle = window.GetVisualDescendants()
                 .OfType<CheckBox>()
@@ -964,6 +972,92 @@ public static class SmokeTest
                 Console.WriteLine($"SMOKE_NATIVE_TEMPLATES {{\"template\":\"{StockTemplateResolver.TabTemplate}\"," +
                                   $"\"fonts\":6,\"phase5bPixelDifference\":{phase5bPixelDifference}," +
                                   $"\"screenshot\":\"{nativePreviewOutput}\"}}");
+
+            if (!string.IsNullOrWhiteSpace(wowClient))
+            {
+                var stateDirectory = Environment.GetEnvironmentVariable("FRAMEFORGE_PREVIEW_STATE_DIR")
+                                     ?? "/tmp/frameforge-phase5c-states";
+                Directory.CreateDirectory(stateDirectory);
+                var projectBeforeStates = ProjectCodec.Serialize(vm.Project);
+                var stateBitmaps = new Dictionary<string, RenderTargetBitmap>(StringComparer.Ordinal);
+
+                // XML Defaults intentionally uses Hidden ON: this reproduces the accepted Phase 5B
+                // static-design view. Runtime states use Hidden OFF so their effective visibility,
+                // rather than the inspection override, decides what appears.
+                var xmlDefaultsPath = Path.Combine(stateDirectory, "xml-defaults.png");
+                realPreview.Save(xmlDefaultsPath, new PngBitmapEncoderOptions());
+                Check("XML Defaults has no design-time overrides", vm.ActivePreviewOverrides.Overrides.Count == 0);
+                Check("XML Defaults screenshot written", File.Exists(xmlDefaultsPath), xmlDefaultsPath);
+
+                vm.SetCategoryVisible(VisibilityFilter.HIDDEN, false);
+                foreach (var state in vm.PreviewStateOptions.Where(state => !state.IsXmlDefaults))
+                {
+                    vm.SelectedPreviewState = state;
+                    window.SyncCanvas();
+                    canvas.FitToContent();
+                    canvas.InvalidateVisual();
+                    await PumpAsync(2);
+                    var stateBitmap = new RenderTargetBitmap(
+                        new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                        new Vector(96, 96));
+                    stateBitmap.Render(canvas);
+                    var path = Path.Combine(stateDirectory, state.Id + ".png");
+                    stateBitmap.Save(path, new PngBitmapEncoderOptions());
+                    stateBitmaps[state.Id] = stateBitmap;
+                    Check($"{state.Label} screenshot renders non-blank design-time content",
+                        CountNonBackgroundPixels(stateBitmap) > 1000, path);
+                    Check($"{state.Label} screenshot written", File.Exists(path), path);
+                }
+
+                var idleProject = vm.PreviewStateOptions.Single(state => state.Id == "idle");
+                vm.SelectedPreviewState = idleProject;
+                Check("Idle shows the real no-active-hunt and record presentation",
+                    vm.Layout.Frames["NativeHuntsFrameContentPanelIdle"].EffectiveVisible
+                    && vm.Layout.Frames["NativeHuntsFrameContentPanelRecord"].EffectiveVisible
+                    && !vm.Layout.Frames["NativeHuntsFrameContentPanelIdentity"].EffectiveVisible
+                    && vm.PresentationProject.Find("NativeHuntsFrameContentPanelIdleState")?.Visual?.Text?.Text == "NO ACTIVE HUNT"
+                    && vm.PresentationProject.Find("NativeHuntsFrameContentPanelRecordSeals")?.Visual?.Text?.Text == "3");
+
+                vm.SelectedPreviewState = vm.PreviewStateOptions.Single(state => state.Id == "standard-hunt");
+                vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelIdentityIcon");
+                Check("preview inspector identifies runtime-selected Standard icon provenance",
+                    vm.Editor.VisualLines.Any(line => line.Contains("preview override: Standard Hunt", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("hunt_icon_standard.tga", StringComparison.Ordinal))
+                    && vm.Editor.VisualLines.Any(line => line.Contains("runtime-selected", StringComparison.Ordinal)),
+                    string.Join(" | ", vm.Editor.VisualLines));
+                Check("Standard Hunt applies a partial 0..100 progress value",
+                    vm.PresentationProject.Find("NativeHuntsFrameContentPanelHuntStateProgress")?.Visual?.StatusBar?.DefaultFraction == .6);
+                Check("Standard and Elite produce materially different icon pixels",
+                    CountPixelsChanged(stateBitmaps["standard-hunt"], stateBitmaps["elite-hunt"]) > 100,
+                    $"{CountPixelsChanged(stateBitmaps["standard-hunt"], stateBitmaps["elite-hunt"])} changed pixels");
+                Check("Idle and active-hunt presentations differ materially",
+                    CountPixelsChanged(stateBitmaps["idle"], stateBitmaps["standard-hunt"]) > 1000);
+                Check("complete and tracking presentations differ materially",
+                    CountPixelsChanged(stateBitmaps["hunt-complete"], stateBitmaps["standard-hunt"]) > 500);
+
+                vm.SelectedPreviewState = vm.PreviewStateOptions.Single(state => state.IsXmlDefaults);
+                vm.SetCategoryVisible(VisibilityFilter.HIDDEN, true);
+                vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelHuntStateProgress");
+                window.SyncCanvas();
+                canvas.FitToContent();
+                canvas.InvalidateVisual();
+                await PumpAsync(2);
+                var restoredDefaults = new RenderTargetBitmap(realPreview.PixelSize, new Vector(96, 96));
+                restoredDefaults.Render(canvas);
+                Check("returning to XML Defaults restores the exact Phase 5B pixels",
+                    CountPixelsChanged(realPreview, restoredDefaults) == 0,
+                    $"{CountPixelsChanged(realPreview, restoredDefaults)} changed pixels");
+                Check("preview-state switching never mutates or serializes the source project",
+                    ProjectCodec.Serialize(vm.Project) == projectBeforeStates
+                    && !projectBeforeStates.Contains("standard-hunt", StringComparison.Ordinal)
+                    && !projectBeforeStates.Contains("hunt_icon_standard", StringComparison.Ordinal));
+                foreach (var stateImage in stateBitmaps.Values)
+                    stateImage.Dispose();
+                restoredDefaults.Dispose();
+                Console.WriteLine($"SMOKE_PREVIEW_STATES {{\"directory\":\"{stateDirectory}\"," +
+                                  $"\"states\":5,\"xmlDefaultsExact\":true," +
+                                  $"\"standardProgress\":60,\"eliteProgress\":65}}");
+            }
         }
 
         // 10. The Open picker contract. Last, because re-opening replaces vm's project.

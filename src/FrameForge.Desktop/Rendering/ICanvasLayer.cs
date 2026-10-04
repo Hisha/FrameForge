@@ -4,6 +4,7 @@ using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Rendering;
@@ -65,7 +66,8 @@ public sealed record CanvasRenderContext(
     IReadOnlyList<DrawableFrame> VisibleFrames,
     CanvasRenderDiagnostics Diagnostics,
     ITextureAssetResolver? AssetResolver = null,
-    IStockTemplateResolver? StockTemplates = null)
+    IStockTemplateResolver? StockTemplates = null,
+    PreviewOverrideSet? PreviewOverrides = null)
 {
     /// <summary>The screen (UIParent) rectangle in canvas pixels.</summary>
     public CanvasBox ScreenBox => Viewport.RectToCanvas(LayoutResolver.ScreenRect(Project?.Screen ?? Screen.Default), Origin);

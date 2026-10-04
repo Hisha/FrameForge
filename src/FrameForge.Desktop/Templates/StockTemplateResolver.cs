@@ -44,6 +44,8 @@ public sealed record StockTextureSlice(
     string File,
     double Width,
     double Height,
+    double OffsetX,
+    double OffsetY,
     TexCoords TexCoords,
     string Source);
 
@@ -52,6 +54,7 @@ public sealed record StockButtonStyle(
     double DeclaredWidth,
     double Height,
     string FontStyle,
+    string SelectedFontStyle,
     double TextOffsetX,
     double TextOffsetY,
     IReadOnlyList<StockTextureSlice> NormalSlices,
@@ -178,6 +181,9 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
         var width = Number(size, "x") ?? Number(Child(size, "AbsDimension"), "x") ?? 0;
         var height = Number(size, "y") ?? Number(Child(size, "AbsDimension"), "y") ?? 0;
         var normalFont = Child(element, "NormalFont")?.Attribute("style")?.Value ?? "GameFontNormalSmall";
+        var selectedFont = Child(element, "DisabledFont")?.Attribute("style")?.Value
+                           ?? Child(element, "HighlightFont")?.Attribute("style")?.Value
+                           ?? normalFont;
         var buttonTextOffset = Child(Child(Child(element, "ButtonText"), "Anchors"), "Anchor")
             ?.Descendants().FirstOrDefault(item => item.Name.LocalName == "AbsDimension");
         var textOffsetX = Number(buttonTextOffset, "x") ?? 0;
@@ -206,7 +212,8 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
                      && ResolveFont(normalFont) is not null
             ? StockDefinitionStatus.FullyResolved
             : StockDefinitionStatus.PartiallyResolved;
-        return _buttons[name] = new StockButtonStyle(name, width, height, normalFont, textOffsetX, textOffsetY, normal, disabled,
+        return _buttons[name] = new StockButtonStyle(name, width, height, normalFont, selectedFont,
+            textOffsetX, textOffsetY, normal, disabled,
             highlight, provenance, status);
     }
 
@@ -466,8 +473,12 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
         var size = Child(element, "Size");
         var width = Number(size, "x") ?? Number(Child(size, "AbsDimension"), "x") ?? 0;
         var height = Number(size, "y") ?? Number(Child(size, "AbsDimension"), "y") ?? 0;
+        var offset = Child(Child(Child(element, "Anchors"), "Anchor"), "Offset");
+        var offsetDimension = Child(offset, "AbsDimension");
+        var offsetX = Number(offsetDimension, "x") ?? 0;
+        var offsetY = Number(offsetDimension, "y") ?? 0;
         var tex = Child(element, "TexCoords");
-        return new StockTextureSlice(name, file, width, height, new TexCoords(
+        return new StockTextureSlice(name, file, width, height, offsetX, offsetY, new TexCoords(
             Number(tex, "left") ?? 0, Number(tex, "right") ?? 1,
             Number(tex, "top") ?? 0, Number(tex, "bottom") ?? 1), source);
     }

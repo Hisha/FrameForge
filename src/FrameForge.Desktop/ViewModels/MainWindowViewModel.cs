@@ -9,6 +9,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.ViewModels;
@@ -40,6 +41,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         "GameFontHighlightSmall", "GameFontHighlightLarge",
     ];
     private Project _project = ProjectFactory.Empty();
+    private Project _presentationProject = ProjectFactory.Empty();
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowTitle))]
@@ -147,6 +149,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AssetSettingsStore _assetSettings;
     private readonly IWoWClientAssetProvider _wowAssets;
     private readonly IStockTemplateResolver _stockTemplates;
+    private readonly IPreviewStateRegistry _previewStates;
+    private PreviewOverrideSet _activePreviewOverrides = new(
+        PreviewStateRegistry.XmlDefaults,
+        new Dictionary<string, PreviewFrameOverride>(StringComparer.Ordinal), []);
+    private PreviewStateDefinition? _selectedPreviewState;
     private string? _assetSourcePath;
     private WowClientValidation _wowClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
         "No WoW client is configured.");
@@ -159,6 +166,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public IWoWClientAssetProvider WoWAssets => _wowAssets;
     public IStockTemplateResolver StockTemplates => _stockTemplates;
+    public PreviewOverrideSet ActivePreviewOverrides => _activePreviewOverrides;
+    public Project PresentationProject => _presentationProject;
+
+    /// <summary>States applicable to this document; definitions are built-in and never serialized.</summary>
+    public ObservableCollection<PreviewStateDefinition> PreviewStateOptions { get; } = [];
+
+    public PreviewStateDefinition? SelectedPreviewState
+    {
+        get => _selectedPreviewState;
+        set
+        {
+            if (value is null || ReferenceEquals(value, _selectedPreviewState))
+                return;
+            _selectedPreviewState = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PreviewStateExplanation));
+            RelaidOut(Project, SelectedName, $"Design-time preview state: {value.Label}. Source XML is unchanged.");
+        }
+    }
+
+    public string PreviewStateExplanation => SelectedPreviewState?.Description
+        ?? PreviewStateRegistry.XmlDefaults.Description;
 
     public string WoWClientPath => _wowClient.ClientPath ?? string.Empty;
     public string WoWClientVersion => _wowClient.Build?.ToString() ?? "Unknown";
@@ -258,17 +287,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
             option.Refresh();
     }
 
-    public MainWindowViewModel() : this(null, null, null)
+    public MainWindowViewModel() : this(null, null, null, null)
     {
     }
 
     public MainWindowViewModel(string? settingsPath, IWoWClientAssetProvider? wowAssets = null,
-        IStockTemplateResolver? stockTemplates = null)
+        IStockTemplateResolver? stockTemplates = null, IPreviewStateRegistry? previewStates = null)
     {
         _assetSettings = new AssetSettingsStore(settingsPath
             ?? Environment.GetEnvironmentVariable("FRAMEFORGE_SETTINGS_PATH"));
         _wowAssets = wowAssets ?? new WoWClientAssetProvider();
         _stockTemplates = stockTemplates ?? new StockTemplateResolver(_wowAssets);
+        _previewStates = previewStates ?? new PreviewStateRegistry();
         var configuration = _assetSettings.LoadConfiguration();
         foreach (var root in configuration.AssetRoots)
             AssetRoots.Add(root);
@@ -278,6 +308,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
         TreeFilterOptions = [.. TreeFilters.All.Select(f => new TreeFilterOption(this, f))];
         VisibilityToggles = [.. VisibilityFilters.Toggles.Select(t => new VisibilityToggle(this, t.Label, t.Flag, t.ToolTip))];
+        RefreshPreviewStateOptions(_project);
 
         Editor = new FrameEditorViewModel((n, u, r) => ReplaceFrame(n, u, r), BuildFrameOptions, AnchorOptions,
             DescribeAsset);
@@ -395,6 +426,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         LastImport = null;
         _assetSourcePath = ResolveSourcePath(project, path);
         Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
+        RefreshPreviewStateOptions(project);
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
@@ -829,6 +861,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private IEnumerable<string> DescribeAsset(FrameDef frame)
     {
+        foreach (var line in _activePreviewOverrides.Describe(frame))
+            yield return line;
         foreach (var line in _stockTemplates.Describe(frame))
             yield return line;
         var texture = frame.Kind == FrameKind.TEXTURE ? frame.Visual?.Texture : null;
@@ -894,7 +928,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RelaidOut(Project project, string? selection, string? status)
     {
-        Layout = LayoutResolver.Resolve(_stockTemplates.ApplyEffectiveGeometry(project));
+        _activePreviewOverrides = _previewStates.Resolve(project, SelectedPreviewState?.Id);
+        var previewProject = _previewStates.Apply(project, _activePreviewOverrides);
+        _presentationProject = _stockTemplates.ApplyEffectiveGeometry(previewProject);
+        OnPropertyChanged(nameof(PresentationProject));
+        OnPropertyChanged(nameof(ActivePreviewOverrides));
+        Layout = LayoutResolver.Resolve(_presentationProject);
         RebuildTree(project);
         SelectedTreeNode = FindNode(selection);
         Editor.Refresh(project, selection);
@@ -914,6 +953,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{selection}: {Editor.ResolvedSummary}";
         else
             Status = project.IssueSummary();
+    }
+
+    private void RefreshPreviewStateOptions(Project project)
+    {
+        PreviewStateOptions.Clear();
+        foreach (var state in _previewStates.StatesFor(project))
+            PreviewStateOptions.Add(state);
+        _selectedPreviewState = PreviewStateOptions.FirstOrDefault() ?? PreviewStateRegistry.XmlDefaults;
+        OnPropertyChanged(nameof(SelectedPreviewState));
+        OnPropertyChanged(nameof(PreviewStateExplanation));
     }
 
     /// <summary>

@@ -69,7 +69,7 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm)
             return;
 
-        Canvas.Project = vm.Project;
+        Canvas.Project = vm.PresentationProject;
         Canvas.Layout = vm.Layout;
         Canvas.SelectedName = vm.SelectedName;
         Canvas.Mode = vm.ViewMode;
@@ -77,6 +77,7 @@ public partial class MainWindow : Window
         Canvas.Labels = vm.LabelPolicy;
         Canvas.AssetResolver = vm.Assets;
         Canvas.StockTemplates = vm.StockTemplates;
+        Canvas.PreviewOverrides = vm.ActivePreviewOverrides;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();

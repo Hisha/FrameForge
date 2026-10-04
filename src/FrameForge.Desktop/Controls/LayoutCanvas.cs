@@ -7,6 +7,7 @@ using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Controls;
@@ -57,6 +58,7 @@ public class LayoutCanvas : Control
     private RenderPipeline _pipeline = RenderPipeline.Default();
     private ITextureAssetResolver? _assetResolver;
     private IStockTemplateResolver? _stockTemplates;
+    private PreviewOverrideSet? _previewOverrides;
 
     /// <summary>The completed render pass's policy, drawable, layer, and visual-paint counts.</summary>
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
@@ -219,6 +221,17 @@ public class LayoutCanvas : Control
         set
         {
             _stockTemplates = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>Active non-destructive design-time values and button state.</summary>
+    public PreviewOverrideSet? PreviewOverrides
+    {
+        get => _previewOverrides;
+        set
+        {
+            _previewOverrides = value;
             InvalidateVisual();
         }
     }
@@ -386,7 +399,8 @@ public class LayoutCanvas : Control
             drawable,
             diagnostics,
             _assetResolver,
-            _stockTemplates);
+            _stockTemplates,
+            _previewOverrides);
     }
 
     /// <inheritdoc />

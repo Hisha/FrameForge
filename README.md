@@ -4,8 +4,8 @@ FrameForge is a WoW UI frame layout editor. This repository contains a clean .NE
 
 ## Current Version
 
-v0.1.0 — geometry/editor foundation, read-only FrameXML import, real local-client assets, and the
-focused Phase 5B stock template/font presentation layer.
+v0.1.0 — geometry/editor foundation, read-only FrameXML import, real local-client assets, focused
+stock template/font fidelity, and non-destructive design-time preview states.
 
 ## Architecture
 
@@ -36,6 +36,8 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
   application-managed cache populated on demand from the user's own client
 - Focused build-12340 stock-definition resolution for Native Hunts' external parent, character-tab
   template, and six `GameFont*` styles, with machine-local Friz Quadrata loading and provenance
+- Explicit design-time **XML Defaults**, **Idle**, **Standard Hunt**, **Elite Hunt**, and
+  **Hunt Complete** states, with source/effective provenance and no Lua execution or source mutation
 - Strict lossless `.fforge.json` project serialization (v1)
 - Native Hunts example included
 - **Read-only FrameXML import** (see below)
@@ -100,6 +102,8 @@ against it; the desktop smoke test also imports it from disk and hashes the file
 prove it was not modified.
 
 The visual artifact roadmap is in [docs/VISUAL_RENDERING_PLAN.md](docs/VISUAL_RENDERING_PLAN.md).
+The preview-state behavior, sample-data boundary, and extension architecture are documented in
+[docs/PREVIEW_STATES.md](docs/PREVIEW_STATES.md).
 
 ## Local WoW Client Assets
 
@@ -198,9 +202,10 @@ the file-type dropdown only re-lists the current directory if the backend choose
 
 ## Current Limitations
 
-Preview uses restrained stand-ins when artwork is unresolved or unsupported and when fonts,
-templates, or Lua-driven values are unavailable. It does not execute Lua or emulate a WoW client.
-See the visual rendering plan for the remaining work.
+Preview uses restrained stand-ins when artwork is unresolved or unsupported and when fonts or
+templates are unavailable. Explicit preview states can supply inspected Lua-driven presentation
+values without executing Lua, mutating source XML, or emulating a WoW client. See the visual
+rendering plan for the remaining work.
 
 ## License
 

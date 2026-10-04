@@ -230,6 +230,15 @@
                           DisplayMemberBinding="{Binding Label}"
                           ToolTip.Tip="Which widgets get a name label on the canvas" />
 
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+                <TextBlock Classes="label" Text="Design-time state" VerticalAlignment="Center" />
+                <ComboBox x:Name="PreviewStateSelector"
+                          MinWidth="132"
+                          ItemsSource="{Binding PreviewStateOptions}"
+                          SelectedItem="{Binding SelectedPreviewState, Mode=TwoWay}"
+                          DisplayMemberBinding="{Binding Label}"
+                          ToolTip.Tip="Applies design-time values only. Source XML is unchanged." />
+
                 <Button Content="Reset" Click="OnResetViewClick"
                         ToolTip.Tip="Restore this mode's default visibility and label settings" />
             </StackPanel>

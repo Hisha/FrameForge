@@ -132,21 +132,30 @@ declared values, effective values, and source definition provenance.
 This remains a focused compatibility layer, not a general FrameXML/template runtime. Exact evidence
 and omissions are recorded in `NATIVE_HUNTS_TEMPLATE_INVENTORY.md`.
 
-## 8. Requires runtime/Lua state approximation
+## 8. Phase 5C design-time preview states
 
-Native Hunts uses Lua to choose which hidden state panel is shown, populate 13 text fields, update
-the progress bar, size/position the external parent, and change icons or button state. FrameForge
-must not execute arbitrary addon Lua.
+Phase 5C adds a generic, non-destructive preview-state layer and an evidence-backed Native Hunts
+catalog. It does not execute Lua. XML Defaults has an empty override set and reproduces the Phase 5B
+presentation; Idle, Standard Hunt, Elite Hunt, and Hunt Complete provide effective visibility,
+runtime text, runtime-selected identity icons, `0..100` status values, selected tab presentation,
+and demonstrated Lua anchor changes.
 
-Later design-time state should use explicit preview inputs: selected panel/state, sample text,
-status value, and optional externally supplied parent bounds. Defaults must be labeled as design
-samples and never serialized as facts imported from the XML.
+The imported project remains authoritative and unchanged. Overrides apply to a transient clone
+before stock effective geometry and rendering, and saving always uses the source project. The
+Inspector identifies preview provenance and labels representative content as sample data. The state
+selection is session-only, so project format v1 and older saved files remain unchanged.
+
+Native Hunts behavior is isolated in a catalog behind the generic registry; `LayoutCanvas` and
+`VisualContentLayer` contain no state-name or Native-Hunts-specific branches. Selected character
+tabs reuse the stock disabled/active atlas and selected font data already present in Blizzard's
+template. Full behavior, sample values, limits, and future-catalog guidance are in
+`PREVIEW_STATES.md`.
 
 ## 9. Recommended implementation order
 
-1. Add explicit, non-Lua preview-state controls for hidden panels, runtime text, icons, tab state,
-   and status values (Phase 5C).
-2. Retain/render additional button states only when those preview controls need them.
+1. Add another preview catalog only when a real interface and its Lua demonstrate the required
+   states (for example Native Social, AQ UI, or vendors).
+2. Add more stock button states only when an accepted preview catalog requires them.
 3. Extend stock compatibility or BLP decoding only when a real project demonstrates the need.
 
 Lua execution, broad template emulation, unsupported BLP variants, and speculative artwork remain
