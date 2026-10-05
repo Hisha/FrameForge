@@ -138,8 +138,14 @@ developer-machine absolute path is serialized and a project/XML pair can be copi
     { "id": "standard-hunt", "name": "Standard Hunt" }
   ],
   "designObjects": [
-    { "frame": "CustomPanel", "displayName": "Hunt Record", "states": ["standard-hunt"] }
-  ]
+    { "frame": "CustomPanel", "displayName": "Hunt Record", "states": ["standard-hunt"] },
+    { "frame": "TitleText", "displayName": "Title Text", "textOverride": "NATIVE HUNTS",
+      "textStyle": { "baseStyle": "GameFontNormalLarge", "size": 14,
+        "color": { "r": 1, "g": 0.82, "b": 0, "a": 1 },
+        "outline": "NONE", "shadow": true, "justifyH": "CENTER" } },
+    { "frame": "Divider", "displayName": "Divider", "designAsset": "assets/hunt_divider.png" }
+  ],
+  "designOrder": ["CustomPanel", "Divider", "TitleText"]
 }
 ```
 
@@ -149,12 +155,28 @@ it never deletes its members or changes their `parent`. An element is protected 
 canvas drag only. `expanded` is presentation state and never changes the lock. `concept` and
 `stockIdentity` identify an editor abstraction; they do not contain Blizzard XML or artwork.
 
-`designObjects` keeps user-facing names separate from internal/import identities. An absent or empty
-`states` array means **All States**; otherwise the object is visible only in the listed authored
+`designObjects` keeps user-facing names separate from internal/import identities. `textOverride`
+is visible design text applied without changing the imported/source text; null/absent means the
+source text remains active, while an empty value is an intentional blank override. `designAsset`
+is a normalized, forward-slash, project-relative path to artwork owned by the project; absolute
+paths and traversal are invalid. An absent or empty `states` array means **All States**; otherwise the object is visible only in the listed authored
 `designStates` when one is active. Authored states are independent from the read-only Native Hunts
 preview-state catalog, and neither executes Lua. Older v1 files without `editor`, or with only the
 earlier groups/locks fields, load with safe defaults, so these additive fields do not require a
 format-version bump.
+
+`textStyle` is optional DESIGN metadata for a FontString. `baseStyle` names an authentic style
+resolved from the configured build-12340 client's `Fonts.xml` and `FontStyles.xml`; it does not
+embed a font or copy a client definition. The other keys are nullable overrides. Absence inherits
+the base style, while `outline: "NONE"` and `shadow: false` explicitly disable those effects.
+Colors preserve RGBA. Older projects and imported FontStrings without this object continue using
+their declared `FontTemplate` and justification unchanged.
+
+`designOrder` lists custom DESIGN frame identities from back to front. Members of a conceptual
+`stock-framework` group are excluded: their existing source paint order stays intact and the group
+acts as the foundation beneath normal custom content. Missing or stale names are ignored; custom
+objects omitted by an older v1 project are appended deterministically in `designObjects` order.
+Changing this list never rewrites source hierarchy, strata, levels, or FrameXML provenance.
 
 ## FrameXML is never a save target
 

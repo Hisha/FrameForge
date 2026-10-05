@@ -253,14 +253,25 @@ public static class LayoutResolver
     {
         var depth = FrameHierarchy.Depths(project);
 
-        return project.Frames
+        var sourceOrder = project.Frames
             .Select((frame, index) => (frame, index))
             .OrderBy(e => depth.TryGetValue(e.frame.Name, out var d) ? d : 0)
             .ThenBy(e => StratumRank(e.frame.StratumOrDefault))
             .ThenBy(e => e.frame.LevelOrDefault)
             .ThenBy(e => e.index)
             .Select(e => e.frame.Name)
-            .ToArray();
+            .ToList();
+
+        // DESIGN objects are a composition overlay. Their editor order is explicit and does not
+        // rewrite hierarchy, strata, levels, or imported source order. A locked conceptual stock
+        // group is therefore the foundation while custom content remains safely above it.
+        var designOrder = project.Editor.EffectiveDesignOrder(project);
+        if (designOrder.Count == 0)
+            return sourceOrder;
+        var designSet = designOrder.ToHashSet(StringComparer.Ordinal);
+        sourceOrder.RemoveAll(designSet.Contains);
+        sourceOrder.AddRange(designOrder);
+        return sourceOrder;
     }
 
     /// <summary>

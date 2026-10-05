@@ -267,6 +267,7 @@ public static class ProjectCodec
 
             if (project.Editor.Groups.Count > 0 || project.Editor.LockedElements.Count > 0
                 || project.Editor.DesignObjects.Count > 0 || project.Editor.DesignStates.Count > 0
+                || project.Editor.DesignOrder.Count > 0
                 || project.Editor.ActiveDesignStateId is not null || project.Editor.Workspace != "design")
             {
                 writer.WriteStartObject("editor");
@@ -327,6 +328,19 @@ public static class ProjectCodec
                             writer.WriteString("displayName", displayName);
                         if (item.DesignAsset is { Length: > 0 } designAsset)
                             writer.WriteString("designAsset", designAsset);
+                        if (item.TextOverride is not null)
+                            writer.WriteString("textOverride", item.TextOverride);
+                        if (item.TextStyle is { } textStyle)
+                        {
+                            writer.WriteStartObject("textStyle");
+                            if (textStyle.BaseStyle is { Length: > 0 }) writer.WriteString("baseStyle", textStyle.BaseStyle);
+                            if (textStyle.Size is { } size) writer.WriteNumber("size", size);
+                            if (textStyle.Color is { } color) WriteColor(writer, "color", color);
+                            if (textStyle.Outline is { } outline) writer.WriteString("outline", outline);
+                            if (textStyle.Shadow is { } shadow) writer.WriteBoolean("shadow", shadow);
+                            if (textStyle.JustifyH is { } justifyH) writer.WriteString("justifyH", justifyH);
+                            writer.WriteEndObject();
+                        }
                         if (item.StateIds.Count > 0)
                         {
                             writer.WriteStartArray("states");
@@ -336,6 +350,13 @@ public static class ProjectCodec
                         }
                         writer.WriteEndObject();
                     }
+                    writer.WriteEndArray();
+                }
+                if (project.Editor.DesignOrder.Count > 0)
+                {
+                    writer.WriteStartArray("designOrder");
+                    foreach (var frameName in project.Editor.DesignOrder)
+                        writer.WriteStringValue(frameName);
                     writer.WriteEndArray();
                 }
                 writer.WriteEndObject();
@@ -708,6 +729,8 @@ public static class ProjectCodec
                         FrameName = frameName,
                         DisplayName = ReadOptionalString(entry, "displayName"),
                         DesignAsset = ReadOptionalString(entry, "designAsset"),
+                        TextOverride = ReadOptionalString(entry, "textOverride"),
+                        TextStyle = ReadDesignTextStyle(entry, objectPath, errors),
                         StateIds = ReadStringArray(entry, "states", objectPath, validStateIds, errors),
                     });
                 }
@@ -725,8 +748,38 @@ public static class ProjectCodec
             Groups = groups,
             DesignStates = states,
             DesignObjects = designObjects,
+            DesignOrder = ReadStringArray(editor, "designOrder", "editor", names, errors),
             ActiveDesignStateId = activeState,
             Workspace = workspace,
+        };
+    }
+
+    private static DesignTextStyleMetadata? ReadDesignTextStyle(JsonElement entry, string path, List<string> errors)
+    {
+        if (!entry.TryGetProperty("textStyle", out var style) || style.ValueKind == JsonValueKind.Null)
+            return null;
+        if (style.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{path}.textStyle must be an object.");
+            return null;
+        }
+        var outline = ReadOptionalString(style, "outline");
+        if (outline is not null and not ("NONE" or "NORMAL" or "THICK"))
+            errors.Add($"{path}.textStyle.outline must be NONE, NORMAL, or THICK.");
+        var justify = ReadOptionalString(style, "justifyH");
+        if (justify is not null and not ("LEFT" or "CENTER" or "RIGHT"))
+            errors.Add($"{path}.textStyle.justifyH must be LEFT, CENTER, or RIGHT.");
+        bool? shadow = style.TryGetProperty("shadow", out var shadowValue)
+            && shadowValue.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? shadowValue.GetBoolean() : null;
+        return new DesignTextStyleMetadata
+        {
+            BaseStyle = ReadOptionalString(style, "baseStyle"),
+            Size = ReadOptionalNumber(style, "size", $"{path}.textStyle", errors),
+            Color = ReadColor(style, "color", $"{path}.textStyle", errors),
+            Outline = outline,
+            Shadow = shadow,
+            JustifyH = justify,
         };
     }
 

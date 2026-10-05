@@ -250,17 +250,22 @@ public static class SmokeTest
 
         // 3. Inspector editing re-resolves immediately.
         vm.Editor.Width = "300";
+        vm.Editor.CommitBufferedField("width");
         Check("width edit re-resolved Content", Near(vm.Layout.Rects["Content"].Width, 300),
             $"width {vm.Layout.Rects["Content"].Width}");
         vm.Editor.Width = "296";
+        vm.Editor.CommitBufferedField("width");
         Check("width restored", Near(vm.Layout.Rects["Content"].Width, 296));
         vm.Editor.OffsetX = "0";
+        vm.Editor.CommitBufferedField("offsetX");
         var leftAtZeroOffset = vm.Layout.Rects["Content"].Left;
         vm.Editor.OffsetX = "40";
+        vm.Editor.CommitBufferedField("offsetX");
         Check("offset edit moved Content right",
             Near(vm.Layout.Rects["Content"].Left, leftAtZeroOffset + 40),
             $"left {vm.Layout.Rects["Content"].Left}, expected {leftAtZeroOffset + 40}");
         vm.Editor.OffsetX = "12";
+        vm.Editor.CommitBufferedField("offsetX");
         Check("offset restored", Near(vm.Project.Find("Content")!.OffsetX, 12));
 
         // 4. Dragging: canvas pixels -> model delta -> OFFSETS ONLY. A pixel drag only means a
@@ -526,11 +531,13 @@ public static class SmokeTest
             // Editing an imported frame must work and must not reach back into the XML.
             vm.OnCanvasSelectionRequested("LFDParentFrame");
             vm.Editor.Width = "400";
+            vm.Editor.CommitBufferedField("width");
             Check("an imported frame is editable",
                 vm.Project.Find("LFDParentFrame")!.Width == 400);
             Check("editing did not touch the source file",
                 Sha256(xmlFixture) == xmlDigestBefore);
             vm.Editor.Width = "355";
+            vm.Editor.CommitBufferedField("width");
         }
         finally
         {
@@ -1300,6 +1307,324 @@ public static class SmokeTest
                 Console.WriteLine($"SMOKE_COMPOSITION {{\"directory\":\"{usabilityDirectory}\"," +
                                   $"\"components\":11,\"group\":\"Blizzard Chrome\",\"locked\":true," +
                                   $"\"designScreenshots\":6,\"lfdStates\":4}}");
+            }
+        }
+
+        // A deterministic overlap check exercises the real rendering pipeline, not only metadata:
+        // stock green is the protected foundation, then custom A red, then custom B blue.
+        vm.Load(new Project
+        {
+            Frames =
+            [
+                new FrameDef
+                {
+                    Name = "LayerStock", Kind = FrameKind.TEXTURE, Width = 120, Height = 120,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, Color: new ColorRgba(0, 0.7, 0)) },
+                },
+                new FrameDef
+                {
+                    Name = "LayerA", Kind = FrameKind.TEXTURE, Width = 120, Height = 120,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, Color: new ColorRgba(0.9, 0, 0)) },
+                },
+                new FrameDef
+                {
+                    Name = "LayerB", Kind = FrameKind.TEXTURE, Width = 120, Height = 120,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, Color: new ColorRgba(0, 0, 0.9)) },
+                },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup
+                {
+                    Name = "Blizzard Dungeon Finder Frame", Members = ["LayerStock"], Locked = true,
+                    Concept = "stock-framework",
+                }],
+                DesignObjects =
+                [
+                    new DesignObjectMetadata { FrameName = "LayerA", DisplayName = "Custom A" },
+                    new DesignObjectMetadata { FrameName = "LayerB", DisplayName = "Custom B" },
+                ],
+                DesignOrder = ["LayerA", "LayerB"],
+            },
+        }, null, "DESIGN layer pixel acceptance.");
+        vm.SetViewMode(CanvasViewMode.PREVIEW);
+        vm.Select("LayerB");
+        window.SyncCanvas();
+        canvas.FitToContent();
+        await PumpAsync(2);
+        var overlapBox = canvas.Viewport.RectToCanvas(vm.Layout.Rects["LayerB"], canvas.Origin);
+        var overlapRegion = new Rect(overlapBox.X, overlapBox.Y, overlapBox.Width, overlapBox.Height);
+        using var blueFront = new RenderTargetBitmap(
+            new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+            new Vector(96, 96));
+        blueFront.Render(canvas);
+        var blueFrontColors = CountDominantColors(blueFront, overlapRegion);
+        vm.SendSelectedToBack();
+        window.SyncCanvas();
+        await PumpAsync(2);
+        using var redFront = new RenderTargetBitmap(blueFront.PixelSize, new Vector(96, 96));
+        redFront.Render(canvas);
+        var redFrontColors = CountDominantColors(redFront, overlapRegion);
+        Check("DESIGN overlap pixels follow custom draw-order controls",
+            blueFrontColors.Blue > blueFrontColors.Red + 100
+            && redFrontColors.Red > redFrontColors.Blue + 100
+            && CountPixelsChanged(blueFront, redFront) > 100,
+            $"blue-front={blueFrontColors.Red}/{blueFrontColors.Blue}, " +
+            $"red-front={redFrontColors.Red}/{redFrontColors.Blue}, changed={CountPixelsChanged(blueFront, redFront)}");
+        Check("Send to Back keeps custom content above locked stock",
+            vm.Layout.PaintOrder.SequenceEqual(["LayerStock", "LayerB", "LayerA"])
+            && vm.Project.Editor.IsLocked("LayerStock"),
+            string.Join(",", vm.Layout.PaintOrder));
+
+        if (vm.StockTemplates.ResolveFont("GameFontNormal") is not null)
+        {
+            var textStyleProject = new Project
+            {
+                Frames =
+                [
+                    new FrameDef
+                    {
+                        Name = "StockText", Kind = FrameKind.FONTSTRING, Width = 140, Height = 28,
+                        Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER,
+                        Visual = new FrameVisual { Text = new TextVisual("Native Hunt", "CENTER", "MIDDLE", "GameFontNormal") },
+                    },
+                    new FrameDef
+                    {
+                        Name = "CustomText", Kind = FrameKind.FONTSTRING, Width = 140, Height = 28, Visible = false,
+                        Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER,
+                        Visual = new FrameVisual { Text = new TextVisual("Native Hunt", "LEFT", "MIDDLE", null) },
+                    },
+                ],
+                Editor = new EditorMetadata
+                {
+                    Groups = [new EditorGroup { Name = "Blizzard", Members = ["StockText"], Locked = true, Concept = "stock-framework" }],
+                    DesignObjects = [new DesignObjectMetadata
+                    {
+                        FrameName = "CustomText", DisplayName = "Header Text",
+                        TextStyle = new DesignTextStyleMetadata { BaseStyle = "GameFontNormal", JustifyH = "CENTER" },
+                    }],
+                },
+            };
+            vm.Load(textStyleProject, null, "Text style pixel acceptance.");
+            vm.SetViewMode(CanvasViewMode.PREVIEW);
+            vm.Select(null);
+            window.SyncCanvas();
+            canvas.FitToContent();
+            await PumpAsync(2);
+            using var stockStyled = new RenderTargetBitmap(
+                new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                new Vector(96, 96));
+            stockStyled.Render(canvas);
+            vm.Load(textStyleProject with
+            {
+                Frames = [.. textStyleProject.Frames.Select(frame => frame.Name switch
+                {
+                    "StockText" => frame with { Visible = false },
+                    "CustomText" => frame with { Visible = true },
+                    _ => frame,
+                })],
+            }, null, "Text style pixel acceptance.");
+            vm.SetViewMode(CanvasViewMode.PREVIEW);
+            window.SyncCanvas();
+            await PumpAsync(2);
+            using var customStyled = new RenderTargetBitmap(stockStyled.PixelSize, new Vector(96, 96));
+            customStyled.Render(canvas);
+            Check("stock and DESIGN text with the same effective WoW style render consistently",
+                CountPixelsChanged(stockStyled, customStyled) == 0,
+                $"{CountPixelsChanged(stockStyled, customStyled)} differing pixels");
+        }
+
+        // Optional focused DESIGN acceptance against the real divider artwork. The source file is
+        // read-only evidence; FrameForge must copy it into a saved project's assets directory.
+        var huntDivider = Environment.GetEnvironmentVariable("FRAMEFORGE_HUNT_DIVIDER_PNG");
+        if (!string.IsNullOrWhiteSpace(huntDivider) && File.Exists(huntDivider))
+        {
+            var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(huntDivider)));
+            var designRoot = Path.Combine(Path.GetTempPath(), $"frameforge-design-asset-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(designRoot);
+            var designProject = Path.Combine(designRoot, "Native-Hunts.fforge.json");
+            try
+            {
+                const string focusedStockRoot = "LFDParentFrame";
+                const string stockTitle = "LFDHeaderText";
+                vm.Load(new Project
+                {
+                    Frames =
+                    [
+                        new FrameDef { Name = focusedStockRoot, Width = 355, Height = 440 },
+                        new FrameDef
+                        {
+                            Name = stockTitle, Parent = focusedStockRoot, Kind = FrameKind.FONTSTRING,
+                            Width = 240, Height = 24,
+                            Visual = new FrameVisual
+                            {
+                                Text = new TextVisual("LOOKING FOR DUNGEON", "CENTER", "MIDDLE", "GameFontNormalLarge"),
+                            },
+                        },
+                    ],
+                    Editor = new EditorMetadata
+                    {
+                        Groups =
+                        [
+                            new EditorGroup
+                            {
+                                Name = "Blizzard Dungeon Finder Frame", Members = [focusedStockRoot, stockTitle],
+                                Locked = true, Concept = "stock-framework",
+                            },
+                        ],
+                    },
+                }, null, "Focused DESIGN acceptance.");
+                vm.Select(focusedStockRoot);
+                Check("conceptual lock is coherent while protected",
+                    vm.SelectedElementLocked && vm.TreeRoots[0].DisplayName.StartsWith("🔒", StringComparison.Ordinal)
+                    && vm.StockFrameworkAction == "Unlock for Editing");
+                vm.SetConceptualStockExpanded(true);
+                vm.SetConceptualStockLocked(false);
+                Check("conceptual unlock is coherent and leaves expansion independent",
+                    !vm.SelectedElementLocked && vm.ConceptualStockFramework is { Expanded: true, Locked: false }
+                    && vm.TreeRoots[0].DisplayName.StartsWith("🔓", StringComparison.Ordinal)
+                    && vm.StockFrameworkAction == "Lock Blizzard Dungeon Finder Frame");
+                vm.SetConceptualStockLocked(true);
+                Check("conceptual relock restores all protected indicators",
+                    vm.SelectedElementLocked && vm.ConceptualStockFramework is { Expanded: true, Locked: true }
+                    && vm.StockFrameworkAction == "Unlock for Editing");
+
+                vm.Select(stockTitle);
+                vm.DesignNameDraft = "Title Text";
+                foreach (var typed in new[] { "N", "NA", "NAT", "NATI", "NATIV", "NATIVE", "NATIVE ", "NATIVE HUNTS" })
+                    vm.ChangeSelectedDesignText(typed);
+                Check("visible text accepts continuous multi-character editing independently from Name",
+                    vm.Project.Editor.DisplayNameFor(vm.Project.Find(stockTitle)!) == "Title Text"
+                    && vm.Project.Find(stockTitle)!.Visual?.Text?.Text == "LOOKING FOR DUNGEON"
+                    && vm.PresentationProject.Find(stockTitle)!.Visual?.Text?.Text == "NATIVE HUNTS"
+                    && vm.Project.Editor.DesignObjectFor(stockTitle)?.TextOverride == "NATIVE HUNTS",
+                    $"name={vm.Project.Editor.DisplayNameFor(vm.Project.Find(stockTitle)!)} " +
+                    $"source={vm.Project.Find(stockTitle)!.Visual?.Text?.Text} " +
+                    $"presentation={vm.PresentationProject.Find(stockTitle)!.Visual?.Text?.Text} " +
+                    $"override={vm.Project.Editor.DesignObjectFor(stockTitle)?.TextOverride} " +
+                    $"selected={vm.SelectedName} kind={vm.SelectedFrame?.Kind}");
+                vm.CopySelectedTextStyle();
+                vm.NewObjectName = "Native Hunt";
+                vm.AddDesignText();
+                var nativeHuntText = vm.SelectedName!;
+                foreach (var typed in new[] { "N", "Na", "Nat", "Nati", "Native", "Native Hunt" })
+                    vm.ChangeSelectedDesignText(typed);
+                var nativeHuntGeometry = vm.Project.Find(nativeHuntText)!;
+                vm.PasteSelectedTextStyle();
+                Check("stock style copies only its supported treatment to custom DESIGN text",
+                    vm.Project.Editor.DesignObjectFor(nativeHuntText)?.TextStyle?.BaseStyle == "GameFontNormalLarge"
+                    && vm.Project.Editor.DesignObjectFor(nativeHuntText)?.DisplayName == "Native Hunt"
+                    && vm.Project.Editor.DesignObjectFor(nativeHuntText)?.TextOverride == "Native Hunt"
+                    && vm.Project.Find(nativeHuntText) == nativeHuntGeometry
+                    && vm.SelectedTextFont.Contains("Friz Quadrata", StringComparison.Ordinal)
+                    && vm.SelectedTextEffectiveSize == "16 px");
+                foreach (var typed in new[] { "", "1", "14" }) vm.TextStyleSizeDraft = typed;
+                Check("multi-digit DESIGN text size commits at the deliberate boundary",
+                    vm.CommitTextStyleSize() && vm.SelectedTextEffectiveSize == "14 px");
+                vm.TextStyleColorDraft = "#CCFFD100";
+                Check("DESIGN RGBA override preserves alpha", vm.CommitTextStyleColor()
+                    && vm.SelectedTextEffectiveColor == "#CCFFD100");
+                vm.SelectedTextAlignment = "Right";
+                Check("focused DESIGN acceptance project saves before asset browse", vm.SaveToFile(designProject));
+                vm.NewObjectName = "Divider";
+                vm.AddDesignImage();
+                var divider = vm.SelectedName!;
+                window.SyncCanvas();
+                canvas.FitToContent();
+                await PumpAsync(2);
+                var fallback = new RenderTargetBitmap(
+                    new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                    new Vector(96, 96));
+                fallback.Render(canvas);
+
+                Check("external divider selection is classified for explicit import",
+                    vm.TryAssessDesignAssetSelection(huntDivider, out var requiresImport) && requiresImport);
+                Check("real hunt divider imports as a project-owned copy",
+                    vm.ChangeSelectedDesignImageFromFile(huntDivider, importExternal: true), vm.Status);
+                var assetReference = vm.Project.Editor.DesignObjectFor(divider)?.DesignAsset;
+                var importedPath = Path.Combine(designRoot,
+                    (assetReference ?? string.Empty).Replace('/', Path.DirectorySeparatorChar));
+                Check("real hunt divider persists a portable path",
+                    assetReference == "assets/hunt_divider.png", assetReference ?? "<null>");
+                Check("real hunt divider copy exists and decodes",
+                    File.Exists(importedPath) && vm.Assets.Resolve(assetReference).CanRender,
+                    vm.Assets.Resolve(assetReference).Diagnostic.Message);
+
+                var uncommittedWidth = vm.Project.Find(divider)!.Width;
+                foreach (var typed in new[] { "", "3", "30", "300" })
+                {
+                    vm.Editor.Width = typed;
+                    Check($"width buffer accepts intermediate '{typed}' without relayout",
+                        Near(vm.Project.Find(divider)!.Width, uncommittedWidth));
+                }
+                Check("Enter commits Width 300 once", vm.Editor.CommitBufferedField("width")
+                    && Near(vm.Project.Find(divider)!.Width, 300));
+                foreach (var typed in new[] { "", "2", "24" }) vm.Editor.Height = typed;
+                Check("LostFocus commit path accepts Height 24", vm.Editor.CommitBufferedField("height")
+                    && Near(vm.Project.Find(divider)!.Height, 24));
+                foreach (var typed in new[] { "", "-", ".", "-.", "-1", "-12", "-12.5" })
+                    vm.Editor.OffsetX = typed;
+                Check("signed decimal Offset X commits after intermediate states",
+                    vm.Editor.CommitBufferedField("offsetX") && Near(vm.Project.Find(divider)!.OffsetX, -12.5));
+                foreach (var typed in new[] { "", "4", "42" }) vm.Editor.OffsetY = typed;
+                Check("Offset Y 42 commits continuously", vm.Editor.CommitBufferedField("offsetY")
+                    && Near(vm.Project.Find(divider)!.OffsetY, 42));
+                vm.Editor.Width = "invalid";
+                Check("invalid final numeric input preserves the previous geometry",
+                    !vm.Editor.CommitBufferedField("width") && Near(vm.Project.Find(divider)!.Width, 300)
+                    && vm.Editor.ValidationMessage.Contains("must be a number", StringComparison.Ordinal));
+                vm.Editor.CancelBufferedField("width");
+                vm.DragFrame(divider, 5, -3);
+                vm.Editor.Width = "301";
+                Check("width remains editable after dragging", vm.Editor.CommitBufferedField("width"));
+                vm.Editor.OffsetX = "-11.5";
+                Check("offset remains editable after dragging", vm.Editor.CommitBufferedField("offsetX"));
+                vm.Select(stockTitle);
+                vm.Select(divider);
+                vm.Editor.Width = "300";
+                vm.Editor.CommitBufferedField("width");
+                vm.Editor.OffsetX = "-12.5";
+                vm.Editor.CommitBufferedField("offsetX");
+                Check("selection switch returns to coherent committed geometry",
+                    vm.SelectedName == divider
+                    && vm.Project.Find(divider) is { Width: 300, Height: 24, OffsetX: -12.5, OffsetY: 39 });
+                window.SyncCanvas();
+                canvas.FitToContent();
+                await PumpAsync(2);
+                var artwork = new RenderTargetBitmap(fallback.PixelSize, new Vector(96, 96));
+                artwork.Render(canvas);
+                Check("actual imported divider artwork changes canvas pixels from the gray placeholder",
+                    CountPixelsChanged(fallback, artwork) > 100,
+                    $"{CountPixelsChanged(fallback, artwork)} changed pixels");
+                fallback.Dispose();
+                artwork.Dispose();
+
+                Check("focused DESIGN project saves with imported divider", vm.SaveToFile(designProject));
+                vm.OpenFromFile(designProject);
+                vm.Select(divider);
+                Check("save/reopen keeps the real divider renderable",
+                    vm.SelectedDesignAssetReference == "assets/hunt_divider.png"
+                    && vm.Assets.Resolve(vm.SelectedDesignAssetReference).CanRender
+                    && vm.Project.Find(divider) is { Width: 300, Height: 24, OffsetX: -12.5, OffsetY: 39 });
+                Check("save/reopen keeps text override while preserving imported text provenance",
+                    vm.Project.Find(stockTitle)!.Visual?.Text?.Text == "LOOKING FOR DUNGEON"
+                    && vm.PresentationProject.Find(stockTitle)!.Visual?.Text?.Text == "NATIVE HUNTS"
+                    && vm.Project.Editor.DesignObjectFor(stockTitle)?.DisplayName == "Title Text",
+                    $"source={vm.Project.Find(stockTitle)!.Visual?.Text?.Text} " +
+                    $"presentation={vm.PresentationProject.Find(stockTitle)!.Visual?.Text?.Text} " +
+                    $"override={vm.Project.Editor.DesignObjectFor(stockTitle)?.TextOverride} " +
+                    $"name={vm.Project.Editor.DesignObjectFor(stockTitle)?.DisplayName}");
+                Check("save/reopen keeps copied WoW text style and overrides",
+                    vm.Project.Editor.DesignObjectFor(nativeHuntText)?.TextStyle is
+                    { BaseStyle: "GameFontNormalLarge", Size: 14, Color: { A: > 0.79 and < 0.81 }, JustifyH: "RIGHT" });
+                var sourceHashAfter = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(huntDivider)));
+                Check("real source divider remains byte-identical", sourceHashAfter == sourceHash,
+                    $"{sourceHash} -> {sourceHashAfter}");
+            }
+            finally
+            {
+                if (Directory.Exists(designRoot))
+                    Directory.Delete(designRoot, recursive: true);
             }
         }
 

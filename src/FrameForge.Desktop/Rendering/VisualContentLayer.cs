@@ -155,8 +155,12 @@ public sealed class VisualContentLayer : ICanvasLayer
     {
         if (text is { HasLiteralText: true })
         {
-            if (canvas.StockTemplates?.ResolveFont(text.FontTemplate) is { } style)
-                DrawStyledText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical, style,
+            var design = canvas.Project?.Editor.DesignObjectFor(frame.Name);
+            var effective = canvas.StockTemplates is { } stock
+                ? DesignTextStyleResolver.Resolve(frame.Model!, design, stock)
+                : null;
+            if (effective?.Style is { } style)
+                DrawStyledText(context, canvas, rect, text.Text!, style.JustifyH, text.JustifyVertical, style,
                     canvas.PreviewOverrides?.Find(frame.Name)?.TextColor);
             else
                 DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,

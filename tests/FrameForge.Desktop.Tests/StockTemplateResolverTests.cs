@@ -64,6 +64,38 @@ public sealed class StockTemplateResolverTests : IDisposable
     }
 
     [Fact]
+    public void Design_text_style_layers_portable_overrides_over_client_derived_base()
+    {
+        using var resolver = new StockTemplateResolver(_provider);
+        var frame = new FrameDef
+        {
+            Name = "Label", Kind = FrameKind.FONTSTRING,
+            Visual = new FrameVisual { Text = new TextVisual("Hunts", "RIGHT", FontTemplate: "GameFontNormalSmall") },
+        };
+        var design = new DesignObjectMetadata
+        {
+            FrameName = "Label",
+            TextStyle = new DesignTextStyleMetadata
+            {
+                BaseStyle = "GameFontHighlightSmall", Size = 14,
+                Color = new ColorRgba(0.2, 0.4, 0.6, 0.5), Outline = "THICK",
+                Shadow = false, JustifyH = "CENTER",
+            },
+        };
+
+        var effective = DesignTextStyleResolver.Resolve(frame, design, resolver);
+        Assert.Equal("GameFontHighlightSmall", effective.BaseStyle);
+        Assert.Equal(14, effective.Style!.Size);
+        Assert.Equal(new ColorRgba(0.2, 0.4, 0.6, 0.5), effective.Style.Color);
+        Assert.Equal("THICK", effective.Style.Outline);
+        Assert.Null(effective.Style.ShadowColor);
+        Assert.Equal("CENTER", effective.Style.JustifyH);
+        Assert.Equal(["size", "color", "outline", "shadow", "horizontal alignment"], effective.Overrides);
+        Assert.Contains(WowTextStyleCatalog.Available(resolver), item => item.Name == "GameFontNormalSmall"
+            && item.Source.EndsWith("FontStyles.xml", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Button_template_retains_nested_texture_children_expands_parent_and_applies_effective_size()
     {
         using var resolver = new StockTemplateResolver(_provider);

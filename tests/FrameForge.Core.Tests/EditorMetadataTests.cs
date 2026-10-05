@@ -1,4 +1,5 @@
 using FrameForge.Core.Import;
+using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using Xunit;
@@ -72,9 +73,18 @@ public sealed class EditorMetadataTests
                 [
                     new DesignObjectMetadata
                     {
-                        FrameName = "DesignObject", DisplayName = "Hunt Record", StateIds = ["standard"],
+                        FrameName = "DesignObject", DisplayName = "Hunt Record",
+                        TextOverride = "NATIVE HUNTS", DesignAsset = "assets/hunt_divider.png",
+                        TextStyle = new DesignTextStyleMetadata
+                        {
+                            BaseStyle = "GameFontNormalLarge", Size = 14,
+                            Color = new ColorRgba(1, 0.82, 0, 0.9), Outline = "NORMAL",
+                            Shadow = false, JustifyH = "CENTER",
+                        },
+                        StateIds = ["standard"],
                     },
                 ],
+                DesignOrder = ["DesignObject"],
                 Groups =
                 [
                     new EditorGroup
@@ -90,7 +100,37 @@ public sealed class EditorMetadataTests
         Assert.True(reopened.Ok, reopened.ErrorText);
         Assert.Equal(project, reopened.Project);
         Assert.Equal("Hunt Record", reopened.Project!.Editor.DisplayNameFor(reopened.Project.Find("DesignObject")!));
+        Assert.Equal("NATIVE HUNTS", reopened.Project.Editor.DesignObjectFor("DesignObject")!.TextOverride);
+        Assert.Equal("assets/hunt_divider.png", reopened.Project.Editor.DesignObjectFor("DesignObject")!.DesignAsset);
+        Assert.Equal(project.Editor.DesignObjectFor("DesignObject")!.TextStyle,
+            reopened.Project.Editor.DesignObjectFor("DesignObject")!.TextStyle);
         Assert.Equal(Project.FormatVersion, 1);
+    }
+
+    [Fact]
+    public void Older_design_projects_without_explicit_order_use_deterministic_design_object_order()
+    {
+        var project = new Project
+        {
+            Frames =
+            [
+                new FrameDef { Name = "Stock" },
+                new FrameDef { Name = "CustomB" },
+                new FrameDef { Name = "CustomA" },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup { Name = "Blizzard", Members = ["Stock"], Locked = true, Concept = "stock-framework" }],
+                DesignObjects =
+                [
+                    new DesignObjectMetadata { FrameName = "CustomA" },
+                    new DesignObjectMetadata { FrameName = "CustomB" },
+                ],
+            },
+        };
+
+        Assert.Equal(["CustomA", "CustomB"], project.Editor.EffectiveDesignOrder(project));
+        Assert.Equal(["Stock", "CustomA", "CustomB"], LayoutResolver.Resolve(project).PaintOrder);
     }
 
     [Fact]

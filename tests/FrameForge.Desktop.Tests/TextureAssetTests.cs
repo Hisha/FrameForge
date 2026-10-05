@@ -77,7 +77,9 @@ public sealed class TextureAssetTests : IDisposable
         resolver.Configure(xml, []);
 
         Assert.Equal(AssetResolutionStatus.Resolved, resolver.Resolve(@"Interface\NativeHunts\panel.tga").Status);
-        Assert.Equal(AssetResolutionStatus.Ambiguous, resolver.Resolve(@"Interface\NativeHunts\PANEL.TGA").Status);
+        var supportsCaseDistinctFiles = Directory.GetFiles(directory, "*.tga").Length == 2;
+        Assert.Equal(supportsCaseDistinctFiles ? AssetResolutionStatus.Ambiguous : AssetResolutionStatus.Resolved,
+            resolver.Resolve(@"Interface\NativeHunts\PANEL.TGA").Status);
     }
 
     [Fact]
@@ -116,9 +118,19 @@ public sealed class TextureAssetTests : IDisposable
     }
 
     [Theory]
+    [InlineData(@"assets\hunt_divider.png", "assets/hunt_divider.png")]
+    [InlineData("assets/hunt_divider.png", "assets/hunt_divider.png")]
+    public void Project_asset_normalization_is_portable_across_separator_styles(string reference, string expected)
+    {
+        Assert.True(TextureAssetResolver.TryNormalizeProjectAsset(reference, out var normalized, out _));
+        Assert.Equal(expected, normalized);
+    }
+
+    [Theory]
     [InlineData("../outside.png")]
     [InlineData("assets/../../outside.tga")]
     [InlineData("/absolute/image.png")]
+    [InlineData(@"C:\outside\image.png")]
     public void Project_asset_normalization_rejects_traversal_and_absolute_paths(string reference)
     {
         Assert.False(TextureAssetResolver.TryNormalizeProjectAsset(reference, out _, out _));

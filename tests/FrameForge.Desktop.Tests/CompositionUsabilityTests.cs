@@ -72,6 +72,7 @@ public sealed class CompositionUsabilityTests
         vm.DragFrame(before.Name, 20, -10);
         Assert.Equal(before, vm.Project.Find(before.Name));
         vm.Editor.OffsetX = "999";
+        vm.Editor.CommitBufferedField("offsetX");
         Assert.Equal(before.OffsetX, vm.Project.Find(before.Name)!.OffsetX);
 
         vm.GroupNameDraft = "Stock Shell";
@@ -167,13 +168,61 @@ public sealed class CompositionUsabilityTests
         Assert.Single(vm.TreeRoots);
         Assert.Equal("🔒 Blizzard Dungeon Finder Frame", vm.TreeRoots[0].DisplayName);
         Assert.True(vm.Project.Editor.IsLocked(piece.Name));
+        vm.Select(root.Name);
+        Assert.True(vm.SelectedElementLocked);
+        Assert.Equal("Unlock for Editing", vm.StockFrameworkAction);
         vm.SetConceptualStockExpanded(true);
         Assert.True(vm.ConceptualStockFramework!.Expanded);
         Assert.True(vm.ConceptualStockFramework.Locked);
-        vm.SetConceptualStockLocked(false);
+        vm.SelectedElementLocked = false;
         Assert.False(vm.Project.Editor.IsLocked(piece.Name));
-        vm.SetConceptualStockLocked(true);
+        Assert.False(vm.SelectedElementLocked);
+        Assert.Equal("🔓 Blizzard Dungeon Finder Frame", vm.TreeRoots[0].DisplayName);
+        Assert.Equal("Lock Blizzard Dungeon Finder Frame", vm.StockFrameworkAction);
+        vm.SelectedElementLocked = true;
         Assert.True(vm.Project.Editor.IsLocked(piece.Name));
+        Assert.True(vm.SelectedElementLocked);
+        Assert.Equal("Unlock for Editing", vm.StockFrameworkAction);
+        Assert.True(vm.ConceptualStockFramework.Expanded);
+    }
+
+    [Fact]
+    public void Text_name_and_visible_override_are_distinct_continuously_editable_and_preserve_source()
+    {
+        const string frameName = "LFDHeaderText";
+        var source = new FrameDef
+        {
+            Name = frameName,
+            Kind = FrameKind.FONTSTRING,
+            Width = 240,
+            Height = 24,
+            Visual = new FrameVisual { Text = new TextVisual("LOOKING FOR DUNGEON", "CENTER", "MIDDLE", "GameFontNormalLarge") },
+        };
+        var vm = ViewModel();
+        vm.Load(new Project { Frames = [source] }, null, "test");
+        vm.Select(frameName);
+
+        vm.DesignNameDraft = "Title Text";
+        foreach (var typed in new[] { "N", "NA", "NAT", "NATI", "NATIV", "NATIVE", "NATIVE ", "NATIVE HUNTS" })
+            vm.ChangeSelectedDesignText(typed);
+
+        Assert.Equal("Title Text", vm.Project.Editor.DisplayNameFor(vm.Project.Find(frameName)!));
+        Assert.Equal("LOOKING FOR DUNGEON", vm.Project.Find(frameName)!.Visual!.Text!.Text);
+        Assert.Equal("NATIVE HUNTS", vm.Project.Editor.DesignObjectFor(frameName)!.TextOverride);
+        Assert.Equal("NATIVE HUNTS", vm.PresentationProject.Find(frameName)!.Visual!.Text!.Text);
+        Assert.Equal("LOOKING FOR DUNGEON", vm.SelectedSourceText);
+        Assert.Equal("NATIVE HUNTS", vm.SelectedDesignTextOverride);
+
+        var json = ProjectCodec.Serialize(vm.Project);
+        Assert.Contains("\"textOverride\": \"NATIVE HUNTS\"", json);
+        var parsed = ProjectCodec.Parse(json);
+        Assert.True(parsed.Ok, parsed.ErrorText);
+        var reopened = ViewModel();
+        reopened.Load(parsed.Project!, null, "reopened");
+        reopened.Select(frameName);
+        Assert.Equal("NATIVE HUNTS", reopened.DesignTextDraft);
+        Assert.Equal("NATIVE HUNTS", reopened.PresentationProject.Find(frameName)!.Visual!.Text!.Text);
+        Assert.Equal("LOOKING FOR DUNGEON", reopened.Project.Find(frameName)!.Visual!.Text!.Text);
     }
 
     [Fact]
@@ -410,7 +459,7 @@ public sealed class CompositionUsabilityTests
 
             Assert.True(vm.SaveToFile(Path.Combine(projectDirectory, "Design.fforge.json")));
             Assert.False(vm.SetNewDesignImageFromFile(external));
-            Assert.Contains("inside the project directory", vm.Status);
+            Assert.Contains("outside the FrameForge project", vm.Status);
 
             vm.NewImageAsset = "../outside.png";
             vm.AddDesignImage();
@@ -461,12 +510,13 @@ public sealed class CompositionUsabilityTests
             Assert.Equal("assets/hunt_divider.png", vm.Project.Editor.DesignObjectFor(divider)!.DesignAsset);
             Assert.Equal(AssetSourceKind.ProjectRelative, vm.Assets.Resolve("assets/hunt_divider.png").SourceKind);
             Assert.Equal((7, 3), (vm.Assets.Resolve("assets/hunt_divider.png").Width, vm.Assets.Resolve("assets/hunt_divider.png").Height));
-            Assert.Equal("PNG (design source only)", vm.SelectedDesignAssetFormat);
-            Assert.Equal("Project-owned / portable", vm.SelectedDesignAssetOwnership);
+            Assert.Equal("PNG", vm.SelectedDesignAssetFormat);
+            Assert.Equal("Project-owned", vm.SelectedDesignAssetOwnership);
             Assert.Contains("future export", vm.SelectedWowExportReference);
             var stockBefore = vm.Project.Find(stock)!;
             vm.DragFrame(divider, 12, -8);
             vm.Editor.Width = "96";
+            vm.Editor.CommitBufferedField("width");
             Assert.Equal(12, vm.Project.Find(divider)!.OffsetX);
             Assert.Equal(96, vm.Project.Find(divider)!.Width);
             Assert.Equal(stockBefore, vm.Project.Find(stock));
@@ -503,6 +553,80 @@ public sealed class CompositionUsabilityTests
     }
 
     [Fact]
+    public void External_browse_imports_a_copy_collision_safely_and_never_changes_source()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"frameforge-import-assets-{Guid.NewGuid():N}");
+        var sourceDirectory = Path.Combine(root, "source");
+        var projectDirectory = Path.Combine(root, "project");
+        Directory.CreateDirectory(sourceDirectory);
+        Directory.CreateDirectory(Path.Combine(projectDirectory, "assets"));
+        var external = Path.Combine(sourceDirectory, "hunt_divider.png");
+        var originalBytes = Png(7, 3);
+        File.WriteAllBytes(external, originalBytes);
+        File.WriteAllBytes(Path.Combine(projectDirectory, "assets", "hunt_divider.png"), Png(1, 1));
+        try
+        {
+            var vm = ViewModel();
+            vm.NewProject();
+            Assert.True(vm.SaveToFile(Path.Combine(projectDirectory, "Native-Hunts.fforge.json")));
+            Assert.True(vm.TryAssessDesignAssetSelection(external, out var requiresImport));
+            Assert.True(requiresImport);
+            Assert.False(vm.SetNewDesignImageFromFile(external));
+            Assert.Contains("outside", vm.Status);
+            Assert.True(vm.SetNewDesignImageFromFile(external, importExternal: true));
+            Assert.Equal("assets/hunt_divider-2.png", vm.NewImageAsset);
+            Assert.Equal(originalBytes, File.ReadAllBytes(external));
+            Assert.Equal(originalBytes, File.ReadAllBytes(Path.Combine(projectDirectory, vm.NewImageAsset.Replace('/', Path.DirectorySeparatorChar))));
+
+            vm.NewObjectName = "Divider";
+            vm.AddDesignImage();
+            var divider = vm.SelectedName!;
+            var rendered = vm.Assets.Resolve(vm.NewImageAsset.Length == 0
+                ? vm.Project.Editor.DesignObjectFor(divider)!.DesignAsset
+                : vm.NewImageAsset);
+            Assert.True(rendered.CanRender, rendered.Diagnostic.Message);
+            Assert.Equal((7, 3), (rendered.Width, rendered.Height));
+            Assert.Contains(rendered.Texture!.Image.Bgra.Chunk(4), pixel => pixel[2] > 100 && pixel[3] > 0);
+            Assert.True(vm.SaveToFile(vm.ProjectPath));
+
+            var reopened = ViewModel();
+            reopened.OpenFromFile(vm.ProjectPath);
+            reopened.Select(divider);
+            Assert.True(reopened.Assets.Resolve("assets/hunt_divider-2.png").CanRender);
+            Assert.Equal("assets/hunt_divider-2.png", reopened.SelectedDesignAssetReference);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Browse_of_an_already_project_owned_image_uses_portable_reference_without_copy()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"frameforge-owned-asset-{Guid.NewGuid():N}");
+        var assets = Path.Combine(root, "assets");
+        Directory.CreateDirectory(assets);
+        var image = Path.Combine(assets, "hunt_divider.png");
+        File.WriteAllBytes(image, Png(4, 2));
+        try
+        {
+            var vm = ViewModel();
+            vm.NewProject();
+            Assert.True(vm.SaveToFile(Path.Combine(root, "Native-Hunts.fforge.json")));
+            Assert.True(vm.TryAssessDesignAssetSelection(image, out var requiresImport));
+            Assert.False(requiresImport);
+            Assert.True(vm.SetNewDesignImageFromFile(image));
+            Assert.Equal("assets/hunt_divider.png", vm.NewImageAsset);
+            Assert.Single(Directory.GetFiles(assets));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Missing_design_asset_reports_a_useful_diagnostic_without_crashing()
     {
         var root = Path.Combine(Path.GetTempPath(), $"frameforge-missing-asset-{Guid.NewGuid():N}");
@@ -525,6 +649,208 @@ public sealed class CompositionUsabilityTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Geometry_text_buffers_accept_multi_character_intermediate_states_and_commit_once()
+    {
+        var vm = ViewModel();
+        vm.NewProject();
+        vm.NewObjectName = "Divider";
+        vm.AddDesignImage();
+        var divider = vm.SelectedName!;
+        var initial = vm.Project.Find(divider)!;
+
+        foreach (var text in new[] { "", "3", "30", "300" })
+        {
+            vm.Editor.Width = text;
+            Assert.Equal(initial.Width, vm.Project.Find(divider)!.Width);
+            Assert.Equal(divider, vm.SelectedName);
+        }
+        Assert.True(vm.Editor.CommitBufferedField("width")); // Enter and LostFocus use this same boundary.
+        Assert.Equal(300, vm.Project.Find(divider)!.Width);
+        Assert.Equal(300, vm.Layout.Rects[divider].Width);
+
+        foreach (var text in new[] { "", "2", "24" })
+            vm.Editor.Height = text;
+        Assert.True(vm.Editor.CommitBufferedField("height"));
+
+        foreach (var text in new[] { "", "-", ".", "-.", "-1", "-12", "-12.5" })
+        {
+            vm.Editor.OffsetX = text;
+            Assert.Equal(0, vm.Project.Find(divider)!.OffsetX);
+        }
+        Assert.True(vm.Editor.CommitBufferedField("offsetX"));
+
+        foreach (var text in new[] { "", "4", "42" })
+            vm.Editor.OffsetY = text;
+        Assert.True(vm.Editor.CommitBufferedField("offsetY"));
+        Assert.Equal((300d, 24d, -12.5, 42d),
+            (vm.Project.Find(divider)!.Width, vm.Project.Find(divider)!.Height,
+             vm.Project.Find(divider)!.OffsetX, vm.Project.Find(divider)!.OffsetY));
+        Assert.Equal(divider, vm.SelectedName);
+        Assert.True(vm.Editor.HasSelection);
+
+        vm.Editor.Width = "not-a-number";
+        Assert.False(vm.Editor.CommitBufferedField("width"));
+        Assert.Equal(300, vm.Project.Find(divider)!.Width);
+        Assert.Contains("must be a number", vm.Editor.ValidationMessage);
+        Assert.Equal("not-a-number", vm.Editor.Width);
+        vm.Editor.CancelBufferedField("width");
+        Assert.Equal("300", vm.Editor.Width);
+        Assert.Empty(vm.Editor.ValidationMessage);
+
+        var json = ProjectCodec.Serialize(vm.Project);
+        var reopened = ProjectCodec.Parse(json);
+        Assert.True(reopened.Ok, reopened.ErrorText);
+        Assert.Equal((300d, 24d, -12.5, 42d),
+            (reopened.Project!.Find(divider)!.Width, reopened.Project.Find(divider)!.Height,
+             reopened.Project.Find(divider)!.OffsetX, reopened.Project.Find(divider)!.OffsetY));
+    }
+
+    [Fact]
+    public void Design_draw_order_is_deterministic_protected_and_persistent()
+    {
+        var frames = new[]
+        {
+            new FrameDef { Name = "Stock", Width = 100, Height = 100 },
+            new FrameDef { Name = "Panel", Width = 100, Height = 100 },
+            new FrameDef { Name = "Divider", Width = 100, Height = 100 },
+            new FrameDef { Name = "Paw", Width = 100, Height = 100 },
+        };
+        var vm = ViewModel();
+        vm.Load(new Project
+        {
+            Frames = frames,
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup { Name = "Blizzard", Members = ["Stock"], Locked = true, Concept = "stock-framework" }],
+                DesignObjects =
+                [
+                    new DesignObjectMetadata { FrameName = "Panel", DisplayName = "Hunt Panel" },
+                    new DesignObjectMetadata { FrameName = "Divider" },
+                    new DesignObjectMetadata { FrameName = "Paw", DisplayName = "Paw Emblem" },
+                ],
+            },
+        }, null, "test");
+
+        Assert.Equal(["Stock", "Panel", "Divider", "Paw"], vm.Layout.PaintOrder);
+        Assert.True(vm.Project.Editor.IsLocked("Stock"));
+        var stockBefore = vm.Project.Find("Stock");
+        var parentsBefore = vm.Project.Frames.Select(frame => frame.Parent).ToArray();
+
+        vm.Select("Divider");
+        vm.BringSelectedForward();
+        Assert.Equal(["Panel", "Paw", "Divider"], vm.Project.Editor.DesignOrder);
+        vm.SendSelectedBackward();
+        Assert.Equal(["Panel", "Divider", "Paw"], vm.Project.Editor.DesignOrder);
+        vm.BringSelectedToFront();
+        Assert.Equal(["Panel", "Paw", "Divider"], vm.Project.Editor.DesignOrder);
+        vm.SendSelectedToBack();
+        Assert.Equal(["Divider", "Panel", "Paw"], vm.Project.Editor.DesignOrder);
+        Assert.Equal(["Stock", "Divider", "Panel", "Paw"], vm.Layout.PaintOrder);
+        Assert.Equal(stockBefore, vm.Project.Find("Stock"));
+        Assert.Equal(parentsBefore, vm.Project.Frames.Select(frame => frame.Parent));
+        Assert.True(vm.Project.Editor.IsLocked("Stock"));
+
+        var reopened = ProjectCodec.Parse(ProjectCodec.Serialize(vm.Project));
+        Assert.True(reopened.Ok, reopened.ErrorText);
+        Assert.Equal(["Divider", "Panel", "Paw"], reopened.Project!.Editor.DesignOrder);
+        Assert.Equal(["Stock", "Divider", "Panel", "Paw"], LayoutResolver.Resolve(reopened.Project).PaintOrder);
+
+        vm.NewObjectName = "Title Text";
+        vm.AddDesignText();
+        Assert.Equal(vm.SelectedName, vm.Project.Editor.DesignOrder[^1]);
+        Assert.Equal(vm.SelectedName, vm.Layout.PaintOrder[^1]);
+        Assert.Equal("Stock", vm.Layout.PaintOrder[0]);
+    }
+
+    [Fact]
+    public void Design_has_one_editable_name_and_legacy_identity_is_inspect_only()
+    {
+        var source = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "src", "FrameForge.Desktop", "Views", "MainWindow.axaml"));
+        var xaml = File.ReadAllText(source);
+        Assert.Equal(1, xaml.Split("Text=\"{Binding DesignNameDraft, Mode=TwoWay}\"").Length - 1);
+        Assert.Contains("Text=\"{Binding Editor.Name, Mode=TwoWay}\"", xaml);
+        Assert.Contains("<Grid ColumnDefinitions=\"96,*\" IsVisible=\"{Binding IsInspectWorkspace}\">", xaml);
+    }
+
+    [Fact]
+    public void WoW_text_presets_overrides_copy_paste_and_persistence_preserve_non_style_authoring()
+    {
+        var vm = ViewModel();
+        vm.Load(new Project
+        {
+            Frames =
+            [
+                new FrameDef
+                {
+                    Name = "StockHeader", Kind = FrameKind.FONTSTRING, Width = 240, Height = 24,
+                    Visual = new FrameVisual { Text = new TextVisual("Player vs. Environment", FontTemplate: "GameFontNormal") },
+                },
+                new FrameDef
+                {
+                    Name = "NativeHunt", Kind = FrameKind.FONTSTRING, Width = 180, Height = 24, OffsetX = 7, OffsetY = 9,
+                    Visual = new FrameVisual { Text = new TextVisual("Native Hunt", "LEFT", "MIDDLE", "GameFontHighlight") },
+                },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup { Name = "Blizzard", Members = ["StockHeader"], Locked = true, Concept = "stock-framework" }],
+                DesignStates = [new DesignState { Id = "active", Name = "Active" }],
+                DesignObjects = [new DesignObjectMetadata { FrameName = "NativeHunt", DisplayName = "Header Text", StateIds = ["active"] }],
+            },
+        }, null, "test");
+
+        vm.Select("StockHeader");
+        Assert.Equal("GameFontNormal", vm.SelectedTextBaseStyle);
+        Assert.Equal("12 px", vm.SelectedTextEffectiveSize);
+        Assert.Equal("#FFFFD100", vm.SelectedTextEffectiveColor);
+        Assert.Contains("Friz Quadrata", vm.SelectedTextFont);
+        vm.CopySelectedTextStyle();
+
+        vm.Select("NativeHunt");
+        var before = vm.Project.Find("NativeHunt")!;
+        var beforeMetadata = vm.Project.Editor.DesignObjectFor("NativeHunt")!;
+        vm.PasteSelectedTextStyle();
+        var pasted = vm.Project.Editor.DesignObjectFor("NativeHunt")!;
+        Assert.Equal("GameFontNormal", pasted.TextStyle!.BaseStyle);
+        Assert.Equal(before, vm.Project.Find("NativeHunt"));
+        Assert.Equal(beforeMetadata.DisplayName, pasted.DisplayName);
+        Assert.Equal(beforeMetadata.StateIds, pasted.StateIds);
+        Assert.Equal("Native Hunt", vm.Project.Find("NativeHunt")!.Visual!.Text!.Text);
+
+        vm.SelectedTextStyle = vm.TextStyleOptions.Single(item => item.Name == "GameFontNormalLarge");
+        Assert.Equal("16 px", vm.SelectedTextEffectiveSize);
+        var committedBefore = vm.Project.Editor.DesignObjectFor("NativeHunt")!.TextStyle!.Size;
+        foreach (var text in new[] { "", "1", "16" })
+        {
+            vm.TextStyleSizeDraft = text;
+            Assert.Equal(committedBefore, vm.Project.Editor.DesignObjectFor("NativeHunt")!.TextStyle!.Size);
+        }
+        Assert.True(vm.CommitTextStyleSize());
+        vm.TextStyleColorDraft = "#804080FF";
+        Assert.True(vm.CommitTextStyleColor());
+        vm.SelectedTextOutline = "Thick";
+        vm.SelectedTextShadow = "Off";
+        vm.SelectedTextAlignment = "Right";
+        Assert.Equal("16 px", vm.SelectedTextEffectiveSize);
+        Assert.Equal("#804080FF", vm.SelectedTextEffectiveColor);
+        Assert.Equal("THICK", vm.SelectedTextEffectiveOutline);
+        Assert.Equal("None", vm.SelectedTextEffectiveShadow);
+        Assert.Equal("RIGHT", vm.SelectedTextEffectiveAlignment);
+        Assert.Contains("color", vm.SelectedTextOverrides);
+
+        var parsed = ProjectCodec.Parse(ProjectCodec.Serialize(vm.Project));
+        Assert.True(parsed.Ok, parsed.ErrorText);
+        Assert.Equal(vm.Project.Editor.DesignObjectFor("NativeHunt")!.TextStyle,
+            parsed.Project!.Editor.DesignObjectFor("NativeHunt")!.TextStyle);
+
+        vm.ResetTextStyleOverrides();
+        Assert.False(vm.Project.Editor.DesignObjectFor("NativeHunt")!.TextStyle!.HasOverrides);
+        Assert.Equal("16 px", vm.SelectedTextEffectiveSize);
+        Assert.Equal("#FFFFD100", vm.SelectedTextEffectiveColor);
     }
 
     private static void AddDesignObject(MainWindowViewModel vm, FrameKind kind)
@@ -569,7 +895,23 @@ public sealed class CompositionUsabilityTests
         public IReadOnlyList<AssetMaterializationResult> MaterializeRequired(WowClientValidation client) => [];
         public void Reload() { }
         public Project ApplyEffectiveGeometry(Project declaredProject) => declaredProject;
-        public StockFontStyle? ResolveFont(string? name) => null;
+        public StockFontStyle? ResolveFont(string? name)
+        {
+            var (size, color) = name switch
+            {
+                "GameFontNormal" => (12d, new ColorRgba(1, 0.82, 0, 1)),
+                "GameFontHighlight" => (12d, ColorRgba.White),
+                "GameFontNormalSmall" => (10d, new ColorRgba(1, 0.82, 0, 1)),
+                "GameFontHighlightSmall" => (10d, ColorRgba.White),
+                "GameFontNormalLarge" => (16d, new ColorRgba(1, 0.82, 0, 1)),
+                "GameFontHighlightLarge" => (16d, ColorRgba.White),
+                _ => (0d, default),
+            };
+            return size == 0 ? null : new StockFontStyle(name!, @"Fonts\FRIZQT__.TTF", null,
+                "Friz Quadrata TT", size, color, "CENTER", "MIDDLE", null, 1, -1,
+                new ColorRgba(0, 0, 0, 1),
+                [new StockPropertyProvenance("font style", name!, @"Interface\FrameXML\FontStyles.xml")]);
+        }
         public StockButtonStyle? ResolveButton(string? name) => name == StockTemplateResolver.TabTemplate
             ? new(name, 32, 32, "Normal", "Selected", 0, 0,
                 [new("Left", @"Interface\Tabs\InactiveTab", 16, 32, 0, 0, TexCoords.Full, "templates.xml")],

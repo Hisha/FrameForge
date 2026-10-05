@@ -47,6 +47,7 @@ public sealed record Project
         {
             Groups = Editor.Groups.Select(group => group with { Members = [.. group.Members] }).ToArray(),
             LockedElements = [.. Editor.LockedElements],
+            DesignOrder = [.. Editor.DesignOrder],
             DesignObjects = Editor.DesignObjects.Select(item => item with { StateIds = [.. item.StateIds] }).ToArray(),
             DesignStates = Editor.DesignStates.Select(item => item with { }).ToArray(),
         },
@@ -73,11 +74,15 @@ public sealed record Project
                && Editor.LockedElements.SequenceEqual(other.Editor.LockedElements)
                && Editor.Workspace == other.Editor.Workspace
                && Editor.ActiveDesignStateId == other.Editor.ActiveDesignStateId
+               && Editor.DesignOrder.SequenceEqual(other.Editor.DesignOrder)
                && Editor.DesignStates.SequenceEqual(other.Editor.DesignStates)
                && Editor.DesignObjects.Count == other.Editor.DesignObjects.Count
                && Editor.DesignObjects.Zip(other.Editor.DesignObjects).All(pair =>
                    pair.First.FrameName == pair.Second.FrameName
                    && pair.First.DisplayName == pair.Second.DisplayName
+                   && pair.First.DesignAsset == pair.Second.DesignAsset
+                   && pair.First.TextOverride == pair.Second.TextOverride
+                    && pair.First.TextStyle == pair.Second.TextStyle
                    && pair.First.StateIds.SequenceEqual(pair.Second.StateIds))
                && Editor.Groups.Count == other.Editor.Groups.Count
                && Editor.Groups.Zip(other.Editor.Groups).All(pair =>
@@ -101,6 +106,8 @@ public sealed record Project
         hash.Add(Editor.ActiveDesignStateId);
         foreach (var locked in Editor.LockedElements)
             hash.Add(locked);
+        foreach (var ordered in Editor.DesignOrder)
+            hash.Add(ordered);
         foreach (var group in Editor.Groups)
         {
             hash.Add(group.Name);
@@ -117,6 +124,9 @@ public sealed record Project
         {
             hash.Add(item.FrameName);
             hash.Add(item.DisplayName);
+            hash.Add(item.DesignAsset);
+            hash.Add(item.TextOverride);
+            hash.Add(item.TextStyle);
             foreach (var stateId in item.StateIds)
                 hash.Add(stateId);
         }

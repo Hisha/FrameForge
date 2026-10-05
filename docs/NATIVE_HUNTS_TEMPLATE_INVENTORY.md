@@ -25,6 +25,22 @@ styles, three tab atlases, and the `PanelTemplates_TabResize` function inspected
 `UIPanelTemplates.lua`. Font inheritance reaches `SystemFont_Shadow_Small`,
 `SystemFont_Shadow_Med1`, and `SystemFont_Shadow_Large`. No multiple template inheritance is needed.
 
+DESIGN's curated normal-authoring catalog adds the client-demonstrated
+`GameFontHighlightMedium`, `GameFontDisable`, `GameFontGreen`, `GameFontRed`, and
+`GameFontNormalHuge` presets without exposing the many alignment/color aliases in the complete
+internal catalog. Alignment is an explicit authoring property instead. Every offered entry must
+resolve through the same authoritative files below; no fallback-only preset is listed.
+
+| DESIGN preset | Effective build-12340 treatment | Authoritative definition |
+| --- | --- | --- |
+| `GameFontNormal` / `GameFontHighlight` | Friz 12px; gold / white; black `(1,-1)` shadow | `FontStyles.xml` → `SystemFont_Shadow_Med1` in `Fonts.xml` |
+| `GameFontNormalSmall` / `GameFontHighlightSmall` | Friz 10px; gold / white; black `(1,-1)` shadow | `FontStyles.xml` → `SystemFont_Shadow_Small` in `Fonts.xml` |
+| `GameFontNormalLarge` / `GameFontHighlightLarge` | Friz 16px; gold / white; black `(1,-1)` shadow | `FontStyles.xml` → `SystemFont_Shadow_Large` in `Fonts.xml` |
+| `GameFontHighlightMedium` | Friz 14px; white; black `(1,-1)` shadow | `FontStyles.xml` → `SystemFont_Shadow_Med3` in `Fonts.xml` |
+| `GameFontDisable` | Friz 12px; 50% gray; black `(1,-1)` shadow | `FontStyles.xml` → `GameFontNormal` |
+| `GameFontGreen` / `GameFontRed` | Friz 12px; client green / red; black `(1,-1)` shadow | `FontStyles.xml` → `GameFontNormal` |
+| `GameFontNormalHuge` | Friz 20px; gold; black `(1,-1)` shadow | `FontStyles.xml` → `SystemFont_Shadow_Huge1` in `Fonts.xml` |
+
 ## Effective client resources
 
 Archive precedence is the provider's normal low-to-high build-12340 order. The table names the

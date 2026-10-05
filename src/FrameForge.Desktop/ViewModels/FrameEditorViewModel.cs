@@ -11,8 +11,8 @@ namespace FrameForge.Desktop.ViewModels;
 /// Editable view of the selected frame.
 /// </summary>
 /// <remarks>
-/// Every setter writes back through <see cref="Commit"/>, which asks the owning view model to
-/// replace the frame and re-resolve the layout. Nothing here touches Avalonia types, and
+/// Text setters update edit buffers only. Enter or LostFocus calls <see cref="CommitBufferedField"/>,
+/// which asks the owning view model to replace the frame and re-resolve the layout once. Nothing here touches Avalonia types, and
 /// nothing here recomputes geometry itself: <see cref="Refresh"/> mirrors whatever the
 /// engine resolved.
 /// <para>
@@ -293,15 +293,6 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         }
     }
 
-    partial void OnNameChanged(string value)
-    {
-        if (Frame is null || string.IsNullOrWhiteSpace(value) || value == Frame.Name)
-            return;
-
-        // A rename must rewrite every reference to the frame, not just the frame itself.
-        Commit(Frame with { Name = value.Trim() }, rename: value.Trim());
-    }
-
     partial void OnParentChanged(FrameOption? value) => CommitField(frame => frame with { Parent = value?.Name });
 
     partial void OnRelativeToChanged(FrameOption? value) => CommitField(frame => frame with { RelativeTo = value?.Name });
@@ -315,13 +306,54 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     partial void OnSizeReferenceChanged(SizeReference value) =>
         CommitField(frame => frame with { SizeReference = value });
 
-    partial void OnWidthChanged(string value) => CommitNumber("width", value, (frame, width) => frame with { Width = width });
+    /// <summary>Commits one buffered text field at an explicit Enter/LostFocus boundary.</summary>
+    public bool CommitBufferedField(string field)
+    {
+        if (Frame is null)
+            return false;
+        return field switch
+        {
+            "name" => CommitName(),
+            "width" => CommitNumber("width", Width, (frame, value) => frame with { Width = value }),
+            "height" => CommitNumber("height", Height, (frame, value) => frame with { Height = value }),
+            "offsetX" => CommitNumber("offset X", OffsetX, (frame, value) => frame with { OffsetX = value }),
+            "offsetY" => CommitNumber("offset Y", OffsetY, (frame, value) => frame with { OffsetY = value }),
+            _ => false,
+        };
+    }
 
-    partial void OnHeightChanged(string value) => CommitNumber("height", value, (frame, height) => frame with { Height = height });
+    public void CancelBufferedField(string field)
+    {
+        if (Frame is null)
+            return;
+        switch (field)
+        {
+            case "name": Name = Frame.Name; break;
+            case "width": Width = Number(Frame.Width); break;
+            case "height": Height = Number(Frame.Height); break;
+            case "offsetX": OffsetX = Number(Frame.OffsetX); break;
+            case "offsetY": OffsetY = Number(Frame.OffsetY); break;
+        }
+        ValidationMessage = string.Empty;
+    }
 
-    partial void OnOffsetXChanged(string value) => CommitNumber("offsetX", value, (frame, x) => frame with { OffsetX = x });
-
-    partial void OnOffsetYChanged(string value) => CommitNumber("offsetY", value, (frame, y) => frame with { OffsetY = y });
+    private bool CommitName()
+    {
+        var value = Name.Trim();
+        if (value.Length == 0)
+        {
+            ValidationMessage = "name must not be empty.";
+            return false;
+        }
+        if (value == Frame!.Name)
+        {
+            ValidationMessage = string.Empty;
+            return true;
+        }
+        ValidationMessage = string.Empty;
+        Commit(Frame with { Name = value }, rename: value);
+        return true;
+    }
 
     private FrameOption? Match(string? name) =>
         FrameOptions.FirstOrDefault(o => o.Name == name) ?? (name is null ? FrameOptions.FirstOrDefault() : null);
@@ -344,22 +376,26 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         _commit(Frame.Name, updated, null);
     }
 
-    private void CommitNumber(string label, string text, Func<FrameDef, double, FrameDef> change)
+    private bool CommitNumber(string label, string text, Func<FrameDef, double, FrameDef> change)
     {
         if (Frame is null)
-            return;
+            return false;
 
         if (!TryParseNumber(text, out var value))
         {
             ValidationMessage = $"{label} must be a number.";
-            return;
+            return false;
         }
 
         if (change(Frame, value) == Frame)
-            return;
+        {
+            ValidationMessage = string.Empty;
+            return true;
+        }
 
         ValidationMessage = string.Empty;
         _commit(Frame.Name, change(Frame, value), null);
+        return true;
     }
 
     /// <summary>

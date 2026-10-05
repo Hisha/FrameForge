@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core;
 using FrameForge.Core.Examples;
@@ -36,6 +37,7 @@ namespace FrameForge.Desktop.ViewModels;
 /// </remarks>
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    private enum DesignOrderMove { Front, Forward, Backward, Back }
     private static readonly string[] NativeHuntsStockFonts =
     [
         "GameFontNormal", "GameFontHighlight", "GameFontNormalSmall", "GameFontNormalLarge",
@@ -44,6 +46,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private Project _project = ProjectFactory.Empty();
     private Project _presentationProject = ProjectFactory.Empty();
     private bool _syncingDesignUi;
+    private DesignTextStyleMetadata? _copiedTextStyle;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDesignWorkspace))]
@@ -55,6 +58,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public IReadOnlyList<WorkspaceOption> WorkspaceOptions { get; private set; } = [];
 
     [ObservableProperty] private string _designNameDraft = string.Empty;
+    [ObservableProperty] private string _designTextDraft = string.Empty;
+    [ObservableProperty] private StockTextStyleOption? _selectedTextStyle;
+    [ObservableProperty] private string _textStyleSizeDraft = string.Empty;
+    [ObservableProperty] private string _textStyleColorDraft = string.Empty;
+    [ObservableProperty] private string _selectedTextOutline = "Style default";
+    [ObservableProperty] private string _selectedTextShadow = "Style default";
+    [ObservableProperty] private string _selectedTextAlignment = "Style default";
+    [ObservableProperty] private string _textStyleValidation = string.Empty;
     [ObservableProperty] private string _newObjectName = string.Empty;
     [ObservableProperty] private string _newImageAsset = string.Empty;
     [ObservableProperty] private string _stateNameDraft = string.Empty;
@@ -74,6 +85,40 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool CanBrowseDesignAssets => ProjectPath.Length > 0;
     public bool IsDesignImageSelected => SelectedFrame?.Kind == FrameKind.TEXTURE
         && Project.Editor.DesignObjectFor(SelectedName) is not null;
+    public bool IsDesignTextSelected => SelectedFrame?.Kind == FrameKind.FONTSTRING;
+    public bool CanEditTextStyle => IsDesignTextSelected && !IsSelectionLocked;
+    public bool CanPasteTextStyle => CanEditTextStyle && _copiedTextStyle is not null;
+    public IReadOnlyList<StockTextStyleOption> TextStyleOptions { get; private set; } = [];
+    public IReadOnlyList<string> TextOutlineOptions { get; } = ["Style default", "None", "Normal", "Thick"];
+    public IReadOnlyList<string> TextShadowOptions { get; } = ["Style default", "On", "Off"];
+    public IReadOnlyList<string> TextAlignmentOptions { get; } = ["Style default", "Left", "Center", "Right"];
+    private EffectiveDesignTextStyle? SelectedEffectiveTextStyle => SelectedFrame is { Kind: FrameKind.FONTSTRING } frame
+        ? DesignTextStyleResolver.Resolve(frame, Project.Editor.DesignObjectFor(frame.Name), _stockTemplates)
+        : null;
+    public string SelectedTextBaseStyle => SelectedEffectiveTextStyle?.BaseStyle ?? "Not established by source";
+    public string SelectedTextFont => SelectedEffectiveTextStyle?.Style is { } style
+        ? $"{style.FontFamilyName ?? "host fallback"} · {style.FontReference ?? "unknown resource"}"
+        : "Unresolved";
+    public string SelectedTextEffectiveSize => SelectedEffectiveTextStyle?.Style is { } style ? $"{Number(style.Size)} px" : "Unresolved";
+    public string SelectedTextEffectiveColor => SelectedEffectiveTextStyle?.Style is { } style ? ColorHex(style.Color) : "Unresolved";
+    public string SelectedTextEffectiveOutline => SelectedEffectiveTextStyle?.Style?.Outline ?? "None";
+    public string SelectedTextEffectiveShadow => SelectedEffectiveTextStyle?.Style?.ShadowColor is { } shadow
+        ? $"{ColorHex(shadow)} at ({Number(SelectedEffectiveTextStyle.Style.ShadowX)}, {Number(SelectedEffectiveTextStyle.Style.ShadowY)})"
+        : "None";
+    public string SelectedTextEffectiveAlignment => SelectedEffectiveTextStyle?.Style?.JustifyH ?? "Unresolved";
+    public string SelectedTextOverrides => SelectedEffectiveTextStyle is { Overrides.Count: > 0 } style
+        ? string.Join(", ", style.Overrides) : "None";
+    public IBrush SelectedTextColorSwatch => SelectedEffectiveTextStyle?.Style is { } style
+        ? new SolidColorBrush(Color.FromArgb(Channel(style.Color.A), Channel(style.Color.R), Channel(style.Color.G), Channel(style.Color.B)))
+        : Brushes.Transparent;
+    public bool CanChangeDesignOrder => SelectedName is { } name
+        && !Project.Editor.IsLocked(name)
+        && Project.Editor.DesignObjectFor(name) is not null
+        && ConceptualStockFramework?.Members.Contains(name, StringComparer.Ordinal) != true;
+    public string SelectedSourceText => SelectedFrame?.Visual?.Text?.Text
+        ?? "(runtime/localized value; no literal source text)";
+    public string SelectedDesignTextOverride => Project.Editor.DesignObjectFor(SelectedName)?.TextOverride
+        ?? "(none — source/imported text is active)";
     public string SelectedDesignAssetReference =>
         Project.Editor.DesignObjectFor(SelectedName)?.DesignAsset ?? string.Empty;
     private ResolvedTextureAsset? SelectedDesignAsset => IsDesignImageSelected
@@ -86,12 +131,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string SelectedDesignAssetFormat => SelectedDesignAsset?.Format switch
     {
         TextureFileFormat.Blp => "BLP",
-        TextureFileFormat.Png => "PNG (design source only)",
+        TextureFileFormat.Png => "PNG",
         TextureFileFormat.Tga => "TGA",
         _ => "Unknown",
     };
     public string SelectedDesignAssetOwnership => SelectedDesignAsset?.SourceKind == AssetSourceKind.ProjectRelative
-        ? "Project-owned / portable"
+        ? "Project-owned"
         : "Project asset unresolved";
     public string SelectedDesignAssetDiagnostic => SelectedDesignAsset?.Diagnostic.Message ?? string.Empty;
     public string SelectedWowExportReference => "Not assigned — future export work";
@@ -276,8 +321,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool IsSelectionLocked => Project.Editor.IsLocked(SelectedName);
     public bool SelectedElementLocked
     {
-        get => SelectedName is not null && Project.Editor.LockedElements.Contains(SelectedName, StringComparer.Ordinal);
-        set => SetElementLocked(SelectedName, value);
+        get => Project.Editor.IsLocked(SelectedName);
+        set
+        {
+            if (Workspace == WorkspaceExperience.Design && IsStockFrameworkSelected)
+                SetConceptualStockLocked(value);
+            else
+                SetElementLocked(SelectedName, value);
+        }
     }
     public bool SelectedGroupLocked
     {
@@ -423,8 +474,133 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (index >= 0) values[index] = item; else values.Add(item);
         Project = Project with { Editor = Project.Editor with { DesignObjects = values } };
         IsDirty = true;
-        RebuildTree(Project);
         NotifySelectionInspection();
+    }
+
+    public void ChangeSelectedDesignText(string value)
+    {
+        if (_syncingDesignUi || SelectedFrame?.Kind != FrameKind.FONTSTRING)
+            return;
+        _syncingDesignUi = true;
+        DesignTextDraft = value;
+        _syncingDesignUi = false;
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == SelectedFrame.Name);
+        var item = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = SelectedFrame.Name };
+        item = item with { TextOverride = value };
+        if (index >= 0) values[index] = item; else values.Add(item);
+        Project = Project with { Editor = Project.Editor with { DesignObjects = values } };
+        IsDirty = true;
+        RefreshPresentation(Project);
+        NotifySelectionInspection();
+        Status = $"Changed visible text for {Project.Editor.DisplayNameFor(SelectedFrame)}. Source text is unchanged.";
+    }
+
+    partial void OnSelectedTextStyleChanged(StockTextStyleOption? value)
+    {
+        if (_syncingDesignUi || value is null || !CanEditTextStyle)
+            return;
+        SetSelectedTextStyle(new DesignTextStyleMetadata { BaseStyle = value.Name },
+            $"Applied authentic WoW style {value.Name}.");
+    }
+
+    partial void OnSelectedTextOutlineChanged(string value)
+    {
+        if (_syncingDesignUi || !CanEditTextStyle) return;
+        UpdateTextStyle(style => style with { Outline = value switch
+        {
+            "None" => "NONE", "Normal" => "NORMAL", "Thick" => "THICK", _ => null,
+        } }, "Updated text outline.");
+    }
+
+    partial void OnSelectedTextShadowChanged(string value)
+    {
+        if (_syncingDesignUi || !CanEditTextStyle) return;
+        UpdateTextStyle(style => style with { Shadow = value switch { "On" => true, "Off" => false, _ => null } },
+            "Updated text shadow.");
+    }
+
+    partial void OnSelectedTextAlignmentChanged(string value)
+    {
+        if (_syncingDesignUi || !CanEditTextStyle) return;
+        UpdateTextStyle(style => style with { JustifyH = value == "Style default" ? null : value.ToUpperInvariant() },
+            "Updated horizontal alignment.");
+    }
+
+    public bool CommitTextStyleSize()
+    {
+        if (!CanEditTextStyle || !double.TryParse(TextStyleSizeDraft, NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var size) || !double.IsFinite(size) || size <= 0)
+        {
+            TextStyleValidation = "Size must be a positive number.";
+            return false;
+        }
+        TextStyleValidation = string.Empty;
+        UpdateTextStyle(style => style with { Size = size }, "Updated text size.");
+        return true;
+    }
+
+    public bool CommitTextStyleColor()
+    {
+        if (!CanEditTextStyle || !TryParseColor(TextStyleColorDraft, out var color))
+        {
+            TextStyleValidation = "Color must be #RRGGBB or #AARRGGBB.";
+            return false;
+        }
+        TextStyleValidation = string.Empty;
+        UpdateTextStyle(style => style with { Color = color }, "Updated text color.");
+        return true;
+    }
+
+    public void CancelTextStyleField(string field) => RefreshTextStyleUi(Project, SelectedName);
+
+    public void ResetTextStyleOverrides()
+    {
+        if (!CanEditTextStyle) return;
+        var baseStyle = Project.Editor.DesignObjectFor(SelectedName)?.TextStyle?.BaseStyle
+                        ?? SelectedFrame?.Visual?.Text?.FontTemplate;
+        SetSelectedTextStyle(new DesignTextStyleMetadata { BaseStyle = baseStyle }, "Reset text overrides to the WoW style.");
+    }
+
+    public void CopySelectedTextStyle()
+    {
+        if (SelectedFrame is not { Kind: FrameKind.FONTSTRING } frame || SelectedEffectiveTextStyle?.Style is null)
+        {
+            Status = "The selected text has no determinable supported WoW style.";
+            return;
+        }
+        var existing = Project.Editor.DesignObjectFor(frame.Name)?.TextStyle;
+        _copiedTextStyle = existing ?? new DesignTextStyleMetadata
+        {
+            BaseStyle = frame.Visual?.Text?.FontTemplate,
+            JustifyH = frame.Visual?.Text?.JustifyHorizontal,
+        };
+        OnPropertyChanged(nameof(CanPasteTextStyle));
+        Status = $"Copied text style from {Project.Editor.DisplayNameFor(frame)}; text and geometry were not copied.";
+    }
+
+    public void PasteSelectedTextStyle()
+    {
+        if (!CanPasteTextStyle || _copiedTextStyle is null) return;
+        SetSelectedTextStyle(_copiedTextStyle with { }, "Pasted text style; text, name, geometry, and state membership are unchanged.");
+    }
+
+    private void UpdateTextStyle(Func<DesignTextStyleMetadata, DesignTextStyleMetadata> update, string status)
+    {
+        var current = Project.Editor.DesignObjectFor(SelectedName)?.TextStyle
+                      ?? new DesignTextStyleMetadata { BaseStyle = SelectedFrame?.Visual?.Text?.FontTemplate };
+        SetSelectedTextStyle(update(current), status);
+    }
+
+    private void SetSelectedTextStyle(DesignTextStyleMetadata style, string status)
+    {
+        if (SelectedName is not { } name) return;
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == name);
+        var item = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = name };
+        item = item with { TextStyle = style };
+        if (index >= 0) values[index] = item; else values.Add(item);
+        UpdateEditor(Project.Editor with { DesignObjects = values }, status);
     }
 
     partial void OnActiveDesignStateChanged(DesignStateChoice? value)
@@ -467,6 +643,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ?? Environment.GetEnvironmentVariable("FRAMEFORGE_SETTINGS_PATH"));
         _wowAssets = wowAssets ?? new WoWClientAssetProvider();
         _stockTemplates = stockTemplates ?? new StockTemplateResolver(_wowAssets);
+        TextStyleOptions = WowTextStyleCatalog.Available(_stockTemplates);
         _previewStates = previewStates ?? new PreviewStateRegistry();
         var configuration = _assetSettings.LoadConfiguration();
         foreach (var root in configuration.AssetRoots)
@@ -910,6 +1087,47 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void AddDesignText() => AddDesignObject(FrameKind.FONTSTRING, "Text");
     public void AddDesignImage() => AddDesignObject(FrameKind.TEXTURE, "Image");
 
+    public void BringSelectedToFront() => MoveSelectedDesignObject(DesignOrderMove.Front);
+    public void BringSelectedForward() => MoveSelectedDesignObject(DesignOrderMove.Forward);
+    public void SendSelectedBackward() => MoveSelectedDesignObject(DesignOrderMove.Backward);
+    public void SendSelectedToBack() => MoveSelectedDesignObject(DesignOrderMove.Back);
+
+    private void MoveSelectedDesignObject(DesignOrderMove move)
+    {
+        if (!CanChangeDesignOrder || SelectedName is not { } name)
+            return;
+        var order = Project.Editor.EffectiveDesignOrder(Project).ToList();
+        var index = order.IndexOf(name);
+        if (index < 0)
+            return;
+        var target = move switch
+        {
+            DesignOrderMove.Front => order.Count - 1,
+            DesignOrderMove.Forward => Math.Min(order.Count - 1, index + 1),
+            DesignOrderMove.Backward => Math.Max(0, index - 1),
+            DesignOrderMove.Back => 0,
+            _ => index,
+        };
+        if (target == index)
+        {
+            Status = $"{Project.Editor.DisplayNameFor(Project.Find(name)!)} is already at that DESIGN layer boundary.";
+            return;
+        }
+        order.RemoveAt(index);
+        order.Insert(target, name);
+        UpdateEditor(Project.Editor with { DesignOrder = order },
+            $"Moved {Project.Editor.DisplayNameFor(Project.Find(name)!)} {DescribeMove(move)}.");
+    }
+
+    private static string DescribeMove(DesignOrderMove move) => move switch
+    {
+        DesignOrderMove.Front => "to the front",
+        DesignOrderMove.Forward => "forward one layer",
+        DesignOrderMove.Backward => "backward one layer",
+        DesignOrderMove.Back => "to the back of custom content",
+        _ => "",
+    };
+
     public bool PrepareDesignAssetBrowse()
     {
         if (CanBrowseDesignAssets)
@@ -918,9 +1136,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return false;
     }
 
-    public bool SetNewDesignImageFromFile(string path)
+    public bool SetNewDesignImageFromFile(string path, bool importExternal = false)
     {
-        if (!TryMakeProjectAssetReference(path, out var reference, out var error))
+        if (!TryMakeProjectAssetReference(path, importExternal, out var reference, out var error))
         {
             Status = error;
             return false;
@@ -930,7 +1148,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return true;
     }
 
-    public bool ChangeSelectedDesignImageFromFile(string path)
+    public bool ChangeSelectedDesignImageFromFile(string path, bool importExternal = false)
     {
         if (!IsDesignImageSelected || SelectedName is not { } name || SelectedFrame is not { } frame)
             return false;
@@ -939,7 +1157,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{name} is locked. Unlock it before changing its image.";
             return false;
         }
-        if (!TryMakeProjectAssetReference(path, out var reference, out var error))
+        if (!TryMakeProjectAssetReference(path, importExternal, out var reference, out var error))
         {
             Status = error;
             return false;
@@ -964,9 +1182,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return true;
     }
 
-    private bool TryMakeProjectAssetReference(string path, out string reference, out string error)
+    public bool TryAssessDesignAssetSelection(string path, out bool requiresImport)
+    {
+        requiresImport = false;
+        if (!TryGetProjectAssetReference(path, out _, out requiresImport, out var error))
+        {
+            Status = error;
+            return false;
+        }
+        return true;
+    }
+
+    private bool TryMakeProjectAssetReference(string path, bool importExternal,
+        out string reference, out string error)
+    {
+        if (!TryGetProjectAssetReference(path, out reference, out var requiresImport, out error))
+            return false;
+        if (!requiresImport)
+            return true;
+        if (!importExternal)
+        {
+            reference = string.Empty;
+            error = "This image is outside the FrameForge project. Import a copy into this project's assets folder?";
+            return false;
+        }
+
+        return TryImportProjectAsset(path, out reference, out error);
+    }
+
+    private bool TryGetProjectAssetReference(string path, out string reference,
+        out bool requiresImport, out string error)
     {
         reference = string.Empty;
+        requiresImport = false;
         error = string.Empty;
         if (!PrepareDesignAssetBrowse())
         {
@@ -978,21 +1226,68 @@ public sealed partial class MainWindowViewModel : ObservableObject
             error = $"The selected image does not exist: {path}";
             return false;
         }
+        if (!IsSupportedDesignImage(path))
+        {
+            error = "Design images must be PNG, TGA, or BLP files.";
+            return false;
+        }
 
         var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(ProjectPath))!;
         var relative = Path.GetRelativePath(projectDirectory, Path.GetFullPath(path)).Replace('\\', '/');
         if (!TextureAssetResolver.TryNormalizeProjectAsset(relative, out reference, out var reason))
         {
-            error = $"Choose an image inside the project directory. {reason}";
-            return false;
-        }
-        if (!IsSupportedDesignImage(reference))
-        {
-            error = "Design images must be PNG, TGA, or BLP files.";
             reference = string.Empty;
-            return false;
+            requiresImport = true;
+            return true;
         }
         return true;
+    }
+
+    private bool TryImportProjectAsset(string sourcePath, out string reference, out string error)
+    {
+        reference = string.Empty;
+        error = string.Empty;
+        try
+        {
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(ProjectPath))!;
+            var assetsDirectory = Path.Combine(projectDirectory, "assets");
+            Directory.CreateDirectory(assetsDirectory);
+            var source = Path.GetFullPath(sourcePath);
+            var stem = Path.GetFileNameWithoutExtension(source);
+            var extension = Path.GetExtension(source).ToLowerInvariant();
+            var destination = Path.Combine(assetsDirectory, $"{stem}{extension}");
+            var suffix = 2;
+            while (File.Exists(destination) && !FilesAreIdentical(source, destination))
+                destination = Path.Combine(assetsDirectory, $"{stem}-{suffix++}{extension}");
+            if (!File.Exists(destination))
+                File.Copy(source, destination, overwrite: false);
+            reference = Path.GetRelativePath(projectDirectory, destination).Replace('\\', '/');
+            if (!TextureAssetResolver.TryNormalizeProjectAsset(reference, out reference, out var reason))
+            {
+                error = reason!;
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                                   or NotSupportedException or PathTooLongException)
+        {
+            error = $"Could not import the selected image: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool FilesAreIdentical(string left, string right)
+    {
+        var leftInfo = new FileInfo(left);
+        var rightInfo = new FileInfo(right);
+        if (leftInfo.Length != rightInfo.Length)
+            return false;
+        using var leftStream = File.OpenRead(left);
+        using var rightStream = File.OpenRead(right);
+        var leftHash = System.Security.Cryptography.SHA256.HashData(leftStream);
+        var rightHash = System.Security.Cryptography.SHA256.HashData(rightStream);
+        return leftHash.AsSpan().SequenceEqual(rightHash);
     }
 
     private bool TryValidateDesignAssetReference(string value, out string? reference, out string error)
@@ -1037,7 +1332,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         string? parent = null;
         FrameVisual? visual = kind switch
         {
-            FrameKind.FONTSTRING => new FrameVisual { Text = new TextVisual("Text", "CENTER", "MIDDLE", null) },
+            FrameKind.FONTSTRING => new FrameVisual { Text = new TextVisual("Text", "CENTER", "MIDDLE", "GameFontNormal") },
             FrameKind.TEXTURE => new FrameVisual { Texture = new TextureVisual(
                 designAsset, TexCoords.Full, null, null, null, null) },
             _ => null,
@@ -1058,11 +1353,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
             FrameName = internalName,
             DisplayName = displayName,
             DesignAsset = kind == FrameKind.TEXTURE ? designAsset : null,
+            TextStyle = kind == FrameKind.FONTSTRING ? new DesignTextStyleMetadata { BaseStyle = "GameFontNormal" } : null,
         };
         Project = Project with
         {
             Frames = [.. Project.Frames, frame],
-            Editor = Project.Editor with { DesignObjects = [.. Project.Editor.DesignObjects, designObject] },
+            Editor = Project.Editor with
+            {
+                DesignObjects = [.. Project.Editor.DesignObjects, designObject],
+                DesignOrder = [.. Project.Editor.EffectiveDesignOrder(Project), internalName],
+            },
         };
         NewObjectName = string.Empty;
         NewImageAsset = string.Empty;
@@ -1234,6 +1534,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     Members = [.. group.Members.Where(item => item != name)],
                 })],
                 DesignObjects = [.. Project.Editor.DesignObjects.Where(item => item.FrameName != name)],
+                DesignOrder = [.. Project.Editor.DesignOrder.Where(item => item != name)],
             },
         };
         RefreshGroups(Project);
@@ -1603,12 +1904,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 DesignObjects = [.. editor.DesignObjects.Select(item => item.FrameName == name
                     ? item with { FrameName = targetName }
                     : item)],
+                DesignOrder = [.. editor.DesignOrder.Select(item => item == name ? targetName : item)],
             };
         }
         Project = Project with { Frames = frames, Editor = editor };
         RefreshGroups(Project);
         IsDirty = true;
-        RelaidOut(Project, name, null);
+        RelaidOut(Project, targetName, null);
     }
 
     private void RelaidOut(Project project, string? selection, string? status)
@@ -1619,32 +1921,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             selection = null;
         SelectedName = selection;
 
-        _activePreviewOverrides = _previewStates.Resolve(project, SelectedPreviewState?.Id);
-        var previewProject = _previewStates.Apply(project, _activePreviewOverrides);
-        if (project.Editor.ActiveDesignStateId is { } activeState)
-        {
-            previewProject = previewProject with
-            {
-                Frames = [.. previewProject.Frames.Select(frame =>
-                {
-                    var membership = project.Editor.DesignObjectFor(frame.Name)?.StateIds ?? [];
-                    return membership.Count == 0 || membership.Contains(activeState, StringComparer.Ordinal)
-                        ? frame
-                        : frame with { Visible = false };
-                })],
-            };
-        }
-        _presentationProject = _stockTemplates.ApplyEffectiveGeometry(previewProject);
-        OnPropertyChanged(nameof(PresentationProject));
-        OnPropertyChanged(nameof(ActivePreviewOverrides));
-        Layout = LayoutResolver.Resolve(_presentationProject);
-        var conceptualStock = project.Editor.Groups.Where(group => group.Concept == "stock-framework")
-            .SelectMany(group => group.Members).ToHashSet(StringComparer.Ordinal);
-        _elementOrigins = project.Frames.ToDictionary(frame => frame.Name,
-            frame => conceptualStock.Contains(frame.Name)
-                ? ElementOrigin.BlizzardStock
-                : _originClassifier.Classify(frame, _activePreviewOverrides), StringComparer.Ordinal);
-        RefreshOriginSets();
+        RefreshPresentation(project);
         RebuildTree(project);
         SelectedTreeNode = FindNode(selection);
         Editor.Refresh(project, selection);
@@ -1654,6 +1931,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshComposition(selection);
         _syncingDesignUi = true;
         DesignNameDraft = selection is null ? string.Empty : project.Editor.DisplayNameFor(project.Find(selection)!);
+        DesignTextDraft = selection is null
+            ? string.Empty
+            : project.Editor.DesignObjectFor(selection)?.TextOverride
+              ?? project.Find(selection)?.Visual?.Text?.Text
+              ?? string.Empty;
+        RefreshTextStyleUi(project, selection);
         _syncingDesignUi = false;
         CanvasSelectionNames.Clear();
         foreach (var name in Layout.PaintOrder)
@@ -1671,6 +1954,82 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{selection}: {Editor.ResolvedSummary}";
         else
             Status = project.IssueSummary();
+    }
+
+    private void RefreshPresentation(Project project)
+    {
+
+        _activePreviewOverrides = _previewStates.Resolve(project, SelectedPreviewState?.Id);
+        var previewProject = _previewStates.Apply(project, _activePreviewOverrides);
+        if (project.Editor.ActiveDesignStateId is { } activeState)
+        {
+            previewProject = previewProject with
+            {
+                Frames = [.. previewProject.Frames.Select(frame =>
+                {
+                    var membership = project.Editor.DesignObjectFor(frame.Name)?.StateIds ?? [];
+                    return membership.Count == 0 || membership.Contains(activeState, StringComparer.Ordinal)
+                        ? frame
+                        : frame with { Visible = false };
+                })],
+            };
+        }
+        previewProject = previewProject with
+        {
+            Frames = [.. previewProject.Frames.Select(frame =>
+            {
+                if (frame.Kind != FrameKind.FONTSTRING
+                    || project.Editor.DesignObjectFor(frame.Name)?.TextOverride is not { } textOverride)
+                    return frame;
+                var text = frame.Visual?.Text ?? new TextVisual(null);
+                return frame with
+                {
+                    Visual = (frame.Visual ?? new FrameVisual()) with { Text = text with { Text = textOverride } },
+                };
+            })],
+        };
+        _presentationProject = _stockTemplates.ApplyEffectiveGeometry(previewProject);
+        OnPropertyChanged(nameof(PresentationProject));
+        OnPropertyChanged(nameof(ActivePreviewOverrides));
+        Layout = LayoutResolver.Resolve(_presentationProject);
+        var conceptualStock = project.Editor.Groups.Where(group => group.Concept == "stock-framework")
+            .SelectMany(group => group.Members).ToHashSet(StringComparer.Ordinal);
+        _elementOrigins = project.Frames.ToDictionary(frame => frame.Name,
+            frame => conceptualStock.Contains(frame.Name)
+                ? ElementOrigin.BlizzardStock
+                : _originClassifier.Classify(frame, _activePreviewOverrides), StringComparer.Ordinal);
+        RefreshOriginSets();
+    }
+
+    private void RefreshTextStyleUi(Project project, string? selection)
+    {
+        var frame = project.Find(selection);
+        var metadata = project.Editor.DesignObjectFor(selection)?.TextStyle;
+        var effective = frame is { Kind: FrameKind.FONTSTRING }
+            ? DesignTextStyleResolver.Resolve(frame, project.Editor.DesignObjectFor(selection), _stockTemplates)
+            : null;
+        SelectedTextStyle = TextStyleOptions.FirstOrDefault(option => option.Name == effective?.BaseStyle);
+        TextStyleSizeDraft = metadata?.Size is { } size ? Number(size) : effective?.Style is { } style ? Number(style.Size) : string.Empty;
+        TextStyleColorDraft = metadata?.Color is { } color ? ColorHex(color) : effective?.Style is { } styled ? ColorHex(styled.Color) : string.Empty;
+        SelectedTextOutline = metadata?.Outline switch { "NONE" => "None", "NORMAL" => "Normal", "THICK" => "Thick", _ => "Style default" };
+        SelectedTextShadow = metadata?.Shadow switch { true => "On", false => "Off", _ => "Style default" };
+        SelectedTextAlignment = metadata?.JustifyH switch { "LEFT" => "Left", "CENTER" => "Center", "RIGHT" => "Right", _ => "Style default" };
+        TextStyleValidation = string.Empty;
+    }
+
+    private static string ColorHex(ColorRgba color) => $"#{Channel(color.A):X2}{Channel(color.R):X2}{Channel(color.G):X2}{Channel(color.B):X2}";
+    private static byte Channel(double value) => (byte)Math.Round(Math.Clamp(value, 0, 1) * 255);
+
+    private static bool TryParseColor(string value, out ColorRgba color)
+    {
+        color = default;
+        var hex = value.Trim().TrimStart('#');
+        if (hex.Length == 6) hex = "FF" + hex;
+        if (hex.Length != 8 || !uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var packed))
+            return false;
+        color = new ColorRgba(((packed >> 16) & 0xff) / 255d, ((packed >> 8) & 0xff) / 255d,
+            (packed & 0xff) / 255d, ((packed >> 24) & 0xff) / 255d);
+        return true;
     }
 
     private void RefreshComposition(string? selection)
@@ -1772,6 +2131,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsStockFrameworkSelected));
         OnPropertyChanged(nameof(StockFrameworkAction));
         OnPropertyChanged(nameof(IsDesignImageSelected));
+        OnPropertyChanged(nameof(IsDesignTextSelected));
+        OnPropertyChanged(nameof(CanEditTextStyle));
+        OnPropertyChanged(nameof(CanPasteTextStyle));
+        OnPropertyChanged(nameof(SelectedTextBaseStyle));
+        OnPropertyChanged(nameof(SelectedTextFont));
+        OnPropertyChanged(nameof(SelectedTextEffectiveSize));
+        OnPropertyChanged(nameof(SelectedTextEffectiveColor));
+        OnPropertyChanged(nameof(SelectedTextEffectiveOutline));
+        OnPropertyChanged(nameof(SelectedTextEffectiveShadow));
+        OnPropertyChanged(nameof(SelectedTextEffectiveAlignment));
+        OnPropertyChanged(nameof(SelectedTextOverrides));
+        OnPropertyChanged(nameof(SelectedTextColorSwatch));
+        OnPropertyChanged(nameof(CanChangeDesignOrder));
+        OnPropertyChanged(nameof(SelectedSourceText));
+        OnPropertyChanged(nameof(SelectedDesignTextOverride));
         OnPropertyChanged(nameof(SelectedDesignAssetReference));
         OnPropertyChanged(nameof(SelectedDesignAssetPhysicalPath));
         OnPropertyChanged(nameof(SelectedDesignAssetDimensions));
@@ -1825,6 +2199,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? project.Frames.Where(frame => !stockMembers.Contains(frame.Name)
                 && (frame.Parent is null || stockMembers.Contains(frame.Parent)))
             : FrameHierarchy.Children(project, null);
+        if (Workspace == WorkspaceExperience.Design)
+        {
+            var designRanks = project.Editor.EffectiveDesignOrder(project)
+                .Select((name, index) => (name, index))
+                .ToDictionary(item => item.name, item => item.index, StringComparer.Ordinal);
+            // DESIGN tree convention: bottom item is front, matching back-to-front paint order.
+            roots = roots.OrderBy(frame => designRanks.GetValueOrDefault(frame.Name, -1));
+        }
         foreach (var root in roots)
         {
             if (BuildNode(project, root, visible) is { } node)

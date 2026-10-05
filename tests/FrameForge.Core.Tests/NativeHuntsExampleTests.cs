@@ -120,7 +120,10 @@ public class NativeHuntsExampleTests
         using var reader = new StreamReader(stream!);
         var onDisk = reader.ReadToEnd();
 
-        Assert.Equal(ProjectCodec.Serialize(NativeHuntsExample.CreateProject()), onDisk);
+        // EmbeddedResource preserves the checkout's platform line endings. The project codec's
+        // portable output deliberately uses LF, so compare content rather than host newlines.
+        Assert.Equal(ProjectCodec.Serialize(NativeHuntsExample.CreateProject()).Replace("\r\n", "\n"),
+            onDisk.Replace("\r\n", "\n"));
         Assert.True(ProjectCodec.Parse(onDisk).Ok);
     }
 }

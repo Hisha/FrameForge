@@ -440,6 +440,60 @@
                             <StackPanel Spacing="5">
                                 <TextBlock Classes="label" Text="NAME" />
                                 <TextBox Text="{Binding DesignNameDraft, Mode=TwoWay}" />
+                                <StackPanel IsVisible="{Binding IsDesignTextSelected}" Spacing="3" Margin="0,5,0,0">
+                                    <TextBlock Classes="label" Text="TEXT" />
+                                    <TextBox Text="{Binding DesignTextDraft, Mode=OneWay}"
+                                             TextChanged="OnDesignTextChanged" />
+                                    <TextBlock Classes="label" Text="WOW TEXT STYLE" Margin="0,5,0,0" />
+                                    <ComboBox ItemsSource="{Binding TextStyleOptions}"
+                                              SelectedItem="{Binding SelectedTextStyle, Mode=TwoWay}"
+                                              IsEnabled="{Binding CanEditTextStyle}" />
+                                    <TextBlock Classes="label" Text="WoW 3.3.5a client fonts only · no font files are embedded in the project."
+                                               TextWrapping="Wrap" />
+                                    <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,3,0,0">
+                                        <TextBlock Grid.Row="0" Classes="label" Text="Font" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="mono" Text="{Binding SelectedTextFont}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="1" Classes="label" Text="Effective" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="mono"
+                                                   Text="{Binding SelectedTextEffectiveSize, StringFormat='Size: {0}'}" />
+                                        <TextBlock Grid.Row="2" Classes="label" Text="Color" />
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="5">
+                                            <Border Width="20" Height="14" BorderBrush="#8FA6B4" BorderThickness="1"
+                                                    Background="{Binding SelectedTextColorSwatch}" />
+                                            <TextBlock Classes="mono" Text="{Binding SelectedTextEffectiveColor}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="3" Classes="label" Text="Outline" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Classes="mono" Text="{Binding SelectedTextEffectiveOutline}" />
+                                        <TextBlock Grid.Row="4" Classes="label" Text="Shadow" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Classes="mono" Text="{Binding SelectedTextEffectiveShadow}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="5" Classes="label" Text="Align" />
+                                        <TextBlock Grid.Row="5" Grid.Column="1" Classes="mono" Text="{Binding SelectedTextEffectiveAlignment}" />
+                                    </Grid>
+                                    <StackPanel IsEnabled="{Binding CanEditTextStyle}" Spacing="3">
+                                        <Grid ColumnDefinitions="72,*">
+                                            <TextBlock Classes="label" Text="Size" />
+                                            <TextBox Grid.Column="1" Text="{Binding TextStyleSizeDraft, Mode=TwoWay}"
+                                                     Tag="textStyleSize" KeyDown="OnTextStyleFieldKeyDown" LostFocus="OnTextStyleFieldLostFocus" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="72,*">
+                                            <TextBlock Classes="label" Text="RGBA" />
+                                            <TextBox Grid.Column="1" Text="{Binding TextStyleColorDraft, Mode=TwoWay}"
+                                                     Tag="textStyleColor" KeyDown="OnTextStyleFieldKeyDown" LostFocus="OnTextStyleFieldLostFocus" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="72,*"><TextBlock Classes="label" Text="Outline" />
+                                            <ComboBox Grid.Column="1" ItemsSource="{Binding TextOutlineOptions}" SelectedItem="{Binding SelectedTextOutline, Mode=TwoWay}" /></Grid>
+                                        <Grid ColumnDefinitions="72,*"><TextBlock Classes="label" Text="Shadow" />
+                                            <ComboBox Grid.Column="1" ItemsSource="{Binding TextShadowOptions}" SelectedItem="{Binding SelectedTextShadow, Mode=TwoWay}" /></Grid>
+                                        <Grid ColumnDefinitions="72,*"><TextBlock Classes="label" Text="Align" />
+                                            <ComboBox Grid.Column="1" ItemsSource="{Binding TextAlignmentOptions}" SelectedItem="{Binding SelectedTextAlignment, Mode=TwoWay}" /></Grid>
+                                        <TextBlock Classes="validation" Text="{Binding TextStyleValidation}" TextWrapping="Wrap" />
+                                        <Button Content="Reset overrides to style" Click="OnResetTextStyleClick" HorizontalAlignment="Left" />
+                                    </StackPanel>
+                                    <WrapPanel Margin="0,3,0,0">
+                                        <Button Content="Copy Text Style" Click="OnCopyTextStyleClick" Margin="0,0,4,4" />
+                                        <Button Content="Paste Text Style" Click="OnPasteTextStyleClick" IsEnabled="{Binding CanPasteTextStyle}" Margin="0,0,4,4" />
+                                    </WrapPanel>
+                                </StackPanel>
                                 <StackPanel IsVisible="{Binding IsDesignImageSelected}" Spacing="3" Margin="0,5,0,0">
                                     <TextBlock Classes="label" Text="IMAGE / ASSET" />
                                     <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetReference}"
@@ -455,6 +509,17 @@
                                     <Button Content="Remove State" Click="OnRemoveSelectedStateClick" Margin="0,0,4,4" />
                                 </WrapPanel>
                                 <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
+                                <StackPanel Spacing="3" Margin="0,5,0,0" IsVisible="{Binding CanChangeDesignOrder}">
+                                    <TextBlock Classes="label" Text="DRAW ORDER" />
+                                    <WrapPanel>
+                                        <Button Content="Bring to Front" Click="OnBringToFrontClick" Margin="0,0,4,4" />
+                                        <Button Content="Bring Forward" Click="OnBringForwardClick" Margin="0,0,4,4" />
+                                        <Button Content="Send Backward" Click="OnSendBackwardClick" Margin="0,0,4,4" />
+                                        <Button Content="Send to Back" Click="OnSendToBackClick" Margin="0,0,4,4" />
+                                    </WrapPanel>
+                                    <TextBlock Classes="label" Text="DESIGN tree: bottom item is front. Locked Blizzard content remains the foundation."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
                                 <StackPanel IsVisible="{Binding IsStockFrameworkSelected}" Spacing="4" Margin="0,5,0,0">
                                     <Button Content="Expand / inspect components" Click="OnExpandStockClick" />
                                     <Button Content="Collapse components" Click="OnCollapseStockClick" />
@@ -480,10 +545,20 @@
                                 <TextBlock Classes="mono" Text="{Binding SelectedInheritance, StringFormat='Inherits: {0}'}" TextWrapping="Wrap" />
                                 <TextBlock Classes="mono" Text="{Binding SelectedPreviewProvenance}" TextWrapping="Wrap" />
                                 <TextBlock Classes="mono" Text="{Binding SelectedGroupMembership, StringFormat='Groups: {0}'}" TextWrapping="Wrap" />
+                                <StackPanel IsVisible="{Binding IsDesignTextSelected}" Spacing="2" Margin="0,5,0,0">
+                                    <TextBlock Classes="label" Text="TEXT IDENTITY" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedSourceText, StringFormat='Source/imported text: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignTextOverride, StringFormat='Design override text: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedTextBaseStyle, StringFormat='Base WoW style: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedTextFont, StringFormat='Effective font: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedTextEffectiveSize, StringFormat='Effective size: {0}'}" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedTextEffectiveColor, StringFormat='Effective color: {0}'}" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedTextOverrides, StringFormat='DESIGN overrides: {0}'}" TextWrapping="Wrap" />
+                                </StackPanel>
                                 <StackPanel IsVisible="{Binding IsDesignImageSelected}" Spacing="2" Margin="0,5,0,0">
                                     <TextBlock Classes="label" Text="DESIGN ASSET" />
-                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetReference}" TextWrapping="Wrap" />
-                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetPhysicalPath, StringFormat='Resolved: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetReference, StringFormat='Design asset: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetPhysicalPath, StringFormat='Physical path: {0}'}" TextWrapping="Wrap" />
                                     <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetDimensions, StringFormat='Dimensions: {0}'}" />
                                     <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetFormat, StringFormat='Source format: {0}'}" />
                                     <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetOwnership, StringFormat='Ownership: {0}'}" />
@@ -508,9 +583,10 @@
 
                         <Expander Header="POSITION · SIZE · ANCHOR · APPEARANCE" IsExpanded="{Binding IsDesignWorkspace}">
                         <StackPanel Spacing="2" IsEnabled="{Binding CanEditSelection}" Margin="0,6,0,0">
-                        <Grid ColumnDefinitions="96,*">
+                        <Grid ColumnDefinitions="96,*" IsVisible="{Binding IsInspectWorkspace}">
                             <TextBlock Grid.Column="0" Classes="label" Text="Name" />
-                            <TextBox Grid.Column="1" Text="{Binding Editor.Name, Mode=TwoWay}" Margin="4,0,0,4" />
+                            <TextBox Grid.Column="1" Text="{Binding Editor.Name, Mode=TwoWay}" Margin="4,0,0,4"
+                                     Tag="name" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <Grid ColumnDefinitions="96,*">
@@ -522,12 +598,14 @@
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Width" />
-                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Width, Mode=TwoWay}" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Width, Mode=TwoWay}"
+                                     Tag="width" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Height" />
-                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Height, Mode=TwoWay}" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.Height, Mode=TwoWay}"
+                                     Tag="height" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <Grid ColumnDefinitions="96,*">
@@ -560,15 +638,19 @@
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Offset X" />
-                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetX, Mode=TwoWay}" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetX, Mode=TwoWay}"
+                                     Tag="offsetX" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Offset Y" />
-                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetY, Mode=TwoWay}" />
+                            <TextBox Grid.Column="1" Margin="4,0,0,4" Text="{Binding Editor.OffsetY, Mode=TwoWay}"
+                                     Tag="offsetY" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <CheckBox Margin="4,4,0,4" Content="Visible" IsChecked="{Binding Editor.IsVisible, Mode=TwoWay}" />
+                        <TextBlock Classes="label" Foreground="#E06C6C" Text="{Binding Editor.ValidationMessage}"
+                                   TextWrapping="Wrap" Margin="4,2,0,4" />
                         </StackPanel>
                         </Expander>
 

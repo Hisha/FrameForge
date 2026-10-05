@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using FrameForge.Core.Serialization;
@@ -95,28 +96,95 @@ public partial class MainWindow : Window
     private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
     private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
     private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();
+    private void OnBringToFrontClick(object? sender, RoutedEventArgs e) => ViewModel?.BringSelectedToFront();
+    private void OnBringForwardClick(object? sender, RoutedEventArgs e) => ViewModel?.BringSelectedForward();
+    private void OnSendBackwardClick(object? sender, RoutedEventArgs e) => ViewModel?.SendSelectedBackward();
+    private void OnSendToBackClick(object? sender, RoutedEventArgs e) => ViewModel?.SendSelectedToBack();
+
+    private void OnBufferedEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not TextBox { Tag: string field })
+            return;
+        if (e.Key == Key.Enter)
+        {
+            vm.Editor.CommitBufferedField(field);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            vm.Editor.CancelBufferedField(field);
+            e.Handled = true;
+        }
+    }
+
+    private void OnBufferedEditorLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is TextBox { Tag: string field })
+            vm.Editor.CommitBufferedField(field);
+    }
+
+    private void OnDesignTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        // One-way display binding prevents a canvas/property refresh from writing a stale target
+        // value back into the view model mid-keystroke. Only genuine focused user input flows in.
+        if (ViewModel is { } vm && sender is TextBox { IsKeyboardFocusWithin: true } textBox)
+            vm.ChangeSelectedDesignText(textBox.Text ?? string.Empty);
+    }
+
+    private void OnTextStyleFieldKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
+        if (e.Key == Key.Enter)
+        {
+            if (field == "textStyleSize") vm.CommitTextStyleSize(); else vm.CommitTextStyleColor();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            vm.CancelTextStyleField(field);
+            e.Handled = true;
+        }
+    }
+
+    private void OnTextStyleFieldLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
+        if (field == "textStyleSize") vm.CommitTextStyleSize(); else vm.CommitTextStyleColor();
+    }
+
+    private void OnCopyTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.CopySelectedTextStyle();
+    private void OnPasteTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.PasteSelectedTextStyle();
+    private void OnResetTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.ResetTextStyleOverrides();
 
     private async void OnBrowseNewDesignImageClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is not { } vm || !vm.PrepareDesignAssetBrowse())
             return;
         if (await PickDesignImageAsync() is { } path)
-            vm.SetNewDesignImageFromFile(path);
+        {
+            var import = await ConfirmExternalAssetImportIfNeededAsync(vm, path);
+            if (import is not null)
+                vm.SetNewDesignImageFromFile(path, import.Value);
+        }
     }
 
     private async void OnChangeDesignImageClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is not { } vm || !vm.PrepareDesignAssetBrowse())
             return;
-        if (await PickDesignImageAsync() is { } path && vm.ChangeSelectedDesignImageFromFile(path))
-            Canvas.InvalidateVisual();
+        if (await PickDesignImageAsync() is { } path)
+        {
+            var import = await ConfirmExternalAssetImportIfNeededAsync(vm, path);
+            if (import is not null && vm.ChangeSelectedDesignImageFromFile(path, import.Value))
+                Canvas.InvalidateVisual();
+        }
     }
 
     private async Task<string?> PickDesignImageAsync()
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Choose project-owned design artwork",
+            Title = "Choose design artwork",
             AllowMultiple = false,
             FileTypeFilter =
             [
@@ -127,6 +195,50 @@ public partial class MainWindow : Window
             ],
         });
         return files.Count > 0 ? files[0].Path.LocalPath : null;
+    }
+
+    private async Task<bool?> ConfirmExternalAssetImportIfNeededAsync(MainWindowViewModel vm, string path)
+    {
+        if (!vm.TryAssessDesignAssetSelection(path, out var requiresImport))
+            return null;
+        if (!requiresImport)
+            return false;
+
+        bool? result = null;
+        var dialog = new Window
+        {
+            Title = "Import project asset?",
+            Width = 480,
+            Height = 210,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var cancel = new Button { Content = "Cancel", MinWidth = 88 };
+        var import = new Button { Content = "Import", MinWidth = 88 };
+        cancel.Click += (_, _) => { result = null; dialog.Close(); };
+        import.Click += (_, _) => { result = true; dialog.Close(); };
+        dialog.Content = new StackPanel
+        {
+            Margin = new Avalonia.Thickness(18),
+            Spacing = 14,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "This image is outside the FrameForge project.\n\nImport a copy into this project's assets folder?",
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                },
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Children = { cancel, import },
+                },
+            },
+        };
+        await dialog.ShowDialog(this);
+        return result;
     }
     private void OnCreateStateClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateDesignState();
     private void OnRenameStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedDesignState();

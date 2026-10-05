@@ -25,8 +25,31 @@ public sealed record DesignObjectMetadata
     /// frame's visual file field.
     /// </summary>
     public string? DesignAsset { get; init; }
+    /// <summary>
+    /// FrameForge-authored visible text. Null means use the imported/source text unchanged;
+    /// an empty string is a deliberate blank override. This never rewrites source FrameXML.
+    /// </summary>
+    public string? TextOverride { get; init; }
+    /// <summary>Optional DESIGN-only overrides layered over an authentic client stock style.</summary>
+    public DesignTextStyleMetadata? TextStyle { get; init; }
     /// <summary>Empty means All States. Otherwise these are authored state IDs.</summary>
     public IReadOnlyList<string> StateIds { get; init; } = [];
+}
+
+/// <summary>Portable text-authoring metadata. Null properties inherit from <see cref="BaseStyle"/>.</summary>
+public sealed record DesignTextStyleMetadata
+{
+    public string? BaseStyle { get; init; }
+    public double? Size { get; init; }
+    public ColorRgba? Color { get; init; }
+    /// <summary>Null inherits; NONE explicitly disables; NORMAL and THICK match WoW flags.</summary>
+    public string? Outline { get; init; }
+    /// <summary>Null inherits the style; true enables its shadow; false disables it.</summary>
+    public bool? Shadow { get; init; }
+    public string? JustifyH { get; init; }
+
+    public bool HasOverrides => Size is not null || Color is not null || Outline is not null
+        || Shadow is not null || JustifyH is not null;
 }
 
 /// <summary>An authored, Lua-free composition state.</summary>
@@ -42,6 +65,11 @@ public sealed record EditorMetadata
     public IReadOnlyList<EditorGroup> Groups { get; init; } = [];
     public IReadOnlyList<string> LockedElements { get; init; } = [];
     public IReadOnlyList<DesignObjectMetadata> DesignObjects { get; init; } = [];
+    /// <summary>
+    /// Custom DESIGN frame names from back to front. Stock-framework members are excluded and
+    /// remain a protected foundation; omitted names fall back to deterministic design-object order.
+    /// </summary>
+    public IReadOnlyList<string> DesignOrder { get; init; } = [];
     public IReadOnlyList<DesignState> DesignStates { get; init; } = [];
     public string? ActiveDesignStateId { get; init; }
     public string Workspace { get; init; } = "design";
@@ -57,6 +85,20 @@ public sealed record EditorMetadata
     public DesignObjectMetadata? DesignObjectFor(string? frameName) => frameName is null
         ? null
         : DesignObjects.FirstOrDefault(item => item.FrameName == frameName);
+
+    public IReadOnlyList<string> EffectiveDesignOrder(Project project)
+    {
+        var stock = Groups.Where(group => group.Concept == "stock-framework")
+            .SelectMany(group => group.Members).ToHashSet(StringComparer.Ordinal);
+        var eligible = DesignObjects.Select(item => item.FrameName)
+            .Where(name => project.Contains(name) && !stock.Contains(name))
+            .ToHashSet(StringComparer.Ordinal);
+        var result = DesignOrder.Where(eligible.Contains).Distinct(StringComparer.Ordinal).ToList();
+        foreach (var name in DesignObjects.Select(item => item.FrameName))
+            if (eligible.Contains(name) && !result.Contains(name, StringComparer.Ordinal))
+                result.Add(name);
+        return result;
+    }
 
     public string DisplayNameFor(FrameDef frame)
     {

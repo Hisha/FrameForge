@@ -10,6 +10,34 @@ FrameForge has two presentations of one project and one renderer.
 
 Display names are editor metadata. They do not rename imported XML elements or write FrameXML.
 
+## Draw order
+
+Custom DESIGN objects have an explicit back-to-front order. New Image, Text, and Frame objects are
+added at the front, above the conceptual Blizzard framework. Bring Forward and Send Backward move
+one custom layer; Bring to Front and Send to Back move to the corresponding custom boundary. The
+locked Blizzard composition remains the lowest normal authoring layer, so Send to Back cannot bury
+custom work beneath it or reorder its internal pieces.
+
+The DESIGN tree follows the same order: **the bottom item is front**. INSPECT continues to show the
+source hierarchy and is not reordered by these authoring controls.
+
+## WoW text styles
+
+DESIGN text uses a curated set of styles demonstrated by the configured WoW 3.3.5a build-12340
+client: `GameFontNormal`, `GameFontHighlight`, their Small and Large variants,
+`GameFontHighlightMedium`, `GameFontDisable`, `GameFontGreen`, `GameFontRed`, and
+`GameFontNormalHuge`. The catalog is filtered through the live stock resolver, so an unavailable
+client definition is never presented as supported.
+
+Each preset resolves transitively through machine-local `Interface/FrameXML/Fonts.xml` and
+`FontStyles.xml`. DESIGN shows the effective font resource, size, RGBA color, outline, shadow, and
+horizontal alignment. Size, color, outline, shadow, and alignment may be overridden without
+changing the client definition; Reset returns them to the selected preset. Copy/Paste Text Style
+copies only this presentation data, never text, Name, geometry, anchors, or state membership.
+
+Only client-backed WoW styles are in scope. FrameForge stores style names and overrides but never
+bundles Blizzard font files. Project-owned custom fonts and content export remain future work.
+
 ## Dungeon Finder starting framework
 
 `New → Blizzard UI → Dungeon Finder / LFD` requires a validated local WoW 3.3.5a build 12340 client.
