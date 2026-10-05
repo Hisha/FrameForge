@@ -165,6 +165,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanEditSelection))]
     private string? _selectedName;
 
+    /// <summary>
+    /// The selection, in click order, with the primary object last.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="_selectedName"/> remains the primary selection because everything else in the app
+    /// - the inspector, the anchor chrome, the composition panel - is defined in terms of "the
+    /// selected object". This list is what sits underneath it, so a multi-selection is always one
+    /// ordered set with a defined primary rather than a second, competing selection.
+    /// <para>
+    /// Ordering is deliberate: the last surviving entry is the primary, which makes Ctrl+click
+    /// deterministic. Clicking an object twice in a row, or clicking two objects at the same spot,
+    /// therefore always ends up with the object the user most recently expressed intent about as
+    /// the one the inspector describes.
+    /// </para>
+    /// </remarks>
+    private readonly List<string> _selectedNames = [];
+
+    /// <summary>Set while this class writes <see cref="SelectedName"/> itself.</summary>
+    private bool _syncingSelection;
+
+    /// <summary>Whether the last drag moved the whole selection or only one frame.</summary>
+    private bool _lastDragMovedSelection;
+
     [ObservableProperty]
     private FrameTreeNode? _selectedTreeNode;
 
@@ -610,6 +633,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Project = Project with { Editor = Project.Editor with { ActiveDesignStateId = value.Id } };
         IsDirty = true;
         RelaidOut(Project, SelectedName, $"Design state: {value.Name}. Lua was not executed.");
+        PruneInvisibleSelection();
     }
 
     partial void OnSelectedAuthoredStateChanged(DesignStateChoice? value)
@@ -761,6 +785,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>True when the inspector can be edited.</summary>
     public bool CanEditSelection => SelectedFrame is not null && !IsSelectionLocked;
+
+    /// <summary>The whole selection in click order; the last entry is the primary selection.</summary>
+    public IReadOnlyList<string> SelectedNames => _selectedNames;
+
+    /// <summary>How many objects are selected.</summary>
+    public int SelectionCount => _selectedNames.Count;
+
+    /// <summary>True when more than one object is selected.</summary>
+    public bool IsMultiSelection => _selectedNames.Count > 1;
+
+    /// <summary>
+    /// True when the single-object editors should be shown.
+    /// </summary>
+    /// <remarks>
+    /// The name, size, anchor and appearance fields all describe ONE object. Leaving them
+    /// populated - and editable - during a multi-selection would mean editing whichever frame
+    /// happens to be primary while the user looks at a selection of four, which is how a
+    /// background panel gets renamed by accident.
+    /// </remarks>
+    public bool ShowsSingleObjectEditors => _selectedNames.Count == 1;
+
+    /// <summary>True when the selection has enough movable objects to align.</summary>
+    public bool CanAlignSelection => _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.AlignLeft);
+
+    /// <summary>True when the selection has enough movable objects to distribute.</summary>
+    public bool CanDistributeSelection =>
+        _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.DistributeHorizontal);
+
+    /// <summary>One line describing the whole selection for the multi-selection panel.</summary>
+    public string MultiSelectionSummary =>
+        _selectedNames.Count > 1 && Project.Find(_selectedNames[^1]) is { } primary
+            ? $"{_selectedNames.Count} objects selected. Primary: {Project.Editor.DisplayNameFor(primary)}."
+            : string.Empty;
 
     /// <summary>Replaces the whole project. Used by New / Open / Load Example.</summary>
     /// <remarks>
@@ -996,20 +1053,106 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>Selects a frame, or clears the selection with null.</summary>
+    /// <remarks>
+    /// A plain click always replaces the selection. Adding to it is an explicit request
+    /// (<see cref="ToggleSelection"/>) so that every existing caller - tree, canvas, composition
+    /// panel, tests - keeps its current meaning without having to learn about modifiers.
+    /// </remarks>
     public void Select(string? name)
     {
         if (name is not null && !Project.Contains(name))
             name = null;
 
-        if (SelectedName == name && FindNode(name) == SelectedTreeNode)
+        if (_selectedNames.Count == (name is null ? 0 : 1)
+            && (name is null || _selectedNames.Contains(name, StringComparer.Ordinal))
+            && FindNode(name) == SelectedTreeNode)
+        {
             return;
+        }
 
-        SelectedName = name;
-        RelaidOut(Project, name, null);
+        ReplaceSelection(name);
+    }
+
+    /// <summary>
+    /// Adds the frame to the selection, or removes it when it is already selected.
+    /// </summary>
+    /// <remarks>
+    /// This is what a Ctrl/Cmd/Shift click on the canvas and in the tree means, and it toggles
+    /// rather than "clicking a selected object always makes it primary". Deselecting on the second
+    /// click is the behaviour every drawing tool teaches, and a modifier that could not take an
+    /// object back out of the selection would be a trap.
+    /// <para>
+    /// Removing the primary promotes the most recently selected survivor, so the object the
+    /// inspector describes is always something the user still has selected.
+    /// </para>
+    /// </remarks>
+    public void ToggleSelection(string? name)
+    {
+        if (name is null || !Project.Contains(name))
+        {
+            ReplaceSelection(null);
+            return;
+        }
+
+        if (_selectedNames.Remove(name))
+        {
+            // Removed the primary: the new primary is whatever was selected before it.
+            ApplySelection(null);
+            return;
+        }
+
+        AddToSelection(name);
+    }
+
+    /// <summary>Replaces the whole selection with one frame (or with nothing).</summary>
+    private void ReplaceSelection(string? name)
+    {
+        _selectedNames.Clear();
+        if (name is not null)
+            _selectedNames.Add(name);
+        ApplySelection(null);
+    }
+
+/// <summary>
+    /// Appends a frame to the selection and makes it the primary.
+    /// </summary>
+    /// <remarks>
+    /// Removing before appending is what keeps the list a set with an order rather than a
+    /// multiset, so a frame can never be selected twice no matter how the clicks arrive.
+    /// </remarks>
+    private void AddToSelection(string name)
+    {
+        _selectedNames.Remove(name);
+        _selectedNames.Add(name);
+        ApplySelection();
+    }
+
+    /// <summary>
+    /// Re-publishes the selection to everything that renders it.
+    /// </summary>
+    /// <remarks>
+    /// The last surviving entry is always the primary, so every caller mutates
+    /// <see cref="_selectedNames"/> first and lets this one place decide which object the
+    /// inspector describes.
+    /// </remarks>
+    private void ApplySelection(string? status = null)
+    {
+        RelaidOut(Project, _selectedNames.Count > 0 ? _selectedNames[^1] : null, status);
     }
 
     /// <summary>Keeps the tree selection in step when the user clicks the tree.</summary>
-    partial void OnSelectedTreeNodeChanged(FrameTreeNode? value) => Select(value?.Name);
+    partial void OnSelectedTreeNodeChanged(FrameTreeNode? value)
+    {
+        // The tree rebuilds on every refresh and re-publishes its selected item, so a plain
+        // re-assignment of the same node is not a user click and must not collapse a
+        // multi-selection down to one object. Only a genuine change of node counts.
+        if (_syncingSelection)
+            return;
+        if (ReferenceEquals(value, SelectedTreeNode))
+            return;
+
+        Select(value?.Name);
+    }
 
     /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
     partial void OnTreeSearchChanged(string value) => RebuildTree(Project);
@@ -1033,14 +1176,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
         node.Name == name ? node : node.Children.Select(child => FindNode(child, name)).FirstOrDefault(found => found is not null);
 
     /// <summary>
-    /// Applies a drag to the selected frame's offsets.
+    /// Applies a drag to the selected frame's offsets, or to the whole selection as one group.
     /// </summary>
     /// <remarks>
     /// The delta arrives in MODEL units from the canvas, so dragging down the screen arrives
     /// as a negative Y and correctly decreases <c>offsetY</c>.
+    /// <para>
+    /// A drag on a member of a multi-selection moves every selected object by the same delta
+    /// through the same offset-only contract the arrange commands use, so dragging a group obeys
+    /// exactly the rules an align does - including refusing to touch locked or unsafe frames.
+    /// </para>
     /// </remarks>
     public void DragFrame(string name, double modelDx, double modelDy)
     {
+        _lastDragMovedSelection = _selectedNames.Count > 1 && _selectedNames.Contains(name, StringComparer.Ordinal);
+        if (_lastDragMovedSelection)
+        {
+            DragSelection(modelDx, modelDy);
+            return;
+        }
+
         var frame = Project.Find(name);
         if (frame is null)
             return;
@@ -1055,10 +1210,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsDirty = true;
     }
 
+    private void DragSelection(double modelDx, double modelDy)
+    {
+        var outcome = SelectionArrange.Move(Project, Layout, _selectedNames, modelDx, modelDy);
+        if (!outcome.Changed)
+        {
+            Status = outcome.HasExclusions ? outcome.Message : "Nothing moved.";
+            return;
+        }
+
+        Project = outcome.Project;
+        IsDirty = true;
+        RelaidOut(Project, SelectedName, outcome.Message);
+    }
+
+    /// <summary>Aligns or distributes the whole selection as one operation.</summary>
+    /// <remarks>
+    /// The measurement comes from the presentation layout, because that is what the user is
+    /// looking at and clicking against; the mutation is applied to the authored project, so
+    /// preview overrides and stock templates are never written into the file.
+    /// </remarks>
+    public void ArrangeSelection(SelectionArrangeCommand command)
+    {
+        if (_selectedNames.Count == 0)
+            return;
+
+        var outcome = SelectionArrange.Arrange(Project, Layout, _selectedNames, command);
+        if (!outcome.Changed)
+        {
+            Status = outcome.HasExclusions ? outcome.Message : "Nothing moved.";
+            return;
+        }
+
+        Project = outcome.Project;
+        IsDirty = true;
+        RelaidOut(Project, SelectedName, outcome.Message);
+    }
+
     /// <summary>Called when a drag gesture ends.</summary>
     public void EndDrag()
     {
-        if (IsDirty)
+        if (!IsDirty)
+            return;
+
+        // The gesture decides the wording, not the selection: dragging one frame while four are
+        // selected still moved one frame, and saying "4 objects" would misreport the edit.
+        if (_lastDragMovedSelection)
+            Status = $"Dragged {_selectedNames.Count} objects as a group.";
+        else
             Status = $"Dragged {SelectedName}.";
     }
 
@@ -1546,7 +1745,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>Canvas hit-test entry point; also used to keep the tree in sync.</summary>
-    public void OnCanvasSelectionRequested(string? name) => Select(name);
+    /// <param name="name">The frame under the pointer, or null for empty canvas.</param>
+    /// <param name="additive">
+    /// True when the user held Ctrl/Cmd/Shift, which means "add to or remove from the selection"
+    /// instead of "select only this".
+    /// </param>
+    public void OnCanvasSelectionRequested(string? name, bool additive = false)
+    {
+        if (additive)
+            ToggleSelection(name);
+        else
+            Select(name);
+    }
 
     public void CreateGroup()
     {
@@ -1919,11 +2129,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // caller (delete, load, tree, or canvas) gets the same explicit no-selection state.
         if (selection is not null && !project.Contains(selection))
             selection = null;
+        selection = NormalizeSelection(project, selection);
         SelectedName = selection;
 
         RefreshPresentation(project);
         RebuildTree(project);
+        _syncingSelection = true;
         SelectedTreeNode = FindNode(selection);
+        _syncingSelection = false;
         Editor.Refresh(project, selection);
         Editor.RefreshResolved(selection is not null && Layout.Frames.TryGetValue(selection, out var selectedLayout)
             ? selectedLayout
@@ -1944,7 +2157,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         OnPropertyChanged(nameof(ProjectDescription));
         NotifySelectionInspection();
-        SelectionSummary = Editor.ResolvedSummary;
+        NotifySelectionSet();
+        SelectionSummary = IsMultiSelection ? MultiSelectionSummary : Editor.ResolvedSummary;
 
         if (status is not null)
             Status = status;
@@ -1954,6 +2168,74 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{selection}: {Editor.ResolvedSummary}";
         else
             Status = project.IssueSummary();
+    }
+
+    /// <summary>
+    /// Brings the ordered selection back in line with the project it now belongs to and returns
+    /// the object that should be primary afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="selection"/> is the primary the caller asked for. When it is not already in
+    /// the set the caller meant "this is the selection now" - adding a frame, deleting one, loading
+    /// a document - so the set collapses to it instead of growing. Callers that genuinely mean
+    /// "add one" mutate the set first and pass the new primary, which is already a member.
+    /// <para>
+    /// The returned primary is always the last surviving entry rather than whatever was passed in.
+    /// Deleting the primary out of a multi-selection, or switching design state and losing it,
+    /// both leave a perfectly good selection behind, and reporting no selection when there is one
+    /// would throw away work the user can still see on the canvas.
+    /// </para>
+    /// </remarks>
+    private string? NormalizeSelection(Project project, string? selection)
+    {
+        if (selection is not null && !_selectedNames.Contains(selection, StringComparer.Ordinal))
+        {
+            _selectedNames.Clear();
+            _selectedNames.Add(selection);
+        }
+
+        _selectedNames.RemoveAll(name => !project.Contains(name));
+        return _selectedNames.Count > 0 ? _selectedNames[^1] : null;
+    }
+
+    /// <summary>
+    /// Drops selected objects that the current view cannot show, and reports it.
+    /// </summary>
+    /// <remarks>
+    /// Visibility is not pruned on every refresh on purpose. Filtering the canvas down to frames
+    /// only does not make the other selected frames go away - the user can still name them in the
+    /// tree and align them deliberately. Switching DESIGN state is different: objects that are not
+    /// members of the active state are not drawn at all, so a selection of four where two are
+    /// invisible is a selection the user cannot check, and one more state switch would silently
+    /// change what a later drag moves.
+    /// </remarks>
+    private void PruneInvisibleSelection()
+    {
+        var removed = new List<string>();
+        _selectedNames.RemoveAll(name =>
+        {
+            if (Project.Find(name) is { } frame && ViewPolicy.EffectiveVisible(frame, Layout))
+                return false;
+            removed.Add(name);
+            return true;
+        });
+
+        if (removed.Count == 0)
+            return;
+
+        ApplySelection($"{removed.Count} selected object(s) left the selection because the active state does not show them.");
+    }
+
+    /// <summary>Tells the UI that the shape of the selection changed, not just the primary.</summary>
+    private void NotifySelectionSet()
+    {
+        OnPropertyChanged(nameof(SelectedNames));
+        OnPropertyChanged(nameof(SelectionCount));
+        OnPropertyChanged(nameof(IsMultiSelection));
+        OnPropertyChanged(nameof(ShowsSingleObjectEditors));
+        OnPropertyChanged(nameof(CanAlignSelection));
+        OnPropertyChanged(nameof(CanDistributeSelection));
+        OnPropertyChanged(nameof(MultiSelectionSummary));
     }
 
     private void RefreshPresentation(Project project)
@@ -2191,7 +2473,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     ? BuildChildren(project, representative.Name, visible, stockMembers)
                     : [];
                 TreeRoots.Add(new FrameTreeNode(representative, children, "Blizzard stock / conceptual framework",
-                    stock.Locked, stock.Name, stock.Name, true, stock.Expanded));
+                    stock.Locked, stock.Name, stock.Name, true, stock.Expanded,
+                    IsSelected: _selectedNames.Contains(representative.Name, StringComparer.Ordinal),
+                    IsPrimarySelection: representative.Name == SelectedName));
             }
         }
 
@@ -2242,7 +2526,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var origin = _elementOrigins.GetValueOrDefault(frame.Name, ElementOrigin.ProjectSource);
         return new FrameTreeNode(frame, children, origin.Label(), project.Editor.IsLocked(frame.Name),
             string.Join(", ", project.Editor.GroupsFor(frame.Name)),
-            Workspace == WorkspaceExperience.Design ? project.Editor.DisplayNameFor(frame) : frame.Name);
+            Workspace == WorkspaceExperience.Design ? project.Editor.DisplayNameFor(frame) : frame.Name,
+            IsSelected: _selectedNames.Contains(frame.Name, StringComparer.Ordinal),
+            IsPrimarySelection: frame.Name == SelectedName);
     }
 
     private IReadOnlyList<FrameTreeNode> BuildChildren(Project project, string parent,

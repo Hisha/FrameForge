@@ -410,6 +410,110 @@ public static class SmokeTest
                 && vm.Editor.VisualLines.Any(line => line.Contains("alpha 0.38", StringComparison.Ordinal)),
                 string.Join(" | ", vm.Editor.VisualLines));
 
+            // Multi-selection on the REAL imported document, because that is the only place the
+            // selection has to cope with what the importer actually produced: a mixed set of
+            // panels, textures and auto-sized FontStrings, most of them anchored to a locked
+            // LFDParentFrame the user can never move.
+            var mixedKinds = new[]
+            {
+                vm.Project.Find("NativeHuntsFrameContentPanelRecord"),
+                vm.Project.Find("NativeHuntsFrameContentPanelIdentityIcon"),
+                vm.Project.Frames.FirstOrDefault(f => f.Kind == FrameKind.FONTSTRING && !f.Anonymous),
+            }.Where(f => f is not null).Select(f => f!.Name).ToArray();
+            Check("a mixed Image / Frame / Text multi-selection is available", mixedKinds.Length == 3,
+                string.Join(", ", mixedKinds));
+
+            vm.OnCanvasSelectionRequested(mixedKinds[0]);
+            foreach (var name in mixedKinds.Skip(1))
+                vm.OnCanvasSelectionRequested(name, additive: true);
+            window.SyncCanvas();
+            await PumpAsync(1);
+
+            Check("ctrl-click accumulated the whole selection in click order",
+                vm.SelectedNames.SequenceEqual(mixedKinds), string.Join(", ", vm.SelectedNames));
+            Check("the newest click is the primary the inspector describes",
+                vm.SelectedName == mixedKinds[^1] && vm.SelectedTreeNode?.Name == mixedKinds[^1],
+                $"{vm.SelectedName} / {vm.SelectedTreeNode?.Name ?? "(none)"}");
+            Check("the canvas received every selected name, not just the primary",
+                canvas.SelectedNames.SequenceEqual(mixedKinds) && canvas.SelectedName == mixedKinds[^1],
+                string.Join(", ", canvas.SelectedNames));
+            Check("the selection summary reports the whole selection",
+                vm.SelectionSummary.Contains($"{mixedKinds.Length} objects selected", StringComparison.Ordinal),
+                vm.SelectionSummary);
+            Check("single-object editors are hidden during a multi-selection", !vm.ShowsSingleObjectEditors);
+            Check("align is offered for three objects, distribute too",
+                vm.CanAlignSelection && vm.CanDistributeSelection);
+
+            var treeMarks = FlattenTree(vm.TreeRoots).Where(n => n.Name == mixedKinds[0] || n.Name == mixedKinds[^1]).ToArray();
+            Check("every selected tree row carries a selection marker",
+                treeMarks.Length == 2 && treeMarks.All(n => n.ShowsSelectionBadge)
+                && treeMarks.Count(n => n.IsPrimarySelection) == 1,
+                string.Join(", ", treeMarks.Select(n => $"{n.Name}:{n.SelectionBadge}")));
+
+            var selectionBitmap = new RenderTargetBitmap(
+                new PixelSize((int)Math.Max(1, canvas.Bounds.Width), (int)Math.Max(1, canvas.Bounds.Height)),
+                new Vector(96, 96));
+            selectionBitmap.Render(canvas);
+            Check("a multi-selection is drawn on the canvas", CountNonBackgroundPixels(selectionBitmap) > 500,
+                $"{CountNonBackgroundPixels(selectionBitmap)} non-background pixels");
+
+            // Arrange against the imported document: offsets only, nothing outside the selection,
+            // and a locked member reported rather than moved.
+            var beforeArrange = vm.Project.Frames.ToDictionary(f => f.Name, f => f with { });
+            var lockedMember = mixedKinds[1];
+            vm.SetElementLocked(lockedMember, locked: true);
+            vm.ArrangeSelection(SelectionArrangeCommand.AlignLeft);
+            var movedByArrange = vm.Project.Frames.Where(f =>
+                f.OffsetX != beforeArrange[f.Name].OffsetX || f.OffsetY != beforeArrange[f.Name].OffsetY)
+                .Select(f => f.Name).ToArray();
+            Check("aligning the imported selection moved only selected, movable frames",
+                movedByArrange.Length > 0
+                && movedByArrange.All(vm.SelectedNames.Contains)
+                && !movedByArrange.Contains(lockedMember),
+                string.Join(", ", movedByArrange));
+            Check("the locked member of the selection was left unchanged",
+                beforeArrange[lockedMember].OffsetX == vm.Project.Find(lockedMember)!.OffsetX
+                && beforeArrange[lockedMember].OffsetY == vm.Project.Find(lockedMember)!.OffsetY,
+                $"{beforeArrange[lockedMember].OffsetX} -> {vm.Project.Find(lockedMember)!.OffsetX}");
+            Check("the locked member was reported rather than silently skipped",
+                vm.Status.Contains("locked", StringComparison.OrdinalIgnoreCase), vm.Status);
+            Check("align preserved every anchor relationship",
+                vm.Project.Frames.All(f => f.Point == beforeArrange[f.Name].Point
+                    && f.RelativeTo == beforeArrange[f.Name].RelativeTo
+                    && f.RelativePoint == beforeArrange[f.Name].RelativePoint
+                    && f.Parent == beforeArrange[f.Name].Parent));
+            Check("align preserved every size", vm.Project.Frames.All(f =>
+                f.Width == beforeArrange[f.Name].Width && f.Height == beforeArrange[f.Name].Height));
+            Check("align changed nothing outside the selection",
+                vm.Project.Frames.Where(f => !vm.SelectedNames.Contains(f.Name))
+                    .All(f => f.OffsetX == beforeArrange[f.Name].OffsetX && f.OffsetY == beforeArrange[f.Name].OffsetY));
+            Check("the multi-selection survived the arrange",
+                vm.SelectedNames.SequenceEqual(mixedKinds), string.Join(", ", vm.SelectedNames));
+
+            // Group drag: every selected object moves by exactly one delta, and an object that
+            // only follows another selected frame is not moved twice.
+            vm.SetElementLocked(lockedMember, locked: false);
+            var beforeGroupDrag = LayoutResolver.Resolve(vm.Project);
+            var afterGroupDragBefore = vm.Project.Frames.ToDictionary(f => f.Name, f => f with { });
+            vm.DragFrame(mixedKinds[0], 30, -20);
+            var afterGroupDrag = LayoutResolver.Resolve(vm.Project);
+            var deltas = mixedKinds
+                .Where(name => afterGroupDrag.Rects.ContainsKey(name) && beforeGroupDrag.Rects.ContainsKey(name))
+                .Select(name => afterGroupDrag.Rects[name].Left - beforeGroupDrag.Rects[name].Left)
+                .ToArray();
+            Check("dragging one member moved every selected object by one delta",
+                deltas.Length == mixedKinds.Length && deltas.All(dx => Near(dx, 30, 1e-6)),
+                string.Join(", ", deltas));
+            Check("a group drag left unselected objects alone",
+                vm.Project.Frames.Where(f => !vm.SelectedNames.Contains(f.Name))
+                    .All(f => f.OffsetX == afterGroupDragBefore[f.Name].OffsetX && f.OffsetY == afterGroupDragBefore[f.Name].OffsetY));
+            Check("a group drag changed no size and no anchor",
+                vm.Project.Frames.All(f => f.Width == afterGroupDragBefore[f.Name].Width
+                    && f.Height == afterGroupDragBefore[f.Name].Height
+                    && f.Point == afterGroupDragBefore[f.Name].Point
+                    && f.RelativeTo == afterGroupDragBefore[f.Name].RelativeTo
+                    && f.RelativePoint == afterGroupDragBefore[f.Name].RelativePoint));
+
             // Exercise the actual templated toolbar controls. Calling SetViewMode directly would
             // prove the view model and miss a broken TwoWay binding between the visible toolbar
             // and the ordinary (non-Avalonia-property) LayoutCanvas synchronization bridge.

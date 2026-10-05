@@ -27,7 +27,9 @@ internal static class TestProject
         bool visible = true,
         SizeReference? sizeReference = null,
         Stratum? stratum = null,
-        int? level = null) => new()
+        int? level = null,
+        bool setAllPoints = false,
+        IReadOnlyList<FrameAnchor>? extraAnchors = null) => new()
         {
             Name = name,
             Parent = parent,
@@ -42,6 +44,8 @@ internal static class TestProject
             SizeReference = sizeReference,
             Stratum = stratum,
             Level = level,
+            SetAllPoints = setAllPoints,
+            ExtraAnchors = extraAnchors ?? [],
         };
 
     public static Project Project(params FrameDef[] frames) => ProjectFactory.Create("test", frames, Standard);

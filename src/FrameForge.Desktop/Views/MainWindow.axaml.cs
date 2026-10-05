@@ -1,8 +1,13 @@
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
+using FrameForge.Core.Geometry;
 using FrameForge.Core.Serialization;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.ViewModels;
@@ -47,6 +52,7 @@ public partial class MainWindow : Window
         if (e.PropertyName is nameof(MainWindowViewModel.Layout)
             or nameof(MainWindowViewModel.Project)
             or nameof(MainWindowViewModel.SelectedName)
+            or nameof(MainWindowViewModel.SelectedNames)
             or nameof(MainWindowViewModel.ViewMode)
             or nameof(MainWindowViewModel.CanvasFilter)
             or nameof(MainWindowViewModel.LabelPolicy)
@@ -77,6 +83,7 @@ public partial class MainWindow : Window
         Canvas.Project = vm.PresentationProject;
         Canvas.Layout = vm.Layout;
         Canvas.SelectedName = vm.SelectedName;
+        Canvas.SelectedNames = vm.SelectedNames;
         Canvas.Mode = vm.ViewMode;
         Canvas.Filter = vm.CanvasFilter;
         Canvas.Labels = vm.LabelPolicy;
@@ -442,10 +449,9 @@ public partial class MainWindow : Window
             vm.SaveToFile(path);
     }
 
-    private void OnCanvasSelectionRequested(object? sender, string? name)
+    private void OnCanvasSelectionRequested(object? sender, CanvasSelectionEventArgs e)
     {
-        ViewModel?.OnCanvasSelectionRequested(name);
-        Canvas.SelectedName = name;
+        ViewModel?.OnCanvasSelectionRequested(e.FrameName, e.Additive);
     }
 
     /// <summary>
@@ -458,15 +464,73 @@ public partial class MainWindow : Window
             return;
 
         if (vm.SelectedName != e.FrameName)
-        {
             vm.Select(e.FrameName);
-            Canvas.SelectedName = e.FrameName;
-        }
 
         vm.DragFrame(e.FrameName, e.DeltaX, e.DeltaY);
     }
 
     private void OnCanvasDragCompleted(object? sender, EventArgs e) => ViewModel?.EndDrag();
+
+    /// <summary>Runs the align or distribute command named by the button's Tag.</summary>
+    private void OnArrangeClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is Button { Tag: string name }
+            && Enum.TryParse<SelectionArrangeCommand>(name, out var command))
+        {
+            vm.ArrangeSelection(command);
+        }
+    }
+
+    /// <summary>Drops the extra members of a multi-selection, keeping the primary.</summary>
+    private void OnCollapseSelectionClick(object? sender, RoutedEventArgs e) =>
+        ViewModel?.Select(ViewModel.SelectedName);
+
+    /// <summary>
+    /// Turns Ctrl/Cmd/Shift-clicking a tree row into a selection change the view model owns.
+    /// </summary>
+    /// <remarks>
+    /// Avalonia's TreeView has no multi-select mode: it highlights one item and raises
+    /// <c>SelectionChanged</c>, so an unmodified click there already does the right thing through
+    /// <c>SelectedTreeNode</c>. A modified click is different - the TreeView would still collapse
+    /// to the clicked row - so the gesture is handled here and marked handled, which stops the
+    /// TreeView's own selection logic from running after this one.
+    /// <para>
+    /// A click on an expander gutter or a blank area is left alone: those are navigation and
+    /// deselect actions, and swallowing them would break expanding a collapsed group.
+    /// </para>
+    /// </remarks>
+    private void OnFrameTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (ViewModel is not { } vm
+            || e.Source is not Visual source
+            || !LayoutCanvas.IsAdditiveModifier(e.KeyModifiers))
+        {
+            return;
+        }
+
+        // The expander is a ToggleButton inside the same row, so it would otherwise read as
+        // "the user clicked this frame". Expanding is navigation, not selection.
+        if (source is ToggleButton)
+            return;
+
+        if (FindTreeNode(source) is not { } node)
+            return;
+
+        vm.ToggleSelection(node.Name);
+        e.Handled = true;
+    }
+
+    /// <summary>The nearest tree row's node at or above this visual, or null.</summary>
+    private static FrameTreeNode? FindTreeNode(Visual visual)
+    {
+        for (var current = visual; current is not null; current = current.GetVisualParent())
+        {
+            if (current is StyledElement { DataContext: FrameTreeNode node })
+                return node;
+        }
+
+        return null;
+    }
 
     private void OnCreateGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateGroup();
     private void OnRenameGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedGroup();

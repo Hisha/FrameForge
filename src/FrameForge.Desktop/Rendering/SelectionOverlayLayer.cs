@@ -30,6 +30,8 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
     public int Order => 20;
 
     private static readonly IPen SelectedPen = new Pen(new SolidColorBrush(Color.Parse("#F2C14E")), 2);
+    private static readonly IPen SecondaryPen =
+        new Pen(new SolidColorBrush(Color.Parse("#7FB2C9")), 1.5, new DashStyle(new double[] { 5, 3 }, 0));
     private static readonly IPen AnchorConnectorPen =
         new Pen(new SolidColorBrush(Color.Parse("#F2C14E")), 1, new DashStyle(new double[] { 4, 3 }, 0));
     private static readonly IPen AnchorBrokenPen =
@@ -46,15 +48,41 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
     /// <inheritdoc />
     public void Render(DrawingContext context, CanvasRenderContext canvas)
     {
-        if (canvas.SelectedName is null ||
-            !canvas.Layout.Frames.TryGetValue(canvas.SelectedName, out var detail))
-        {
+        if (canvas.SelectionNames.Count == 0)
             return;
-        }
 
+        DrawSecondaryOutlines(context, canvas);
         DrawOutline(context, canvas);
-        if (ViewPolicy.ShowsSelectionGeometry(canvas.Mode))
+
+        // Anchors stay exclusive to the primary. Four widgets' anchor lines at once is not more
+        // information, it is a hairball; the primary's anchors are the ones the inspector is
+        // describing right now.
+        if (canvas.SelectedName is { } primary
+            && canvas.Layout.Frames.TryGetValue(primary, out var detail)
+            && ViewPolicy.ShowsSelectionGeometry(canvas.Mode))
+        {
             DrawAnchors(context, canvas, detail);
+        }
+    }
+
+    /// <summary>
+    /// Thin dashed outlines on the members of a multi-selection that are not the primary.
+    /// </summary>
+    /// <remarks>
+    /// A multi-selection that only outlined its primary would look exactly like a single selection,
+    /// and the user would have no way to see what a subsequent align was about to act on. Dashed
+    /// rather than solid, and in the anchor-target colour rather than gold, because gold means "this
+    /// is the object the inspector is describing" everywhere else in the app.
+    /// </remarks>
+    private static void DrawSecondaryOutlines(DrawingContext context, CanvasRenderContext canvas)
+    {
+        foreach (var frame in canvas.VisibleFrames)
+        {
+            if (!frame.Selected || frame.Primary)
+                continue;
+
+            DrawBox(context, frame, SecondaryPen);
+        }
     }
 
     /// <summary>
@@ -67,21 +95,26 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
     /// </remarks>
     private static void DrawOutline(DrawingContext context, CanvasRenderContext canvas)
     {
-        if (canvas.Selection is not { Box: { } box })
+        if (canvas.Selection is { } selection)
+            DrawBox(context, selection, SelectedPen);
+    }
+
+    private static void DrawBox(DrawingContext context, DrawableFrame frame, IPen pen)
+    {
+        if (frame.Box is not { } box)
             return;
 
         var rect = new Rect(box.X, box.Y, box.Width, box.Height);
-
-        if (canvas.Selection.HasArea)
+        if (frame.HasArea)
         {
-            context.DrawRectangle(null, SelectedPen, rect);
+            context.DrawRectangle(null, pen, rect);
             return;
         }
 
         // A zero-area selection still needs a marker, or selecting one of the six auto-sized
         // FontStrings would produce no visible feedback at all.
         const double radius = 7;
-        context.DrawRectangle(null, SelectedPen,
+        context.DrawRectangle(null, pen,
             new Rect(rect.X - radius, rect.Y - radius, radius * 2, radius * 2));
     }
 

@@ -13,6 +13,15 @@ using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.Controls;
 
+/// <summary>What a canvas click asked for.</summary>
+/// <param name="FrameName">The frame under the pointer, or null for empty canvas.</param>
+/// <param name="Additive">
+/// True when Ctrl/Cmd/Shift was held, meaning "add this to the selection" or "take it out again"
+/// rather than "select only this". The canvas reports the key state and nothing more: deciding
+/// what "additive" means to a selection is the view model's business.
+/// </param>
+public sealed record CanvasSelectionEventArgs(string? FrameName, bool Additive);
+
 /// <summary>Draws and edits a FrameForge layout, in one of three view modes.</summary>
 /// <remarks>
 /// <para>
@@ -47,6 +56,7 @@ public class LayoutCanvas : Control
     private LayoutResult? _layout;
     private Project? _project;
     private string? _selectedName;
+    private IReadOnlyList<string> _selectedNames = [];
     private bool _dragging;
     private string? _dragName;
     private double _dragLastCanvasX;
@@ -68,7 +78,7 @@ public class LayoutCanvas : Control
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
 
     /// <summary>Raised with the frame the user clicked, or null for empty canvas.</summary>
-    public event EventHandler<string?>? SelectionRequested;
+    public event EventHandler<CanvasSelectionEventArgs>? SelectionRequested;
 
     /// <summary>Raised when a drag moves a frame, as a model-space delta.</summary>
     public event EventHandler<FrameDragEventArgs>? FrameDragged;
@@ -136,6 +146,27 @@ public class LayoutCanvas : Control
             if (_selectedName == value)
                 return;
             _selectedName = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>
+    /// The whole selection in click order, primary last; null or empty means nothing is selected.
+    /// </summary>
+    /// <remarks>
+    /// The primary is kept as its own property because <see cref="SelectedName"/> is what every
+    /// other part of the window already binds to. <see cref="SelectedNames"/> is what the selection
+    /// chrome draws, so a four-object selection can be outlined as four objects.
+    /// </remarks>
+    public IReadOnlyList<string> SelectedNames
+    {
+        get => _selectedNames;
+        set
+        {
+            var next = value ?? [];
+            if (_selectedNames.SequenceEqual(next, StringComparer.Ordinal))
+                return;
+            _selectedNames = next;
             InvalidateVisual();
         }
     }
@@ -386,7 +417,7 @@ public class LayoutCanvas : Control
                 continue;
 
             var effectiveVisible = detail.EffectiveVisible;
-            var selected = name == _selectedName;
+            var selected = _selectedNames.Contains(name, StringComparer.Ordinal) || name == _selectedName;
             var policyVisible = ViewPolicy.IsVisible(model, effectiveVisible, _filter);
             if (_hiddenByOrigin.Contains(name))
                 policyVisible = false;
@@ -408,7 +439,8 @@ public class LayoutCanvas : Control
                 effectiveVisible,
                 selected,
                 detail.Rect is { Width: > 0 and not double.MaxValue, Height: > 0 } sized && sized.Width > 0 && sized.Height > 0,
-                ViewPolicy.ShouldDrawLabel(model, selected, _labels, _filter, effectiveVisible)));
+                ViewPolicy.ShouldDrawLabel(model, selected, _labels, _filter, effectiveVisible),
+                name == _selectedName));
         }
 
         return new CanvasRenderContext(
@@ -425,7 +457,12 @@ public class LayoutCanvas : Control
             diagnostics,
             _assetResolver,
             _stockTemplates,
-            _previewOverrides);
+            _previewOverrides,
+            // Falling back to the primary alone keeps a caller that only set SelectedName - an
+            // older call site, a test - drawing the same selection outline it always did.
+            _selectedNames.Count > 0 || _selectedName is null
+                ? _selectedNames
+                : [_selectedName]);
     }
 
     /// <inheritdoc />
@@ -455,7 +492,7 @@ public class LayoutCanvas : Control
         // through the stack instead of silently settling for whatever happened to be on top.
         var hit = CycleHit(hits, point.X, point.Y);
 
-        SelectionRequested?.Invoke(this, hit);
+        SelectionRequested?.Invoke(this, new CanvasSelectionEventArgs(hit, IsAdditiveModifier(e.KeyModifiers)));
 
         if (hit is not null && !_lockedNames.Contains(hit) && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
@@ -466,6 +503,20 @@ public class LayoutCanvas : Control
             e.Pointer.Capture(this);
         }
     }
+
+    /// <summary>
+    /// Whether the held keys mean "extend the selection" rather than "select this instead".
+    /// </summary>
+    /// <remarks>
+    /// Ctrl and Cmd are the same gesture on different keyboards, and Shift is included because every
+    /// drawing tool that teaches Ctrl-click also honours Shift-click for the same operation. Reading
+    /// the modifiers here and reporting a single boolean is deliberate: the canvas must not know
+    /// which key maps to what, or every future selection gesture needs a change in two places.
+    /// </remarks>
+    public static bool IsAdditiveModifier(KeyModifiers modifiers) =>
+        modifiers.HasFlag(KeyModifiers.Control)
+        || modifiers.HasFlag(KeyModifiers.Meta)
+        || modifiers.HasFlag(KeyModifiers.Shift);
 
     /// <summary>
     /// Every widget under a canvas point, front to back.

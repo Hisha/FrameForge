@@ -23,9 +23,14 @@ namespace FrameForge.Desktop.Rendering;
 /// <param name="Rect">Resolved model-space bounds, or null when the engine could not place it.</param>
 /// <param name="Box">Resolved canvas-space bounds, or null when there is no rect.</param>
 /// <param name="EffectiveVisible">Whether the widget is on screen, ancestors included.</param>
-/// <param name="Selected">Whether this widget is the current selection.</param>
+/// <param name="Selected">Whether this widget is part of the current selection.</param>
 /// <param name="HasArea">Whether the widget has both a non-zero width and height.</param>
 /// <param name="DrawLabel">Whether the widget's name label belongs on screen this pass.</param>
+/// <param name="Primary">
+/// Whether this widget is the primary selection, which is the last one the user picked. Primary is
+/// carried separately from <paramref name="Selected"/> because the two have to look different: the
+/// inspector describes one object, so the canvas has to say which one it is describing.
+/// </param>
 public sealed record DrawableFrame(
     string Name,
     FrameDef? Model,
@@ -34,7 +39,8 @@ public sealed record DrawableFrame(
     bool EffectiveVisible,
     bool Selected,
     bool HasArea,
-    bool DrawLabel);
+    bool DrawLabel,
+    bool Primary = false);
 
 /// <summary>
 /// One pass over the canvas: everything the layers need, already resolved.
@@ -51,7 +57,7 @@ public sealed record DrawableFrame(
 /// <param name="Mode">The active view mode.</param>
 /// <param name="Filter">The active visibility set.</param>
 /// <param name="Labels">The active label policy.</param>
-/// <param name="SelectedName">The current selection, or null.</param>
+/// <param name="SelectedName">The primary selection, or null.</param>
 /// <param name="VisibleFrames">The widgets the policy says are drawn, in paint order.</param>
 public sealed record CanvasRenderContext(
     Project? Project,
@@ -67,8 +73,21 @@ public sealed record CanvasRenderContext(
     CanvasRenderDiagnostics Diagnostics,
     ITextureAssetResolver? AssetResolver = null,
     IStockTemplateResolver? StockTemplates = null,
-    PreviewOverrideSet? PreviewOverrides = null)
+    PreviewOverrideSet? PreviewOverrides = null,
+    IReadOnlyList<string>? SelectedNames = null)
 {
+    /// <summary>
+    /// The whole selection in click order, primary last.
+    /// </summary>
+    /// <remarks>
+    /// A layer that wants to draw "everything that is selected, but not the one the inspector is
+    /// describing" needs the set and not just the primary, and it needs the same set the view
+    /// model holds. Null is normalized to the primary alone so a single-selection render and a
+    /// multi-selection render go through the same code.
+    /// </remarks>
+    public IReadOnlyList<string> SelectionNames { get; init; } =
+        SelectedNames ?? (SelectedName is null ? [] : [SelectedName]);
+
     /// <summary>The screen (UIParent) rectangle in canvas pixels.</summary>
     public CanvasBox ScreenBox => Viewport.RectToCanvas(LayoutResolver.ScreenRect(Project?.Screen ?? Screen.Default), Origin);
 

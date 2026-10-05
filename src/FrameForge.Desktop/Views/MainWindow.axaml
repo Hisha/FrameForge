@@ -390,11 +390,12 @@
                                TextWrapping="Wrap" Margin="0,8,0,0" />
                     <TreeView x:Name="FrameTree"
                               SelectionMode="Single"
+                              PointerPressed="OnFrameTreePointerPressed"
                               ItemsSource="{Binding TreeRoots}"
                               SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
-                                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" MinWidth="180"
+                                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" MinWidth="180"
                                       ToolTip.Tip="{Binding OriginLabel}">
                                     <!-- The kind and the "fills" tag are what distinguish a
                                          FontString from a Texture from a Frame. Importing 51
@@ -405,12 +406,19 @@
                                             Background="#1C2733">
                                         <TextBlock Text="{Binding KindBadge}" />
                                     </Border>
-                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center"
+                                    <!-- The TreeView highlights one row at a time, so the other
+                                         members of a multi-selection need a marker of their own or
+                                         a Ctrl+click would look like it did nothing. -->
+                                    <TextBlock Grid.Column="1" Margin="0,0,5,0" VerticalAlignment="Center"
+                                               IsVisible="{Binding ShowsSelectionBadge}"
+                                               Text="{Binding SelectionBadge}"
+                                               Foreground="#F2C14E" FontWeight="Bold" />
+                                    <TextBlock Grid.Column="2" Text="{Binding DisplayName}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="2" Text="{Binding LockBadge}" Margin="4,0" />
-                                    <TextBlock Grid.Column="3" Text="{Binding GroupBadge}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
+                                    <TextBlock Grid.Column="3" Text="{Binding LockBadge}" Margin="4,0" />
+                                    <TextBlock Grid.Column="4" Text="{Binding GroupBadge}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                                MaxWidth="70" TextTrimming="CharacterEllipsis" Opacity="0.75" />
-                                    <TextBlock Grid.Column="4" Text="{Binding SizeText}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
+                                    <TextBlock Grid.Column="5" Text="{Binding SizeText}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                                VerticalAlignment="Center" Opacity="0.75" />
                                 </Grid>
                             </TreeDataTemplate>
@@ -435,6 +443,63 @@
                         <TextBlock Classes="header" Text="DESIGN PROPERTIES" IsVisible="{Binding IsDesignWorkspace}" />
                         <TextBlock Classes="header" Text="INSPECTOR" IsVisible="{Binding IsInspectWorkspace}" />
 
+                        <!-- Multi-selection. Kept above the single-object editors because during a
+                             multi-selection those editors describe one object while the user is
+                             acting on several, and the count has to be the first thing they read. -->
+                        <Border Background="#1A232B" BorderBrush="#F2C14E" BorderThickness="1"
+                                CornerRadius="4" Padding="8,6"
+                                IsVisible="{Binding IsMultiSelection}">
+                            <StackPanel Spacing="5">
+                                <TextBlock Classes="label" Text="SELECTION"
+                                           Foreground="#F2C14E" />
+                                <TextBlock Text="{Binding MultiSelectionSummary}" TextWrapping="Wrap" />
+                                <StackPanel IsVisible="{Binding IsDesignWorkspace}" Spacing="3">
+                                    <TextBlock Classes="label" Text="ALIGN"
+                                               ToolTip.Tip="Alignments use the bounds of the whole selection, locked objects included. They only ever add to OffsetsX/OffsetsY." />
+                                    <WrapPanel>
+                                        <Button Content="Left" Tag="AlignLeft" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the left edges of the selected objects." />
+                                        <Button Content="Center H" Tag="AlignCenterHorizontal" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the horizontal centers of the selected objects." />
+                                        <Button Content="Right" Tag="AlignRight" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the right edges of the selected objects." />
+                                        <Button Content="Top" Tag="AlignTop" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the top edges of the selected objects." />
+                                        <Button Content="Center V" Tag="AlignCenterVertical" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the vertical centers of the selected objects." />
+                                        <Button Content="Bottom" Tag="AlignBottom" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanAlignSelection}"
+                                                ToolTip.Tip="Align the bottom edges of the selected objects." />
+                                    </WrapPanel>
+                                    <TextBlock Classes="label" Text="DISTRIBUTE"
+                                               ToolTip.Tip="Distribution needs three objects. The outermost two stay put and the gaps between them become equal. It works only among the objects it may move." />
+                                    <WrapPanel>
+                                        <Button Content="Distribute H" Tag="DistributeHorizontal" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanDistributeSelection}"
+                                                ToolTip.Tip="Space the selected objects so the horizontal gaps between them are equal." />
+                                        <Button Content="Distribute V" Tag="DistributeVertical" Click="OnArrangeClick"
+                                                Margin="0,0,4,4" IsEnabled="{Binding CanDistributeSelection}"
+                                                ToolTip.Tip="Space the selected objects so the vertical gaps between them are equal." />
+                                    </WrapPanel>
+                                    <TextBlock Classes="label"
+                                               Text="Locked objects are reported and left alone. Frames whose size comes from SetAllPoints or several anchors are not moved."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <TextBlock Classes="label"
+                                           IsVisible="{Binding IsInspectWorkspace}"
+                                           Text="INSPECTOR shows the primary object only. Multi-object editing belongs to DESIGN."
+                                           TextWrapping="Wrap" />
+                                <Button Content="Show only primary" Click="OnCollapseSelectionClick"
+                                        HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel IsVisible="{Binding ShowsSingleObjectEditors}">
                         <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
                                 CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
                             <StackPanel Spacing="5">
@@ -529,6 +594,7 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        </StackPanel>
 
                         <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
                                 CornerRadius="4" Padding="8,6" IsVisible="{Binding IsInspectWorkspace}">
@@ -581,7 +647,9 @@
                                        Text="{Binding Editor.SourceNote}" Opacity="0.85" />
                         </Border>
 
-                        <Expander Header="POSITION · SIZE · ANCHOR · APPEARANCE" IsExpanded="{Binding IsDesignWorkspace}">
+                        <Expander Header="POSITION · SIZE · ANCHOR · APPEARANCE"
+                                 IsExpanded="{Binding IsDesignWorkspace}"
+                                 IsVisible="{Binding ShowsSingleObjectEditors}">
                         <StackPanel Spacing="2" IsEnabled="{Binding CanEditSelection}" Margin="0,6,0,0">
                         <Grid ColumnDefinitions="96,*" IsVisible="{Binding IsInspectWorkspace}">
                             <TextBlock Grid.Column="0" Classes="label" Text="Name" />
