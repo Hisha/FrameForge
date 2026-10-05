@@ -19,6 +19,12 @@ public sealed record DesignObjectMetadata
 {
     public required string FrameName { get; init; }
     public string? DisplayName { get; init; }
+    /// <summary>
+    /// Portable path to project-owned design artwork. This is deliberately distinct from a
+    /// FrameXML/WoW texture reference even though the current renderer mirrors it into the
+    /// frame's visual file field.
+    /// </summary>
+    public string? DesignAsset { get; init; }
     /// <summary>Empty means All States. Otherwise these are authored state IDs.</summary>
     public IReadOnlyList<string> StateIds { get; init; } = [];
 }

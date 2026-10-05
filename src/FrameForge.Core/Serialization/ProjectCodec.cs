@@ -325,6 +325,8 @@ public static class ProjectCodec
                         writer.WriteString("frame", item.FrameName);
                         if (item.DisplayName is { Length: > 0 } displayName)
                             writer.WriteString("displayName", displayName);
+                        if (item.DesignAsset is { Length: > 0 } designAsset)
+                            writer.WriteString("designAsset", designAsset);
                         if (item.StateIds.Count > 0)
                         {
                             writer.WriteStartArray("states");
@@ -705,6 +707,7 @@ public static class ProjectCodec
                     {
                         FrameName = frameName,
                         DisplayName = ReadOptionalString(entry, "displayName"),
+                        DesignAsset = ReadOptionalString(entry, "designAsset"),
                         StateIds = ReadStringArray(entry, "states", objectPath, validStateIds, errors),
                     });
                 }

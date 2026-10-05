@@ -40,3 +40,20 @@ mechanically hide Native Hunts content merely because that content is parented b
 Paint order remains WoW paint order. Hit-test ordering is separate: an unlocked project/runtime
 component gets the first click over locked/background stock chrome, while repeat-click cycling and
 explicit tree selection retain access to every overlapping element.
+
+## Design image assets
+
+An Image created in DESIGN may reference PNG, TGA, or BLP artwork owned by the FrameForge project.
+The project must be saved before artwork is chosen, because its directory is the stable portability
+boundary. Browse accepts files inside that directory and stores a forward-slash relative identity
+such as `assets/hunt_divider.png`; it does not silently copy files or retain an absolute machine
+path. Files outside the project directory and paths containing traversal segments are rejected.
+
+This `designAsset` identity is editor metadata, not a WoW texture export path. PNG is supported as a
+design-source format only. A future exporter may assign and convert an `Interface\...` texture, but
+FrameForge does not claim or perform that conversion today. Imported FrameXML and client/cache BLP
+assets remain in the separate WoW resolver namespace and keep their existing strict semantics.
+
+INSPECT reports the resolved physical file, dimensions, source format, project ownership, and that
+the future WoW export reference is unassigned. Missing project artwork remains selectable and
+editable and produces a resolution diagnostic instead of an exception.

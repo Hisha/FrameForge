@@ -1,5 +1,7 @@
 namespace FrameForge.Desktop.Assets;
 
+using SkiaSharp;
+
 /// <summary>A physical texture decoder; path resolution and rendering are separate concerns.</summary>
 public interface ITextureDecoder
 {
@@ -16,7 +18,7 @@ public sealed class TextureDecoderRegistry
 
     public TextureDecoderRegistry(IEnumerable<ITextureDecoder>? decoders = null)
     {
-        var available = decoders?.ToArray() ?? [new TgaTextureDecoder(), new BlpTextureDecoder()];
+        var available = decoders?.ToArray() ?? [new TgaTextureDecoder(), new BlpTextureDecoder(), new PngTextureDecoder()];
         _decoders = available.ToDictionary(decoder => decoder.Format);
     }
 
@@ -53,4 +55,30 @@ public sealed class TgaTextureDecoder : ITextureDecoder
 {
     public TextureFileFormat Format => TextureFileFormat.Tga;
     public DecodedImageData Decode(Stream stream) => TgaDecoder.Decode(stream);
+}
+
+/// <summary>Decodes ordinary PNG design-source artwork. PNG is not claimed as a WoW export format.</summary>
+public sealed class PngTextureDecoder : ITextureDecoder
+{
+    public TextureFileFormat Format => TextureFileFormat.Png;
+
+    public DecodedImageData Decode(Stream stream)
+    {
+        using var bitmap = SKBitmap.Decode(stream) ?? throw new InvalidDataException("PNG data could not be decoded.");
+        if (bitmap.Width <= 0 || bitmap.Height <= 0)
+            throw new InvalidDataException("PNG dimensions must be non-zero.");
+
+        var pixels = new byte[checked(bitmap.Width * bitmap.Height * 4)];
+        for (var y = 0; y < bitmap.Height; y++)
+        for (var x = 0; x < bitmap.Width; x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            var offset = (y * bitmap.Width + x) * 4;
+            pixels[offset] = color.Blue;
+            pixels[offset + 1] = color.Green;
+            pixels[offset + 2] = color.Red;
+            pixels[offset + 3] = color.Alpha;
+        }
+        return new DecodedImageData(bitmap.Width, bitmap.Height, pixels, "PNG design-source image", TextureFileFormat.Png);
+    }
 }

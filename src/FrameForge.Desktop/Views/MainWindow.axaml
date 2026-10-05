@@ -336,8 +336,11 @@
                         <Expander Header="Add object" IsVisible="{Binding IsDesignWorkspace}" IsExpanded="True">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
                                 <TextBox Text="{Binding NewObjectName, Mode=TwoWay}" PlaceholderText="Object name" />
-                                <TextBox Text="{Binding NewImageAsset, Mode=TwoWay}"
-                                         PlaceholderText="Project image path (for Image)" />
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5">
+                                    <TextBox Grid.Column="0" Text="{Binding NewImageAsset, Mode=TwoWay}"
+                                             PlaceholderText="Image / Asset (for Image)" />
+                                    <Button Grid.Column="1" Content="Browse..." Click="OnBrowseNewDesignImageClick" />
+                                </Grid>
                                 <WrapPanel>
                                     <Button Content="Frame" Click="OnAddDesignFrameClick" Margin="0,0,4,4" />
                                     <Button Content="Text" Click="OnAddDesignTextClick" Margin="0,0,4,4" />
@@ -437,6 +440,13 @@
                             <StackPanel Spacing="5">
                                 <TextBlock Classes="label" Text="NAME" />
                                 <TextBox Text="{Binding DesignNameDraft, Mode=TwoWay}" />
+                                <StackPanel IsVisible="{Binding IsDesignImageSelected}" Spacing="3" Margin="0,5,0,0">
+                                    <TextBlock Classes="label" Text="IMAGE / ASSET" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetReference}"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="Browse / Change..." HorizontalAlignment="Left"
+                                            Click="OnChangeDesignImageClick" />
+                                </StackPanel>
                                 <TextBlock Classes="label" Text="STATE MEMBERSHIP" Margin="0,5,0,0" />
                                 <TextBlock Classes="value" Text="{Binding SelectedStateMembership}" TextWrapping="Wrap" />
                                 <WrapPanel>
@@ -470,6 +480,16 @@
                                 <TextBlock Classes="mono" Text="{Binding SelectedInheritance, StringFormat='Inherits: {0}'}" TextWrapping="Wrap" />
                                 <TextBlock Classes="mono" Text="{Binding SelectedPreviewProvenance}" TextWrapping="Wrap" />
                                 <TextBlock Classes="mono" Text="{Binding SelectedGroupMembership, StringFormat='Groups: {0}'}" TextWrapping="Wrap" />
+                                <StackPanel IsVisible="{Binding IsDesignImageSelected}" Spacing="2" Margin="0,5,0,0">
+                                    <TextBlock Classes="label" Text="DESIGN ASSET" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetReference}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetPhysicalPath, StringFormat='Resolved: {0}'}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetDimensions, StringFormat='Dimensions: {0}'}" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetFormat, StringFormat='Source format: {0}'}" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetOwnership, StringFormat='Ownership: {0}'}" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedDesignAssetDiagnostic}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="mono" Text="{Binding SelectedWowExportReference, StringFormat='WoW export texture: {0}'}" TextWrapping="Wrap" />
+                                </StackPanel>
                                 <CheckBox Content="Lock this element"
                                           IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
                                 <TextBlock Classes="label" Text="Locked by an element or group; geometry editing is disabled."

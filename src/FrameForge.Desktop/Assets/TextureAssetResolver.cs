@@ -14,7 +14,7 @@ public enum AssetResolutionStatus
 }
 
 public enum TextureFileFormat { Tga, Blp, Png, Unknown }
-public enum AssetSourceKind { SourceRelative, ConfiguredRoot }
+public enum AssetSourceKind { ProjectRelative, SourceRelative, ConfiguredRoot }
 
 public sealed record AssetResolutionDiagnostic(AssetResolutionStatus Status, string Message);
 
@@ -38,14 +38,19 @@ public interface ITextureAssetResolver
     ResolvedTextureAsset Resolve(string? reference);
 }
 
-/// <summary>Resolves WoW Interface paths and caches successfully decoded physical assets.</summary>
+/// <summary>
+/// Resolves explicitly identified project design assets or strict WoW Interface paths and caches
+/// successfully decoded physical assets. The two namespaces are never inferred from one another.
+/// </summary>
 public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
 {
     private readonly Dictionary<string, ResolvedTextureAsset> _resolutionCache = new(StringComparer.Ordinal);
     private readonly Dictionary<FileIdentity, DecodedTexture> _decodeCache = [];
     private readonly TextureDecoderRegistry _decoders;
     private string? _sourcePath;
+    private string? _projectRoot;
     private string[] _assetRoots = [];
+    private HashSet<string> _designReferences = new(StringComparer.Ordinal);
 
     public int DecodeCount { get; private set; }
     public int CacheHitCount { get; private set; }
@@ -55,17 +60,29 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
     public TextureAssetResolver(TextureDecoderRegistry? decoders = null) =>
         _decoders = decoders ?? new TextureDecoderRegistry();
 
-    public void Configure(string? sourcePath, IEnumerable<string> assetRoots)
+    public void Configure(string? sourcePath, IEnumerable<string> assetRoots, string? projectPath = null,
+        IEnumerable<string>? designReferences = null)
     {
         var normalizedSource = string.IsNullOrWhiteSpace(sourcePath) ? null : NormalizePhysicalPath(sourcePath);
+        var normalizedProjectRoot = string.IsNullOrWhiteSpace(projectPath)
+            ? null
+            : Path.GetDirectoryName(NormalizePhysicalPath(projectPath));
         var normalizedRoots = assetRoots.Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(NormalizePhysicalPath).Distinct(StringComparer.Ordinal).ToArray();
+        var normalizedDesignReferences = (designReferences ?? []).Where(reference => !string.IsNullOrWhiteSpace(reference))
+            .Select(reference => reference.Trim().Replace('\\', '/')).ToHashSet(StringComparer.Ordinal);
         if (string.Equals(_sourcePath, normalizedSource, StringComparison.Ordinal)
+            && string.Equals(_projectRoot, normalizedProjectRoot, StringComparison.Ordinal)
             && _assetRoots.SequenceEqual(normalizedRoots, StringComparer.Ordinal))
-            return;
+        {
+            if (_designReferences.SetEquals(normalizedDesignReferences))
+                return;
+        }
 
         _sourcePath = normalizedSource;
+        _projectRoot = normalizedProjectRoot;
         _assetRoots = normalizedRoots;
+        _designReferences = normalizedDesignReferences;
         Refresh();
     }
 
@@ -96,6 +113,10 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
 
     private ResolvedTextureAsset ResolveUncached(string reference)
     {
+        var portableReference = reference.Trim().Replace('\\', '/');
+        if (_designReferences.Contains(portableReference))
+            return ResolveDesignAsset(portableReference);
+
         if (!TryNormalize(reference, out var segments, out var invalidReason))
             return Failure(reference, AssetResolutionStatus.InvalidPath, invalidReason!);
 
@@ -129,40 +150,7 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
                     source.Kind, source.Root);
             if (located.Path is null)
                 continue;
-
-            var detectedFormat = TextureFileFormat.Unknown;
-            try
-            {
-                var info = new FileInfo(located.Path);
-                var identity = new FileIdentity(info.FullName, info.Length, info.LastWriteTimeUtc.Ticks);
-                if (!_decodeCache.TryGetValue(identity, out var texture))
-                {
-                    using var stream = File.OpenRead(located.Path);
-                    detectedFormat = _decoders.Identify(stream);
-                    texture = new DecodedTexture(_decoders.Decode(stream, detectedFormat));
-                    _decodeCache[identity] = texture;
-                    DecodeCount++;
-                }
-                else
-                {
-                    CacheHitCount++;
-                    detectedFormat = texture.Image.Format;
-                }
-
-                return new ResolvedTextureAsset(reference, AssetResolutionStatus.Resolved, located.Path,
-                    source.Kind, source.Root, detectedFormat, texture,
-                    new AssetResolutionDiagnostic(AssetResolutionStatus.Resolved, "Resolved and decoded."));
-            }
-            catch (UnsupportedTextureEncodingException ex)
-            {
-                return Failure(reference, AssetResolutionStatus.UnsupportedFormat, ex.Message,
-                    source.Kind, source.Root, located.Path, detectedFormat);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException or OverflowException)
-            {
-                return Failure(reference, AssetResolutionStatus.DecodeFailed, ex.Message,
-                    source.Kind, source.Root, located.Path, detectedFormat);
-            }
+            return Decode(reference, located.Path, source.Kind, source.Root);
         }
 
         var suffix = invalidRoots.Count == 0 ? string.Empty : $" Invalid or missing roots: {string.Join(", ", invalidRoots)}.";
@@ -188,6 +176,99 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
             return false;
         }
         return true;
+    }
+
+    /// <summary>Normalizes a portable project-owned design asset without applying WoW semantics.</summary>
+    public static bool TryNormalizeProjectAsset(string reference, out string normalized, out string? reason)
+    {
+        normalized = string.Empty;
+        reason = null;
+        var portable = reference.Trim().Replace('\\', '/');
+        if (portable.Length == 0 || portable.StartsWith('/') || Path.IsPathRooted(portable) || portable.Contains(':'))
+        {
+            reason = "Design assets must use a project-relative path.";
+            return false;
+        }
+
+        var segments = portable.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
+        {
+            reason = "Design asset paths may not contain traversal segments.";
+            return false;
+        }
+        normalized = string.Join('/', segments);
+        return true;
+    }
+
+    private ResolvedTextureAsset ResolveDesignAsset(string reference)
+    {
+        if (!TryNormalizeProjectAsset(reference, out var normalized, out var reason))
+            return Failure(reference, AssetResolutionStatus.InvalidPath, reason!);
+        if (_projectRoot is null)
+            return Failure(reference, AssetResolutionStatus.Missing,
+                "Save the FrameForge project before resolving project-owned artwork.", AssetSourceKind.ProjectRelative);
+        if (!Directory.Exists(_projectRoot))
+            return Failure(reference, AssetResolutionStatus.Missing,
+                $"The project directory does not exist: {_projectRoot}", AssetSourceKind.ProjectRelative, _projectRoot);
+
+        LocateResult located;
+        try
+        {
+            located = Locate(_projectRoot, normalized.Split('/'));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return Failure(reference, AssetResolutionStatus.Missing, ex.Message,
+                AssetSourceKind.ProjectRelative, _projectRoot);
+        }
+        if (located.Ambiguous.Count > 0)
+            return Failure(reference, AssetResolutionStatus.Ambiguous,
+                $"Multiple case/extension candidates exist beneath {_projectRoot}: {string.Join(", ", located.Ambiguous.Select(Path.GetFileName))}",
+                AssetSourceKind.ProjectRelative, _projectRoot);
+        if (located.Path is null)
+            return Failure(reference, AssetResolutionStatus.Missing,
+                $"Project asset \"{reference}\" was not found beneath {_projectRoot}.",
+                AssetSourceKind.ProjectRelative, _projectRoot);
+
+        return Decode(reference, located.Path, AssetSourceKind.ProjectRelative, _projectRoot);
+    }
+
+    private ResolvedTextureAsset Decode(string reference, string path, AssetSourceKind sourceKind, string sourceRoot)
+    {
+        var detectedFormat = TextureFileFormat.Unknown;
+        try
+        {
+            var info = new FileInfo(path);
+            var identity = new FileIdentity(info.FullName, info.Length, info.LastWriteTimeUtc.Ticks);
+            if (!_decodeCache.TryGetValue(identity, out var texture))
+            {
+                using var stream = File.OpenRead(path);
+                detectedFormat = _decoders.Identify(stream);
+                texture = new DecodedTexture(_decoders.Decode(stream, detectedFormat));
+                _decodeCache[identity] = texture;
+                DecodeCount++;
+            }
+            else
+            {
+                CacheHitCount++;
+                detectedFormat = texture.Image.Format;
+            }
+
+            return new ResolvedTextureAsset(reference, AssetResolutionStatus.Resolved, path,
+                sourceKind, sourceRoot, detectedFormat, texture,
+                new AssetResolutionDiagnostic(AssetResolutionStatus.Resolved, "Resolved and decoded."));
+        }
+        catch (UnsupportedTextureEncodingException ex)
+        {
+            return Failure(reference, AssetResolutionStatus.UnsupportedFormat, ex.Message,
+                sourceKind, sourceRoot, path, detectedFormat);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                                   or NotSupportedException or OverflowException)
+        {
+            return Failure(reference, AssetResolutionStatus.DecodeFailed, ex.Message,
+                sourceKind, sourceRoot, path, detectedFormat);
+        }
     }
 
     private static string? FindContentRoot(string? sourcePath)

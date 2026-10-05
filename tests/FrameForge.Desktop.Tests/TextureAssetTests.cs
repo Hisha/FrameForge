@@ -1,6 +1,7 @@
 using FrameForge.Core.Models;
 using FrameForge.Desktop.Assets;
 using FrameForge.Core.Import;
+using SkiaSharp;
 using Xunit;
 
 namespace FrameForge.Desktop.Tests;
@@ -90,6 +91,69 @@ public sealed class TextureAssetTests : IDisposable
         Assert.Equal(AssetResolutionStatus.Missing,
             resolver.Resolve(@"Interface\NativeHunts\absent.tga").Status);
         Assert.Equal(AssetResolutionStatus.InvalidPath, resolver.Resolve("../escape.tga").Status);
+    }
+
+    [Fact]
+    public void Project_relative_png_is_explicitly_resolved_and_decoded_as_design_source()
+    {
+        var projectDirectory = Path.Combine(_temp, "project");
+        var assetDirectory = Path.Combine(projectDirectory, "assets");
+        Directory.CreateDirectory(assetDirectory);
+        var projectPath = Path.Combine(projectDirectory, "Design.fforge.json");
+        var pngPath = Path.Combine(assetDirectory, "divider.png");
+        File.WriteAllBytes(pngPath, Png(3, 2));
+        using var resolver = new TextureAssetResolver();
+        resolver.Configure(null, [], projectPath, ["assets/divider.png"]);
+
+        var asset = resolver.Resolve("assets/divider.png");
+
+        Assert.Equal(AssetResolutionStatus.Resolved, asset.Status);
+        Assert.Equal(AssetSourceKind.ProjectRelative, asset.SourceKind);
+        Assert.Equal(TextureFileFormat.Png, asset.Format);
+        Assert.Equal(3, asset.Width);
+        Assert.Equal(2, asset.Height);
+        Assert.True(asset.CanRender);
+    }
+
+    [Theory]
+    [InlineData("../outside.png")]
+    [InlineData("assets/../../outside.tga")]
+    [InlineData("/absolute/image.png")]
+    public void Project_asset_normalization_rejects_traversal_and_absolute_paths(string reference)
+    {
+        Assert.False(TextureAssetResolver.TryNormalizeProjectAsset(reference, out _, out _));
+    }
+
+    [Fact]
+    public void Design_reference_configuration_does_not_change_imported_wow_resolution()
+    {
+        var xml = MakeSourceTree("panel.tga", Tga(1, 1, true, (1, 2, 3, 255)));
+        var projectPath = Path.Combine(_temp, "project", "Design.fforge.json");
+        using var resolver = new TextureAssetResolver();
+        resolver.Configure(xml, [], projectPath, ["assets/divider.png"]);
+
+        var imported = resolver.Resolve(@"Interface\NativeHunts\panel.tga");
+
+        Assert.Equal(AssetResolutionStatus.Resolved, imported.Status);
+        Assert.Equal(AssetSourceKind.SourceRelative, imported.SourceKind);
+        Assert.Equal(@"Interface\NativeHunts\panel.tga", imported.Reference);
+    }
+
+    [Fact]
+    public void Project_relative_tga_remains_supported()
+    {
+        var projectDirectory = Path.Combine(_temp, "tga-project");
+        Directory.CreateDirectory(Path.Combine(projectDirectory, "assets"));
+        File.WriteAllBytes(Path.Combine(projectDirectory, "assets", "divider.tga"),
+            Tga(2, 1, true, (1, 2, 3, 255), (4, 5, 6, 255)));
+        using var resolver = new TextureAssetResolver();
+        resolver.Configure(null, [], Path.Combine(projectDirectory, "Design.fforge.json"), ["assets/divider.tga"]);
+
+        var asset = resolver.Resolve("assets/divider.tga");
+
+        Assert.Equal(AssetResolutionStatus.Resolved, asset.Status);
+        Assert.Equal(TextureFileFormat.Tga, asset.Format);
+        Assert.Equal(2, asset.Width);
     }
 
     [Fact]
@@ -219,6 +283,15 @@ public sealed class TextureAssetTests : IDisposable
             bytes[21 + i * 4] = pixels[i].A;
         }
         return bytes;
+    }
+
+    private static byte[] Png(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        bitmap.Erase(SKColors.Crimson);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 
     public void Dispose()

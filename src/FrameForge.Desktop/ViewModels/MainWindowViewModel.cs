@@ -71,9 +71,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool IsStockFrameworkSelected => ConceptualStockFramework?.Members.Contains(SelectedName ?? string.Empty, StringComparer.Ordinal) == true;
     public string StockFrameworkAction => ConceptualStockFramework?.Locked == true
         ? "Unlock for Editing" : "Lock Blizzard Dungeon Finder Frame";
+    public bool CanBrowseDesignAssets => ProjectPath.Length > 0;
+    public bool IsDesignImageSelected => SelectedFrame?.Kind == FrameKind.TEXTURE
+        && Project.Editor.DesignObjectFor(SelectedName) is not null;
+    public string SelectedDesignAssetReference =>
+        Project.Editor.DesignObjectFor(SelectedName)?.DesignAsset ?? string.Empty;
+    private ResolvedTextureAsset? SelectedDesignAsset => IsDesignImageSelected
+        ? Assets.Resolve(SelectedDesignAssetReference)
+        : null;
+    public string SelectedDesignAssetPhysicalPath => SelectedDesignAsset?.PhysicalPath ?? "Not resolved";
+    public string SelectedDesignAssetDimensions => SelectedDesignAsset is { Width: { } width, Height: { } height }
+        ? $"{width} × {height}"
+        : "Unknown";
+    public string SelectedDesignAssetFormat => SelectedDesignAsset?.Format switch
+    {
+        TextureFileFormat.Blp => "BLP",
+        TextureFileFormat.Png => "PNG (design source only)",
+        TextureFileFormat.Tga => "TGA",
+        _ => "Unknown",
+    };
+    public string SelectedDesignAssetOwnership => SelectedDesignAsset?.SourceKind == AssetSourceKind.ProjectRelative
+        ? "Project-owned / portable"
+        : "Project asset unresolved";
+    public string SelectedDesignAssetDiagnostic => SelectedDesignAsset?.Diagnostic.Message ?? string.Empty;
+    public string SelectedWowExportReference => "Not assigned — future export work";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowTitle))]
+    [NotifyPropertyChangedFor(nameof(CanBrowseDesignAssets))]
     private string _projectPath = string.Empty;
 
     [ObservableProperty]
@@ -447,7 +472,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         foreach (var root in configuration.AssetRoots)
             AssetRoots.Add(root);
         _wowClient = _wowAssets.ValidateClient(configuration.WowClientPath);
-        Assets.Configure(null, EffectiveAssetRoots());
+        ConfigureAssets();
         ModeOptions = [.. Enum.GetValues<CanvasViewMode>().Select(m => new CanvasModeOption(this, m))];
         WorkspaceOptions = [.. Enum.GetValues<WorkspaceExperience>().Select(item => new WorkspaceOption(this, item))];
         LabelPolicyOptions = [.. Enum.GetValues<LabelPolicy>().Select(p => new LabelPolicyOption(this, p))];
@@ -580,7 +605,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ImportDiagnostics = [];
         LastImport = null;
         _assetSourcePath = ResolveSourcePath(project, path);
-        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
+        ConfigureAssets();
         RefreshPreviewStateOptions(project);
         RefreshGroups(project);
         Workspace = project.Editor.Workspace == "inspect" ? WorkspaceExperience.Inspect : WorkspaceExperience.Design;
@@ -735,7 +760,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // path: null, so Save never targets the source file; it routes through Save As.
         Load(project, null, result.SummaryText);
         _assetSourcePath = path;
-        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
+        ConfigureAssets();
 
         // Published AFTER Load, because Load is what clears the previous document's provenance.
         Source = SourceSummary.Imported(FileName(path), path, result);
@@ -781,6 +806,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             File.WriteAllText(path, ProjectCodec.Serialize(projectToSave));
             ProjectPath = path;
+            ConfigureAssets();
             IsDirty = false;
             Status = $"Saved {FileName(path)}.";
             return true;
@@ -884,11 +910,123 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void AddDesignText() => AddDesignObject(FrameKind.FONTSTRING, "Text");
     public void AddDesignImage() => AddDesignObject(FrameKind.TEXTURE, "Image");
 
+    public bool PrepareDesignAssetBrowse()
+    {
+        if (CanBrowseDesignAssets)
+            return true;
+        Status = "Save the FrameForge project before choosing project-owned artwork.";
+        return false;
+    }
+
+    public bool SetNewDesignImageFromFile(string path)
+    {
+        if (!TryMakeProjectAssetReference(path, out var reference, out var error))
+        {
+            Status = error;
+            return false;
+        }
+        NewImageAsset = reference;
+        Status = $"Selected project image {reference}.";
+        return true;
+    }
+
+    public bool ChangeSelectedDesignImageFromFile(string path)
+    {
+        if (!IsDesignImageSelected || SelectedName is not { } name || SelectedFrame is not { } frame)
+            return false;
+        if (IsSelectionLocked)
+        {
+            Status = $"{name} is locked. Unlock it before changing its image.";
+            return false;
+        }
+        if (!TryMakeProjectAssetReference(path, out var reference, out var error))
+        {
+            Status = error;
+            return false;
+        }
+
+        var texture = frame.Visual?.Texture ?? new TextureVisual(null, TexCoords.Full);
+        var updated = frame with
+        {
+            Visual = (frame.Visual ?? new FrameVisual()) with { Texture = texture with { File = reference } },
+        };
+        var designObjects = Project.Editor.DesignObjects.Select(item => item.FrameName == name
+            ? item with { DesignAsset = reference }
+            : item).ToArray();
+        Project = Project with
+        {
+            Frames = [.. Project.Frames.Select(item => item.Name == name ? updated : item)],
+            Editor = Project.Editor with { DesignObjects = designObjects },
+        };
+        IsDirty = true;
+        ConfigureAssets();
+        RelaidOut(Project, name, $"Changed image to {reference}.");
+        return true;
+    }
+
+    private bool TryMakeProjectAssetReference(string path, out string reference, out string error)
+    {
+        reference = string.Empty;
+        error = string.Empty;
+        if (!PrepareDesignAssetBrowse())
+        {
+            error = Status;
+            return false;
+        }
+        if (!File.Exists(path))
+        {
+            error = $"The selected image does not exist: {path}";
+            return false;
+        }
+
+        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(ProjectPath))!;
+        var relative = Path.GetRelativePath(projectDirectory, Path.GetFullPath(path)).Replace('\\', '/');
+        if (!TextureAssetResolver.TryNormalizeProjectAsset(relative, out reference, out var reason))
+        {
+            error = $"Choose an image inside the project directory. {reason}";
+            return false;
+        }
+        if (!IsSupportedDesignImage(reference))
+        {
+            error = "Design images must be PNG, TGA, or BLP files.";
+            reference = string.Empty;
+            return false;
+        }
+        return true;
+    }
+
+    private bool TryValidateDesignAssetReference(string value, out string? reference, out string error)
+    {
+        reference = null;
+        error = string.Empty;
+        if (!CanBrowseDesignAssets)
+        {
+            error = "Save the FrameForge project before assigning project-owned artwork.";
+            return false;
+        }
+        if (!TextureAssetResolver.TryNormalizeProjectAsset(value, out var normalized, out var reason))
+        {
+            error = reason!;
+            return false;
+        }
+        if (!IsSupportedDesignImage(normalized))
+        {
+            error = "Design images must be PNG, TGA, or BLP files.";
+            return false;
+        }
+        reference = normalized;
+        return true;
+    }
+
+    private static bool IsSupportedDesignImage(string reference) =>
+        Path.GetExtension(reference).ToLowerInvariant() is ".png" or ".tga" or ".blp";
+
     private void AddDesignObject(FrameKind kind, string fallbackName)
     {
         var displayName = string.IsNullOrWhiteSpace(NewObjectName) ? fallbackName : NewObjectName.Trim();
+        string? designAsset = null;
         if (kind == FrameKind.TEXTURE && !string.IsNullOrWhiteSpace(NewImageAsset)
-            && !TextureAssetResolver.TryNormalize(NewImageAsset, out _, out var assetError))
+            && !TryValidateDesignAssetReference(NewImageAsset, out designAsset, out var assetError))
         {
             Status = $"Image was not added: {assetError}";
             return;
@@ -901,7 +1039,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             FrameKind.FONTSTRING => new FrameVisual { Text = new TextVisual("Text", "CENTER", "MIDDLE", null) },
             FrameKind.TEXTURE => new FrameVisual { Texture = new TextureVisual(
-                string.IsNullOrWhiteSpace(NewImageAsset) ? null : NewImageAsset.Trim(), TexCoords.Full, null, null, null, null) },
+                designAsset, TexCoords.Full, null, null, null, null) },
             _ => null,
         };
         var frame = new FrameDef
@@ -915,7 +1053,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RelativePoint = AnchorPoint.CENTER,
             Visual = visual,
         };
-        var designObject = new DesignObjectMetadata { FrameName = internalName, DisplayName = displayName };
+        var designObject = new DesignObjectMetadata
+        {
+            FrameName = internalName,
+            DisplayName = displayName,
+            DesignAsset = kind == FrameKind.TEXTURE ? designAsset : null,
+        };
         Project = Project with
         {
             Frames = [.. Project.Frames, frame],
@@ -925,6 +1068,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         NewImageAsset = string.Empty;
         IsDirty = true;
         SelectedName = internalName;
+        ConfigureAssets();
         RelaidOut(Project, internalName, $"Added {kind.TagName()} \"{displayName}\" in All States.");
     }
 
@@ -1213,7 +1357,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
         AssetRoots.Add(fullPath);
-        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
+        ConfigureAssets();
         SaveAssetRoots();
         RefreshAssetPresentation($"Added asset root {fullPath}.");
     }
@@ -1222,7 +1366,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (!AssetRoots.Remove(path))
             return;
-        Assets.Configure(_assetSourcePath, EffectiveAssetRoots());
+        ConfigureAssets();
         SaveAssetRoots();
         RefreshAssetPresentation($"Removed asset root {path}.");
     }
@@ -1333,8 +1477,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private IReadOnlyList<string> EffectiveAssetRoots() => [.. AssetRoots, _wowAssets.CacheRoot];
 
+    private void ConfigureAssets() => Assets.Configure(_assetSourcePath, EffectiveAssetRoots(), ProjectPath,
+        Project.Editor.DesignObjects.Select(item => item.DesignAsset).OfType<string>());
+
     private IReadOnlyList<string> StockAssetReferences() => EnumerateAssetReferences()
-        .Where(reference => Assets.Resolve(reference).SourceKind != AssetSourceKind.SourceRelative)
+        .Where(reference => Assets.Resolve(reference).SourceKind is not (AssetSourceKind.SourceRelative or AssetSourceKind.ProjectRelative))
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
@@ -1624,6 +1771,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(ConceptualStockFramework));
         OnPropertyChanged(nameof(IsStockFrameworkSelected));
         OnPropertyChanged(nameof(StockFrameworkAction));
+        OnPropertyChanged(nameof(IsDesignImageSelected));
+        OnPropertyChanged(nameof(SelectedDesignAssetReference));
+        OnPropertyChanged(nameof(SelectedDesignAssetPhysicalPath));
+        OnPropertyChanged(nameof(SelectedDesignAssetDimensions));
+        OnPropertyChanged(nameof(SelectedDesignAssetFormat));
+        OnPropertyChanged(nameof(SelectedDesignAssetOwnership));
+        OnPropertyChanged(nameof(SelectedDesignAssetDiagnostic));
+        OnPropertyChanged(nameof(SelectedWowExportReference));
     }
 
     private void RefreshPreviewStateOptions(Project project)

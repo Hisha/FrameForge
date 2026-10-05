@@ -7,6 +7,7 @@ using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 using FrameForge.Desktop.ViewModels;
+using SkiaSharp;
 using Xunit;
 
 namespace FrameForge.Desktop.Tests;
@@ -392,6 +393,140 @@ public sealed class CompositionUsabilityTests
         Assert.Null(vm.Project.Find(stock));
     }
 
+    [Fact]
+    public void Design_image_browse_requires_saved_project_and_rejects_external_or_traversal_paths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"frameforge-design-assets-{Guid.NewGuid():N}");
+        var projectDirectory = Path.Combine(root, "project");
+        var external = Path.Combine(root, "outside.png");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllBytes(external, Png(1, 1));
+        try
+        {
+            var vm = ViewModel();
+            vm.NewProject();
+            Assert.False(vm.SetNewDesignImageFromFile(external));
+            Assert.Contains("Save", vm.Status);
+
+            Assert.True(vm.SaveToFile(Path.Combine(projectDirectory, "Design.fforge.json")));
+            Assert.False(vm.SetNewDesignImageFromFile(external));
+            Assert.Contains("inside the project directory", vm.Status);
+
+            vm.NewImageAsset = "../outside.png";
+            vm.AddDesignImage();
+            Assert.Empty(vm.Project.Frames);
+            Assert.Contains("traversal", vm.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Project_png_round_trips_after_relocation_and_custom_image_stays_editable_over_locked_stock()
+    {
+        const string stock = "LFDParentFrame";
+        var root = Path.Combine(Path.GetTempPath(), $"frameforge-portable-assets-{Guid.NewGuid():N}");
+        var original = Path.Combine(root, "original");
+        var relocated = Path.Combine(root, "relocated");
+        var assets = Path.Combine(original, "assets");
+        Directory.CreateDirectory(assets);
+        var imagePath = Path.Combine(assets, "hunt_divider.png");
+        File.WriteAllBytes(imagePath, Png(7, 3));
+        try
+        {
+            var vm = ViewModel();
+            vm.Load(new Project
+            {
+                Frames = [new FrameDef { Name = stock, Width = 355, Height = 440 }],
+                Editor = new EditorMetadata
+                {
+                    Groups = [new EditorGroup
+                    {
+                        Name = "Blizzard Dungeon Finder Frame", Members = [stock], Locked = true,
+                        Concept = "stock-framework",
+                    }],
+                },
+            }, null, "test");
+            var projectPath = Path.Combine(original, "NativeHuntsRedesign.fforge.json");
+            Assert.True(vm.SaveToFile(projectPath));
+            Assert.True(vm.SetNewDesignImageFromFile(imagePath));
+            Assert.Equal("assets/hunt_divider.png", vm.NewImageAsset);
+            vm.NewObjectName = "Divider";
+            vm.AddDesignImage();
+            var divider = vm.SelectedName!;
+            Assert.True(vm.ChangeSelectedDesignImageFromFile(imagePath));
+
+            Assert.Equal("assets/hunt_divider.png", vm.Project.Editor.DesignObjectFor(divider)!.DesignAsset);
+            Assert.Equal(AssetSourceKind.ProjectRelative, vm.Assets.Resolve("assets/hunt_divider.png").SourceKind);
+            Assert.Equal((7, 3), (vm.Assets.Resolve("assets/hunt_divider.png").Width, vm.Assets.Resolve("assets/hunt_divider.png").Height));
+            Assert.Equal("PNG (design source only)", vm.SelectedDesignAssetFormat);
+            Assert.Equal("Project-owned / portable", vm.SelectedDesignAssetOwnership);
+            Assert.Contains("future export", vm.SelectedWowExportReference);
+            var stockBefore = vm.Project.Find(stock)!;
+            vm.DragFrame(divider, 12, -8);
+            vm.Editor.Width = "96";
+            Assert.Equal(12, vm.Project.Find(divider)!.OffsetX);
+            Assert.Equal(96, vm.Project.Find(divider)!.Width);
+            Assert.Equal(stockBefore, vm.Project.Find(stock));
+            Assert.True(vm.Project.Editor.IsLocked(stock));
+            Assert.True(vm.SaveToFile(projectPath));
+            Assert.Contains("\"designAsset\": \"assets/hunt_divider.png\"", File.ReadAllText(projectPath));
+
+            Directory.Move(original, relocated);
+            var relocatedProject = Path.Combine(relocated, "NativeHuntsRedesign.fforge.json");
+            var reopened = ViewModel();
+            reopened.OpenFromFile(relocatedProject);
+            reopened.Select(divider);
+            var resolved = reopened.Assets.Resolve("assets/hunt_divider.png");
+            Assert.True(resolved.CanRender, resolved.Diagnostic.Message);
+            Assert.StartsWith(relocated, resolved.PhysicalPath, StringComparison.Ordinal);
+            Assert.Equal(7, resolved.Width);
+            Assert.Equal("assets/hunt_divider.png", reopened.SelectedDesignAssetReference);
+            Assert.Equal(96, reopened.Project.Find(divider)!.Width);
+            Assert.True(reopened.Project.Editor.IsLocked(stock));
+
+            reopened.DeleteFrame();
+            Assert.Null(reopened.Project.Find(divider));
+            Assert.NotNull(reopened.Project.Find(stock));
+            Assert.True(reopened.SetNewDesignImageFromFile(Path.Combine(relocated, "assets", "hunt_divider.png")));
+            reopened.NewObjectName = "Divider";
+            reopened.AddDesignImage();
+            Assert.True(reopened.Assets.Resolve("assets/hunt_divider.png").CanRender);
+            Assert.True(reopened.Project.Editor.IsLocked(stock));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Missing_design_asset_reports_a_useful_diagnostic_without_crashing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"frameforge-missing-asset-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var vm = ViewModel();
+            vm.NewProject();
+            Assert.True(vm.SaveToFile(Path.Combine(root, "Missing.fforge.json")));
+            vm.NewImageAsset = "assets/missing.png";
+            vm.AddDesignImage();
+
+            var result = vm.Assets.Resolve("assets/missing.png");
+            Assert.Equal(AssetResolutionStatus.Missing, result.Status);
+            Assert.Contains("was not found", result.Diagnostic.Message);
+            Assert.Contains("was not found", vm.SelectedDesignAssetDiagnostic);
+            Assert.True(vm.Editor.HasSelection);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static void AddDesignObject(MainWindowViewModel vm, FrameKind kind)
     {
         switch (kind)
@@ -409,6 +544,15 @@ public sealed class CompositionUsabilityTests
             default:
                 throw new ArgumentOutOfRangeException(nameof(kind), kind, null);
         }
+    }
+
+    private static byte[] Png(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        bitmap.Erase(SKColors.Crimson);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 
     private static MainWindowViewModel ViewModel() => new(

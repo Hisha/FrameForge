@@ -216,6 +216,8 @@ public sealed class VisualCompositionInspector(
                 : "Runtime-selected asset (unresolved)";
         if (asset.PhysicalPath is not { } path)
             return asset.Reference is null ? "No physical asset" : $"Unresolved: {asset.Diagnostic.Message}";
+        if (asset.SourceKind == AssetSourceKind.ProjectRelative)
+            return $"Project-owned design asset → {path}";
         if (asset.SourceKind == AssetSourceKind.SourceRelative)
             return $"Source-relative project asset → {path}";
         if (IsInside(path, managedCacheRoot))

@@ -95,6 +95,39 @@ public partial class MainWindow : Window
     private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
     private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
     private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();
+
+    private async void OnBrowseNewDesignImageClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || !vm.PrepareDesignAssetBrowse())
+            return;
+        if (await PickDesignImageAsync() is { } path)
+            vm.SetNewDesignImageFromFile(path);
+    }
+
+    private async void OnChangeDesignImageClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || !vm.PrepareDesignAssetBrowse())
+            return;
+        if (await PickDesignImageAsync() is { } path && vm.ChangeSelectedDesignImageFromFile(path))
+            Canvas.InvalidateVisual();
+    }
+
+    private async Task<string?> PickDesignImageAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Choose project-owned design artwork",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Design images (PNG, TGA, BLP)") { Patterns = ["*.png", "*.tga", "*.blp"] },
+                new FilePickerFileType("PNG images") { Patterns = ["*.png"] },
+                new FilePickerFileType("TGA images") { Patterns = ["*.tga"] },
+                new FilePickerFileType("BLP images") { Patterns = ["*.blp"] },
+            ],
+        });
+        return files.Count > 0 ? files[0].Path.LocalPath : null;
+    }
     private void OnCreateStateClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateDesignState();
     private void OnRenameStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedDesignState();
     private void OnDeleteStateClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteSelectedDesignState();
