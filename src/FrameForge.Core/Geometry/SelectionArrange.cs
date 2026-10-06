@@ -97,6 +97,9 @@ public sealed record SelectionArrangeOutcome(
 /// a <c>SetAllPoints</c> frame whose offsets are ignored, a multi-anchor stretch frame whose size
 /// is derived from two edges, or a frame whose anchor does not resolve. Reporting beats guessing,
 /// because a wrong guess is indistinguishable from a correct one until the user runs the game.
+/// <para>
+/// "Locked" is scoped to modification, not to participation. A locked frame is never written to, but
+/// it is fully part of what an alignment measures - see <see cref="Bounds"/> and <see cref="CanRun"/>.
 /// </para>
 /// </remarks>
 public static class SelectionArrange
@@ -108,7 +111,15 @@ public static class SelectionArrange
     public static bool IsDistribution(SelectionArrangeCommand command) =>
         command is SelectionArrangeCommand.DistributeHorizontal or SelectionArrangeCommand.DistributeVertical;
 
-    /// <summary>How many movable objects the command needs before it can do anything.</summary>
+    /// <summary>
+    /// How many objects the command needs in its selection before it can do anything.
+    /// </summary>
+    /// <remarks>
+    /// For alignment this counts <em>selected</em> objects, because a locked object contributes
+    /// reference geometry even though it cannot be modified. For distribution it counts
+    /// <em>movable</em> objects, because equal gaps need two fixed endpoints that the tool is
+    /// allowed to rely on.
+    /// </remarks>
     public static int RequiredCount(SelectionArrangeCommand command) => IsDistribution(command) ? 3 : 2;
 
     /// <summary>Short button label.</summary>
@@ -161,6 +172,62 @@ public static class SelectionArrange
         }
 
         return bounds;
+    }
+
+    /// <summary>
+    /// How many of <paramref name="names"/> actually have resolved geometry, ignoring duplicates
+    /// and names that are not part of the selection any more.
+    /// </summary>
+    /// <remarks>
+    /// This is the population an alignment measures. It counts locked frames, because they are
+    /// reference geometry rather than an obstacle, and it skips frames the layout could not resolve
+    /// because an alignment target derived from a frame nobody can see is not a target.
+    /// </remarks>
+    public static int ResolvedCount(LayoutResult layout, IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(names);
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var count = 0;
+        foreach (var name in names)
+        {
+            if (!string.IsNullOrEmpty(name) && seen.Add(name) && layout.Rects.ContainsKey(name))
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="command"/> can do real work for this selection right now.
+    /// </summary>
+    /// <remarks>
+    /// This is the single rule behind both the align button's enabled state and the command's own
+    /// refusal, so the button can never offer an operation that would do nothing and never hide one
+    /// that would.
+    /// <para>
+    /// A locked object counts as a usable member of an alignment selection. Locked means "this
+    /// object cannot be modified", not "this object does not exist": a locked Blizzard text label
+    /// and an editable custom text label selected together, then Align Top, is the ordinary case of
+    /// lining a new element up with the stock framework, and the editable one has to move for it.
+    /// Requiring two <em>editable</em> objects would make that - and only that - case silently fail,
+    /// while the same selection of two editable objects would work, which reads as a bug rather than
+    /// a rule.
+    /// </para>
+    /// </remarks>
+    public static bool CanRun(
+        Project project,
+        LayoutResult layout,
+        IReadOnlyList<string> names,
+        SelectionArrangeCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(names);
+
+        Classify(project, layout, names, out var movable, out _, out _);
+        return movable.Count > 0 && HasEnoughForCommand(layout, names, movable, command, out _);
     }
 
     /// <summary>
@@ -223,9 +290,10 @@ public static class SelectionArrange
     /// The alignment target is the bounds of the whole requested selection, including locked frames:
     /// a locked object is not moved, but it is part of the selection the user is aligning against,
     /// and silently ignoring its extent would move the editable objects to somewhere the user did
-    /// not ask for. Distribution instead works purely among the objects it may move, because
-    /// equal spacing needs two fixed endpoints and inventing one on behalf of a locked object
-    /// would be a bigger guess than the situation calls for.
+    /// not ask for. That is also why the size gate counts selected objects rather than editable
+    /// ones - see <see cref="CanRun"/>. Distribution instead works purely among the objects it may
+    /// move, because equal spacing needs two fixed endpoints and inventing one on behalf of a locked
+    /// object would be a bigger guess than the situation calls for.
     /// </para>
     /// <para>
     /// Targets are computed once from the layout as it was when the user asked, then applied
@@ -247,15 +315,15 @@ public static class SelectionArrange
 
         Classify(project, layout, names, out var movable, out var excluded, out var blocked);
 
+        // Every selected object is locked (or otherwise unmodifiable), so there is nothing this
+        // command could do. Report that rather than returning an unexplained no-op.
         if (movable.Count == 0)
             return new SelectionArrangeOutcome(project, command, [], excluded, blocked);
 
-        var required = RequiredCount(command);
-        if (movable.Count < required)
+        if (!HasEnoughForCommand(layout, names, movable, command, out var shortfall))
         {
             blocked = [.. blocked, new SelectionArrangeBlockage(
-                names.Count == 1 ? names[0] : "selection",
-                $"{Label(command).ToLowerInvariant()} needs at least {required} movable objects and the selection has {movable.Count}")];
+                names.Count == 1 ? names[0] : "selection", shortfall)];
             return new SelectionArrangeOutcome(project, command, [], excluded, blocked);
         }
 
@@ -303,6 +371,39 @@ public static class SelectionArrange
             return new SelectionArrangeOutcome(project, command, [], excluded, [.. blocked, .. extraBlockages]);
 
         return new SelectionArrangeOutcome(work, command, moved, excluded, [.. blocked, .. extraBlockages]);
+    }
+
+    /// <summary>
+    /// Whether the selection is big enough for the command, and if not, the sentence to say so.
+    /// </summary>
+    /// <remarks>
+    /// The two commands count different populations, and the difference is the whole point of
+    /// <see cref="CanRun"/>. Alignment counts resolved selected objects, locked ones included,
+    /// because the target is the bounds of everything that was selected and the locked objects are
+    /// part of those bounds. Distribution counts only movable objects, because it invents an
+    /// arrangement between fixed endpoints and a locked object is not one the tool may rely on
+    /// staying exactly where it is if the layout is later re-resolved.
+    /// </remarks>
+    private static bool HasEnoughForCommand(
+        LayoutResult layout,
+        IReadOnlyList<string> names,
+        List<string> movable,
+        SelectionArrangeCommand command,
+        out string shortfall)
+    {
+        var required = RequiredCount(command);
+        var (available, unit) = IsDistribution(command)
+            ? (movable.Count, "movable objects")
+            : (ResolvedCount(layout, names), "selected objects");
+
+        if (available >= required)
+        {
+            shortfall = string.Empty;
+            return true;
+        }
+
+        shortfall = $"{Label(command).ToLowerInvariant()} needs at least {required} {unit} and the selection has {available}";
+        return false;
     }
 
     /// <summary>

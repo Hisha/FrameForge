@@ -2,6 +2,7 @@ using Avalonia.Input;
 using FrameForge.Core;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
+using FrameForge.Core.Serialization;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Controls;
@@ -446,6 +447,115 @@ public sealed class MultiSelectionTests
         return vm;
     }
 
+    /// <summary>
+    /// A locked stock label and an editable custom label placed inside its box, which is the real
+    /// "line my new element up with the Blizzard framework" case.
+    /// </summary>
+    private static MainWindowViewModel LockedReferenceViewModel()
+    {
+        var vm = ViewModel(
+            new FrameDef
+            {
+                Name = "Stock", Width = 200, Height = 100, OffsetX = -300, OffsetY = 200,
+            },
+            new FrameDef
+            {
+                Name = "Custom", Width = 120, Height = 40, OffsetX = -278, OffsetY = 176,
+            });
+        vm.SetElementLocked("Stock", true);
+        vm.IsDirty = false;
+        return vm;
+    }
+
+    private static void Select(MainWindowViewModel vm, params string[] names)
+    {
+        foreach (var name in names)
+            vm.ToggleSelection(name);
+    }
+
+    [Fact]
+    public void LockedReferenceEnablesAlignForTwoSelectedObjects()
+    {
+        var vm = LockedReferenceViewModel();
+        vm.ToggleSelection("Stock");
+        vm.ToggleSelection("Custom");
+
+        Assert.True(vm.IsMultiSelection);
+        Assert.True(vm.CanAlignSelection);
+    }
+
+    [Fact]
+    public void AlignTopWithLockedReferenceMovesOnlyTheEditableObject()
+    {
+        var vm = LockedReferenceViewModel();
+        Select(vm, "Custom", "Stock");
+        Assert.Equal("Stock", vm.SelectedName);
+
+        var stockBefore = vm.Project.Find("Stock");
+        vm.ArrangeSelection(SelectionArrangeCommand.AlignTop);
+        var stockAfter = vm.Project.Find("Stock");
+
+        Assert.Equal(stockBefore, stockAfter);
+        Assert.Contains("1 object moved", vm.Status);
+    }
+
+    [Fact]
+    public void AlignLeftWithLockedReferenceWorksRegardlessOfSelectionOrder()
+    {
+        var vm = LockedReferenceViewModel();
+        Select(vm, "Stock", "Custom");
+        vm.ArrangeSelection(SelectionArrangeCommand.AlignLeft);
+        var after = vm.Layout.Rects;
+        Assert.Equal(after["Stock"].Left, after["Custom"].Left, 6);
+        Assert.Contains("1 object moved", vm.Status);
+
+        var vm2 = LockedReferenceViewModel();
+        Select(vm2, "Custom", "Stock");
+        vm2.ArrangeSelection(SelectionArrangeCommand.AlignLeft);
+        var after2 = vm2.Layout.Rects;
+        Assert.Equal(after2["Stock"].Left, after2["Custom"].Left, 6);
+    }
+
+    [Fact]
+    public void AllLockedSelectionDisablesAlignAndRefusesToChangeProject()
+    {
+        var vm = ViewModel(
+            new FrameDef { Name = "L1", Width = 100, Height = 100 },
+            new FrameDef { Name = "L2", Width = 100, Height = 100, OffsetX = 300 });
+        vm.SetElementLocked("L1", true);
+        vm.SetElementLocked("L2", true);
+        vm.IsDirty = false;
+        vm.ToggleSelection("L1");
+        vm.ToggleSelection("L2");
+
+        Assert.False(vm.CanAlignSelection);
+        var before = ProjectCodec.Serialize(vm.Project);
+        vm.ArrangeSelection(SelectionArrangeCommand.AlignTop);
+        Assert.Equal(before, ProjectCodec.Serialize(vm.Project));
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void AllLockedSelectionDisablesDistributeAsWell()
+    {
+        var vm = ViewModel(
+            new FrameDef { Name = "L1", Width = 100, Height = 100 },
+            new FrameDef { Name = "L2", Width = 100, Height = 100, OffsetX = 150 },
+            new FrameDef { Name = "L3", Width = 100, Height = 100, OffsetX = 300 });
+        vm.SetElementLocked("L1", true);
+        vm.SetElementLocked("L2", true);
+        vm.SetElementLocked("L3", true);
+        vm.IsDirty = false;
+        Select(vm, "L1", "L2", "L3");
+
+        Assert.False(vm.CanAlignSelection);
+        Assert.False(vm.CanDistributeSelection);
+        var before = ProjectCodec.Serialize(vm.Project);
+        vm.ArrangeSelection(SelectionArrangeCommand.DistributeHorizontal);
+        Assert.Equal(before, ProjectCodec.Serialize(vm.Project));
+        Assert.False(vm.IsDirty);
+    }
+
     private sealed class PassThroughStockTemplates : IStockTemplateResolver
     {
         public int Generation => 1;
@@ -460,4 +570,5 @@ public sealed class MultiSelectionTests
         public IReadOnlyList<string> ExpandedChildNames(string instanceName, StockButtonStyle style) => [];
         public double MeasureText(StockFontStyle style, string text) => text.Length * 6;
     }
+
 }

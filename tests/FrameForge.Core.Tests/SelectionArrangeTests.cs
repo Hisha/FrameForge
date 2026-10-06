@@ -1,5 +1,6 @@
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
+using FrameForge.Core.Serialization;
 using Xunit;
 using static FrameForge.Core.Tests.TestProject;
 
@@ -209,7 +210,7 @@ public class SelectionArrangeTests
     }
 
     [Fact]
-    public void OneMovableObjectIsNotEnoughToAlign()
+    public void OneMovableObjectWithALockedReferenceIsEnoughToAlign()
     {
         var project = Project(
             Frame("A", width: 100, height: 100, offsetX: 0),
@@ -218,12 +219,17 @@ public class SelectionArrangeTests
             Editor = new EditorMetadata { LockedElements = ["Locked"] },
         };
 
+        Assert.True(SelectionArrange.CanRun(
+            project, LayoutResolver.Resolve(project), ["A", "Locked"], SelectionArrangeCommand.AlignRight));
+
         var outcome = SelectionArrange.Arrange(
             project, LayoutResolver.Resolve(project), ["A", "Locked"], SelectionArrangeCommand.AlignRight);
 
-        Assert.False(outcome.Changed);
-        Assert.Equal(0, outcome.Project.Find("A")!.OffsetX, 6);
-        Assert.Contains(outcome.Blocked, b => b.Reason.Contains("at least 2"));
+        var after = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.Equal(188, after["A"].Right, 6);
+        Assert.Equal(600, outcome.Project.Find("Locked")!.OffsetX, 6);
+        Assert.Equal(["Locked"], outcome.ExcludedLocked);
+        Assert.Empty(outcome.Blocked);
     }
 
     [Fact]
@@ -439,10 +445,339 @@ public class SelectionArrangeTests
     [InlineData(SelectionArrangeCommand.AlignCenterVertical, 2)]
     [InlineData(SelectionArrangeCommand.DistributeHorizontal, 3)]
     [InlineData(SelectionArrangeCommand.DistributeVertical, 3)]
-    public void AligningNeedsTwoMovableObjectsAndDistributingNeedsThree(
+    public void AligningNeedsTwoSelectedObjectsAndDistributingNeedsThreeMovableOnes(
         SelectionArrangeCommand command,
         int required)
     {
         Assert.Equal(required, SelectionArrange.RequiredCount(command));
+    }
+
+    /// <summary>
+    /// The reported bug: a locked Blizzard label and an editable custom label selected together
+    /// must align, because the locked one is reference geometry and only the editable one moves.
+    /// </summary>
+    /// <remarks>
+    /// A 200x100 locked stock label, and a 120x40 editable one placed strictly INSIDE the stock
+    /// frame's box on both axes. That containment is deliberate. It means every selection-bounds
+    /// edge is established by the locked frame, so each of the six alignment commands has exactly
+    /// one right answer - the stock frame's own edge - and a command that quietly ignored the
+    /// locked extent would land the editable frame somewhere visibly wrong. It also means none of
+    /// the six is accidentally a no-op, which a fixture with the frames side by side would produce
+    /// for whichever axis the editable frame already happened to define.
+    /// <para>
+    /// Screen space is +Y up with the origin at the centre, so a 1024x768 screen puts the top-left
+    /// anchor at (-512, 384): <c>left = -512 + offsetX</c> and <c>top = 384 + offsetY</c>.
+    /// </para>
+    /// </remarks>
+    private static Project LockedAndEditable() => Project(
+        Frame("Stock", width: 200, height: 100, offsetX: -300, offsetY: 200),
+        Frame("Custom", width: 120, height: 40, offsetX: -278, offsetY: 176)) with
+    {
+        Editor = new EditorMetadata { LockedElements = ["Stock"] },
+    };
+
+    /// <summary>
+    /// The exact bytes a single frame contributes to the serialized document.
+    /// </summary>
+    /// <remarks>
+    /// Serializing the frame on its own keeps the same writer settings, field order and number
+    /// formatting as a full document, so comparing two of these is a byte-level check on that frame
+    /// that is unaffected by its neighbours. Record equality on <see cref="FrameDef"/> would cover
+    /// the same ground more cheaply, but "the locked frame is byte-identical in the saved file" is
+    /// the claim actually worth making about imported markup.
+    /// </remarks>
+    private static string SerializedFrame(Project project, string name) =>
+        ProjectCodec.Serialize(project with { Frames = [project.Frames.Single(f => f.Name == name)] });
+
+    /// <summary>
+    /// Every field of a frame that alignment must never touch, as one comparable value.
+    /// </summary>
+    private static object GeometryFingerprint(FrameDef frame) =>
+        (frame.Name, frame.Parent, frame.Width, frame.Height, frame.Point, frame.RelativeTo,
+            frame.RelativePoint, frame.SetAllPoints, frame.SizeReference, frame.Stratum, frame.Level,
+            frame.Kind, frame.Visual, frame.ExtraAnchors, frame.Visible, frame.SourceName,
+            frame.Inherits, frame.Placeholder, frame.Anonymous);
+
+    [Fact]
+    public void Regression_LockedThenEditableAlignTopMovesTheEditableOneOntoTheLockedTop()
+    {
+        var project = LockedAndEditable();
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["Stock", "Custom"], SelectionArrangeCommand.AlignTop);
+
+        Assert.True(outcome.Changed);
+        var rects = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.Equal(rects["Stock"].Top, rects["Custom"].Top, 6);
+    }
+
+    [Fact]
+    public void Regression_EditableThenLockedAlignTopProducesIdenticalGeometry()
+    {
+        var project = LockedAndEditable();
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["Custom", "Stock"], SelectionArrangeCommand.AlignTop);
+
+        Assert.True(outcome.Changed);
+        var rects = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.Equal(rects["Stock"].Top, rects["Custom"].Top, 6);
+    }
+
+    [Fact]
+    public void Regression_SelectionOrderDoesNotChangeTheResult()
+    {
+        var project = LockedAndEditable();
+        var layout = LayoutResolver.Resolve(project);
+
+        var lockedFirst = SelectionArrange.Arrange(project, layout, ["Stock", "Custom"], SelectionArrangeCommand.AlignTop);
+        var editableFirst = SelectionArrange.Arrange(project, layout, ["Custom", "Stock"], SelectionArrangeCommand.AlignTop);
+
+        // Order is the user's click order, which carries no geometric meaning. If it leaked into the
+        // target it would depend on Primary, and the same two frames would align differently
+        // depending on which one the inspector happened to be describing.
+        Assert.Equal(ProjectCodec.Serialize(lockedFirst.Project), ProjectCodec.Serialize(editableFirst.Project));
+        Assert.Equal(lockedFirst.Moved.Order(), editableFirst.Moved.Order());
+        Assert.Equal(["Custom"], lockedFirst.Moved);
+        // Both orders really did change the document, so the equality above is not vacuous.
+        Assert.NotEqual(ProjectCodec.Serialize(project), ProjectCodec.Serialize(lockedFirst.Project));
+        Assert.NotEqual(ProjectCodec.Serialize(project), ProjectCodec.Serialize(editableFirst.Project));
+    }
+
+    [Theory]
+    [InlineData(SelectionArrangeCommand.AlignLeft, "Left")]
+    [InlineData(SelectionArrangeCommand.AlignRight, "Right")]
+    [InlineData(SelectionArrangeCommand.AlignTop, "Top")]
+    [InlineData(SelectionArrangeCommand.AlignBottom, "Bottom")]
+    [InlineData(SelectionArrangeCommand.AlignCenterHorizontal, "CenterX")]
+    [InlineData(SelectionArrangeCommand.AlignCenterVertical, "CenterY")]
+    public void Regression_EveryAlignCommandWorksAgainstALockedReference(SelectionArrangeCommand command, string edge)
+    {
+        var project = LockedAndEditable();
+        var layout = LayoutResolver.Resolve(project);
+
+        var outcome = SelectionArrange.Arrange(project, layout, ["Custom", "Stock"], command);
+
+        Assert.True(outcome.Changed, $"{command} did nothing for a locked + editable selection.");
+        Assert.Empty(outcome.Blocked);
+        Assert.Equal(["Stock"], outcome.ExcludedLocked);
+        // Custom was primary and is the only thing that moved, so this is not the locked frame
+        // being dragged along.
+        Assert.Equal(["Custom"], outcome.Moved);
+
+        var after = LayoutResolver.Resolve(outcome.Project).Rects;
+        var stock = after["Stock"];
+        var custom = after["Custom"];
+
+        // The stock frame is the alignment reference, so the editable frame has to end up on its
+        // edge, whatever the command. Comparing to the stock rect rather than to a literal also
+        // keeps this honest if the fixture geometry changes.
+        var delta = edge switch
+        {
+            "Left" => custom.Left - stock.Left,
+            "Right" => custom.Right - stock.Right,
+            "Top" => custom.Top - stock.Top,
+            "Bottom" => custom.Bottom - stock.Bottom,
+            "CenterX" => custom.CenterX - stock.CenterX,
+            _ => custom.CenterY - stock.CenterY,
+        };
+        Assert.Equal(0, delta, 6);
+    }
+
+    [Fact]
+    public void Regression_LockedReferenceReceivesZeroModelMutation()
+    {
+        var project = LockedAndEditable();
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["Stock", "Custom"], SelectionArrangeCommand.AlignTop);
+
+        // Not merely unmoved: byte-identical in the document, and structurally identical as a model.
+        Assert.Equal(SerializedFrame(project, "Stock"), SerializedFrame(outcome.Project, "Stock"));
+        Assert.Equal(project.Find("Stock"), outcome.Project.Find("Stock"));
+        Assert.Equal(GeometryFingerprint(project.Find("Stock")!), GeometryFingerprint(outcome.Project.Find("Stock")!));
+        Assert.Equal(-300, outcome.Project.Find("Stock")!.OffsetX, 9);
+        Assert.Equal(200, outcome.Project.Find("Stock")!.OffsetY, 9);
+
+        // The editable frame is what changed, which is what makes this a real assertion about
+        // "the locked one stayed put" rather than "nothing happened".
+        Assert.NotEqual(SerializedFrame(project, "Custom"), SerializedFrame(outcome.Project, "Custom"));
+    }
+
+    [Fact]
+    public void Regression_EditableAnchorsSurviveAlignmentAgainstALockedReference()
+    {
+        var project = Project(
+            Frame("Stock", width: 200, height: 100, offsetX: -300, offsetY: 200),
+            Frame("Custom", width: 120, height: 40, point: AnchorPoint.CENTER, relativePoint: AnchorPoint.BOTTOMRIGHT,
+                offsetX: 180, offsetY: -150)) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["Stock"] },
+        };
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["Stock", "Custom"], SelectionArrangeCommand.AlignTop);
+
+        var custom = outcome.Project.Find("Custom")!;
+        Assert.Equal(AnchorPoint.CENTER, custom.Point);
+        Assert.Equal(AnchorPoint.BOTTOMRIGHT, custom.RelativePoint);
+        Assert.Equal(project.Find("Custom")!.RelativeTo, custom.RelativeTo);
+        Assert.Equal(120, custom.Width, 9);
+        Assert.Equal(40, custom.Height, 9);
+        // Positioning stayed relative; only the offset changed.
+        Assert.NotEqual(project.Find("Custom")!.OffsetY, custom.OffsetY);
+    }
+
+    [Fact]
+    public void Regression_OneLockedAndSeveralEditableAllMove()
+    {
+        var project = Project(
+            Frame("Stock", width: 200, height: 100, offsetX: -300, offsetY: 300),
+            Frame("A", width: 60, height: 20, offsetX: 0, offsetY: 0),
+            Frame("B", width: 60, height: 20, offsetX: 100, offsetY: -50),
+            Frame("C", width: 60, height: 20, offsetX: 200, offsetY: -100)) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["Stock"] },
+        };
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["A", "B", "C", "Stock"], SelectionArrangeCommand.AlignTop);
+
+        Assert.True(outcome.Changed);
+        Assert.Equal(["A", "B", "C"], outcome.Moved);
+        var rects = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.All(["A", "B", "C"], name => Assert.Equal(rects["Stock"].Top, rects[name].Top, 6));
+    }
+
+    [Fact]
+    public void Regression_SeveralLockedAndOneEditableMovesOnlyTheEditable()
+    {
+        var project = Project(
+            Frame("L1", width: 200, height: 100, offsetX: -400, offsetY: 320),
+            Frame("L2", width: 200, height: 100, offsetX: -400, offsetY: -320),
+            Frame("Editable", width: 60, height: 20, offsetX: 120, offsetY: 0)) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["L1", "L2"] },
+        };
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["L1", "Editable", "L2"], SelectionArrangeCommand.AlignTop);
+
+        Assert.True(outcome.Changed);
+        Assert.Equal(["Editable"], outcome.Moved);
+        Assert.Equal(["L1", "L2"], outcome.ExcludedLocked);
+        var rects = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.Equal(rects["L1"].Top, rects["Editable"].Top, 6);
+    }
+
+    [Fact]
+    public void Regression_AllLockedSelectionCannotChangeAnything()
+    {
+        var project = Project(
+            Frame("L1", width: 200, height: 100, offsetX: -400, offsetY: 320),
+            Frame("L2", width: 200, height: 100, offsetX: -400, offsetY: -320)) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["L1", "L2"] },
+        };
+        var layout = LayoutResolver.Resolve(project);
+
+        foreach (var command in Enum.GetValues<SelectionArrangeCommand>().Where(c => !SelectionArrange.IsDistribution(c)))
+        {
+            Assert.False(SelectionArrange.CanRun(project, layout, ["L1", "L2"], command));
+
+            var outcome = SelectionArrange.Arrange(project, layout, ["L1", "L2"], command);
+            Assert.False(outcome.Changed);
+            // Reference equality, not just equal geometry: nothing may even be copied.
+            Assert.Same(project, outcome.Project);
+            Assert.Equal(ProjectCodec.Serialize(project), ProjectCodec.Serialize(outcome.Project));
+            Assert.Contains("locked", outcome.Message);
+        }
+    }
+
+    [Fact]
+    public void Regression_AllEditableAlignmentIsUnchanged()
+    {
+        // The correction must not disturb the ordinary case: two editable frames align to their own
+        // combined bounds exactly as before.
+        var project = Project(
+            Frame("A", width: 100, height: 100, offsetX: 0, offsetY: 0),
+            Frame("B", width: 100, height: 100, offsetX: 300, offsetY: 200));
+
+        var outcome = SelectionArrange.Arrange(
+            project, LayoutResolver.Resolve(project), ["A", "B"], SelectionArrangeCommand.AlignLeft);
+
+        Assert.True(outcome.Changed);
+        // A already sits at the selection's left edge, so only B has anywhere to go. Asserting the
+        // end state rather than the moved list keeps this a test of alignment, not of which side
+        // of the union each frame happened to start on.
+        Assert.Empty(outcome.ExcludedLocked);
+        Assert.Empty(outcome.Blocked);
+        var rects = LayoutResolver.Resolve(outcome.Project).Rects;
+        Assert.Equal(rects["A"].Left, rects["B"].Left, 6);
+        // A defines the union's left edge, so A is untouched and B is pulled onto it: B's left
+        // goes from -212 to -512, i.e. its offset moves from 300 to 0.
+        Assert.Equal(0, outcome.Project.Find("A")!.OffsetX, 6);
+        Assert.Equal(0, outcome.Project.Find("B")!.OffsetX, 6);
+    }
+
+    [Fact]
+    public void Regression_CommandEnablementRequiresTwoSelectedAndOneEditable()
+    {
+        var lockedAndEditable = LockedAndEditable();
+        var layout = LayoutResolver.Resolve(lockedAndEditable);
+
+        // One locked + one editable: the reported bug. This must be offered.
+        Assert.True(SelectionArrange.CanRun(lockedAndEditable, layout, ["Stock", "Custom"], SelectionArrangeCommand.AlignTop));
+
+        // One object alone is still not a selection.
+        Assert.False(SelectionArrange.CanRun(lockedAndEditable, layout, ["Custom"], SelectionArrangeCommand.AlignTop));
+
+        // Everything locked has nothing to move.
+        var allLocked = Project(
+            Frame("L1", width: 100, height: 100),
+            Frame("L2", width: 100, height: 100, offsetX: 300)) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["L1", "L2"] },
+        };
+        Assert.False(SelectionArrange.CanRun(allLocked, LayoutResolver.Resolve(allLocked), ["L1", "L2"], SelectionArrangeCommand.AlignTop));
+    }
+
+    [Fact]
+    public void Regression_UnresolvableSelectionMemberDoesNotCountTowardsTheAlignGate()
+    {
+        var project = Project(
+            Frame("Custom", width: 100, height: 100, offsetX: 0),
+            Frame("Dangling", width: 100, height: 100, relativeTo: "Nope")) with
+        {
+            Editor = new EditorMetadata { LockedElements = ["Dangling"] },
+        };
+        var layout = LayoutResolver.Resolve(project);
+
+        // The locked member resolves nowhere, so it contributes no bounds and there is no edge to
+        // align against. Offering the command here would move Custom to a target nobody can see.
+        Assert.False(SelectionArrange.CanRun(project, layout, ["Custom", "Dangling"], SelectionArrangeCommand.AlignTop));
+        Assert.Contains(SelectionArrange.Arrange(project, layout, ["Custom", "Dangling"], SelectionArrangeCommand.AlignTop).Blocked,
+            b => b.Reason.Contains("at least 2"));
+    }
+
+    [Fact]
+    public void Regression_ProjectIdentityIsPreservedWhenNothingMoves()
+    {
+        // The dirty flag is driven off this, so a refused align must not hand back a copy.
+        var project = Project(
+            Frame("A", width: 100, height: 100, offsetX: 0, offsetY: 0),
+            Frame("B", width: 100, height: 100, offsetX: 0, offsetY: 200));
+        var layout = LayoutResolver.Resolve(project);
+
+        // Same left edge already, so there is nothing to do...
+        var alreadyAligned = SelectionArrange.Arrange(project, layout, ["A", "B"], SelectionArrangeCommand.AlignLeft);
+
+        Assert.False(alreadyAligned.Changed);
+        Assert.Same(project, alreadyAligned.Project);
+
+        // ...whereas a command that does have work returns a different instance.
+        var withWork = SelectionArrange.Arrange(project, layout, ["A", "B"], SelectionArrangeCommand.AlignBottom);
+        Assert.True(withWork.Changed);
+        Assert.NotSame(project, withWork.Project);
     }
 }

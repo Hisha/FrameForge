@@ -806,12 +806,30 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public bool ShowsSingleObjectEditors => _selectedNames.Count == 1;
 
-    /// <summary>True when the selection has enough movable objects to align.</summary>
-    public bool CanAlignSelection => _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.AlignLeft);
+    /// <summary>
+    /// True when an alignment command would change something for this selection.
+    /// </summary>
+    /// <remarks>
+    /// Delegated to <see cref="SelectionArrange.CanRun"/> so the button and the command can never
+    /// disagree. One locked object plus one editable object is enough, because the locked object is
+    /// alignment reference geometry: it is what the editable one gets lined up with. The old rule
+    /// demanded two <em>movable</em> objects, which left the button lit and then did nothing.
+    /// </remarks>
+    public bool CanAlignSelection =>
+        SelectionArrange.CanRun(Project, Layout, _selectedNames, SelectionArrangeCommand.AlignLeft);
 
-    /// <summary>True when the selection has enough movable objects to distribute.</summary>
+    /// <summary>
+    /// True when a distribution command has enough selected objects to be offered.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately still a plain selection count. Distribution is not part of this correction, and
+    /// <see cref="SelectionArrange.Arrange"/> still refuses mixed locked selections itself with an
+    /// explanation in the status bar, so narrowing the button here would change distribution
+    /// behaviour rather than fix anything.
+    /// </remarks>
     public bool CanDistributeSelection =>
-        _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.DistributeHorizontal);
+        _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.DistributeHorizontal)
+        && SelectionArrange.CanRun(Project, Layout, _selectedNames, SelectionArrangeCommand.DistributeHorizontal);
 
     /// <summary>One line describing the whole selection for the multi-selection panel.</summary>
     public string MultiSelectionSummary =>
