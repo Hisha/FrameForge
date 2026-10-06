@@ -275,7 +275,7 @@ public sealed class VisualContentLayer : ICanvasLayer
         if (bar?.DefaultFraction is not { } fraction || fraction <= 0)
             return;
 
-        var fillRect = new Rect(rect.X, rect.Y, rect.Width * fraction, rect.Height);
+        var fillRect = StatusBarRendering.FillRect(rect, fraction);
         if (bar.BarTexture is { } reference && canvas.AssetResolver?.Resolve(reference) is
             { CanRender: true, Texture: { } decoded })
         {

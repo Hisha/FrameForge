@@ -66,6 +66,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private string _selectedTextShadow = "Style default";
     [ObservableProperty] private string _selectedTextAlignment = "Style default";
     [ObservableProperty] private string _textStyleValidation = string.Empty;
+    [ObservableProperty] private string _statusBarMinDraft = string.Empty;
+    [ObservableProperty] private string _statusBarMaxDraft = string.Empty;
+    [ObservableProperty] private string _statusBarValueDraft = string.Empty;
+    [ObservableProperty] private string _statusBarTextureDraft = string.Empty;
+    [ObservableProperty] private string _statusBarColorDraft = string.Empty;
+    [ObservableProperty] private string _statusBarValidation = string.Empty;
     [ObservableProperty] private string _newObjectName = string.Empty;
     [ObservableProperty] private string _newImageAsset = string.Empty;
     [ObservableProperty] private string _stateNameDraft = string.Empty;
@@ -104,6 +110,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool IsDesignImageSelected => SelectedFrame?.Kind == FrameKind.TEXTURE
         && Project.Editor.DesignObjectFor(SelectedName) is not null;
     public bool IsDesignTextSelected => SelectedFrame?.Kind == FrameKind.FONTSTRING;
+    public bool IsDesignStatusBarSelected => SelectedFrame?.Kind == FrameKind.STATUSBAR;
+    public bool CanEditDesignStatusBar => IsDesignStatusBarSelected && !IsSelectionLocked;
+    private StatusBarVisual? SelectedStatusBar => SelectedFrame is { Kind: FrameKind.STATUSBAR } frame
+        ? frame.Visual?.StatusBar
+        : null;
+
+    /// <summary>One-line summary of what the selected bar will draw, for the DESIGN panel.</summary>
+    public string SelectedStatusBarFractionText => SelectedStatusBar is { DefaultFraction: { } fraction } bar
+        ? $"Preview fills {Number(fraction * 100)}% of the width ({Number(bar.DefaultValue ?? 0)} of {Number(bar.MinValue ?? 0)}..{Number(bar.MaxValue ?? 0)})"
+        : "Preview fills nothing: the range does not define a fraction (set Min and Max).";
+
+    /// <summary>A colour swatch for the declared <c>&lt;BarColor&gt;</c>, transparent when unset.</summary>
+    public IBrush SelectedStatusBarColorSwatch => SelectedStatusBar?.BarColor is { } color
+        ? new SolidColorBrush(Color.FromArgb(Channel(color.A), Channel(color.R), Channel(color.G), Channel(color.B)))
+        : Brushes.Transparent;
+
+    /// <summary>Physical path of the declared bar texture, when it resolves; otherwise a note.</summary>
+    public string SelectedStatusBarTexturePhysical => SelectedStatusBar?.BarTexture is { Length: > 0 } reference
+        && SelectedName is { } name
+        ? Assets.Resolve(reference) is { PhysicalPath: { } path }
+            ? path
+            : "Unresolved texture reference"
+        : "No bar texture declared — the fill uses BarColor.";
     public bool CanEditTextStyle => IsDesignTextSelected && !IsSelectionLocked;
     public bool CanPasteTextStyle => CanEditTextStyle && _copiedTextStyle is not null;
     public IReadOnlyList<StockTextStyleOption> TextStyleOptions { get; private set; } = [];
@@ -594,6 +623,109 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     public void CancelTextStyleField(string field) => RefreshTextStyleUi(Project, SelectedName);
+
+    /// <summary>
+    /// Commits one buffered StatusBar field; Enter or LostFocus is the edit boundary, never a
+    /// keystroke, so a half-typed value cannot corrupt the model.
+    /// </summary>
+    public bool CommitStatusBarField(string field)
+    {
+        if (!IsDesignStatusBarSelected || SelectedName is not { } name || SelectedFrame is not { } frame)
+            return false;
+        if (!CanEditDesignStatusBar)
+        {
+            StatusBarValidation = $"{name} is locked. Unlock it before changing its status bar.";
+            return false;
+        }
+
+        var bar = frame.Visual?.StatusBar ?? new StatusBarVisual();
+        StatusBarValidation = string.Empty;
+        return field switch
+        {
+            "statusBarMin" => CommitStatusBarNumber(frame, bar, "Min", StatusBarMinDraft,
+                (b, v) => b with { MinValue = v }),
+            "statusBarMax" => CommitStatusBarNumber(frame, bar, "Max", StatusBarMaxDraft,
+                (b, v) => b with { MaxValue = v }),
+            "statusBarValue" => CommitStatusBarNumber(frame, bar, "Preview value", StatusBarValueDraft,
+                (b, v) => b with { DefaultValue = v }),
+            "statusBarColor" => CommitStatusBarColor(frame, bar),
+            "statusBarTexture" => ReplaceStatusBar(frame,
+                bar with { BarTexture = string.IsNullOrWhiteSpace(StatusBarTextureDraft) ? null : StatusBarTextureDraft.Trim() }),
+            _ => false,
+        };
+    }
+
+    public void CancelStatusBarField(string field)
+    {
+        if (SelectedFrame is not { Kind: FrameKind.STATUSBAR } frame)
+            return;
+        RefreshStatusBarUi(Project, SelectedName);
+        StatusBarValidation = string.Empty;
+    }
+
+    public bool SetSelectedStatusBarTextureFromFile(string path, bool importExternal = false)
+    {
+        if (!IsDesignStatusBarSelected || SelectedName is not { } name || SelectedFrame is not { } frame)
+            return false;
+        if (IsSelectionLocked)
+        {
+            Status = $"{name} is locked. Unlock it before changing its bar texture.";
+            return false;
+        }
+        if (!TryMakeProjectAssetReference(path, importExternal, out var reference, out var error))
+        {
+            Status = error;
+            return false;
+        }
+        var bar = frame.Visual?.StatusBar ?? new StatusBarVisual();
+        if (ReplaceStatusBar(frame, bar with { BarTexture = reference }))
+        {
+            ConfigureAssets();
+            Status = $"Set the status bar fill texture to {reference}.";
+        }
+        return true;
+    }
+
+    private bool CommitStatusBarNumber(
+        FrameDef frame, StatusBarVisual bar, string label, string draft,
+        Func<StatusBarVisual, double, StatusBarVisual> update)
+    {
+        if (!double.TryParse(draft, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || !double.IsFinite(value))
+        {
+            StatusBarValidation = $"{label} must be a number.";
+            return false;
+        }
+        if (label != "Preview value" && value < 0)
+        {
+            StatusBarValidation = $"{label} must not be negative.";
+            return false;
+        }
+        return ReplaceStatusBar(frame, update(bar, value));
+    }
+
+    private bool CommitStatusBarColor(FrameDef frame, StatusBarVisual bar)
+    {
+        if (!TryParseColor(StatusBarColorDraft, out var color))
+        {
+            StatusBarValidation = "Bar color must be #RRGGBB or #AARRGGBB.";
+            return false;
+        }
+        return ReplaceStatusBar(frame, bar with { BarColor = color });
+    }
+
+    private bool ReplaceStatusBar(FrameDef frame, StatusBarVisual bar)
+    {
+        var updated = frame with
+        {
+            Visual = (frame.Visual ?? new FrameVisual()) with { StatusBar = bar },
+        };
+        if (updated == frame)
+            return true;
+        ReplaceFrame(frame.Name, updated);
+        StatusBarValidation = string.Empty;
+        return true;
+    }
 
     public void ResetTextStyleOverrides()
     {
@@ -1177,14 +1309,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>Keeps the tree selection in step when the user clicks the tree.</summary>
+    /// <remarks>
+    /// CommunityToolkit.Mvvm assigns the backing field before invoking this callback, so
+    /// <c>value</c> is always identical to <see cref="SelectedTreeNode"/> already - any
+    /// reference comparison against the current property would be permanently true and the
+    /// callback would never select anything. The only guard that distinguishes a user click
+    /// from a programmatic re-publish is <see cref="_syncingSelection"/>; everything else is
+    /// a genuine click (or a binding write) and must win.
+    /// </remarks>
     partial void OnSelectedTreeNodeChanged(FrameTreeNode? value)
     {
         // The tree rebuilds on every refresh and re-publishes its selected item, so a plain
         // re-assignment of the same node is not a user click and must not collapse a
-        // multi-selection down to one object. Only a genuine change of node counts.
+        // multi-selection down to one object. Only the re-synchronization flag counts.
         if (_syncingSelection)
-            return;
-        if (ReferenceEquals(value, SelectedTreeNode))
             return;
 
         Select(value?.Name);
@@ -1321,6 +1459,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void AddDesignFrame() => AddDesignObject(FrameKind.FRAME, "Frame / Container");
     public void AddDesignText() => AddDesignObject(FrameKind.FONTSTRING, "Text");
     public void AddDesignImage() => AddDesignObject(FrameKind.TEXTURE, "Image");
+    public void AddDesignStatusBar() => AddDesignObject(FrameKind.STATUSBAR, "Status Bar");
 
     public void BringSelectedToFront() => MoveSelectedDesignObject(DesignOrderMove.Front);
     public void BringSelectedForward() => MoveSelectedDesignObject(DesignOrderMove.Forward);
@@ -1570,6 +1709,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             FrameKind.FONTSTRING => new FrameVisual { Text = new TextVisual("Text", "CENTER", "MIDDLE", "GameFontNormal") },
             FrameKind.TEXTURE => new FrameVisual { Texture = new TextureVisual(
                 designAsset, TexCoords.Full, null, null, null, null) },
+            // A new bar starts as a visibly filled half (0..100, default 50) rather than empty:
+            // an empty bar is indistinguishable from a missing renderer, and the authored range
+            // is what identifies it as a bar on the canvas.
+            FrameKind.STATUSBAR => new FrameVisual
+            {
+                StatusBar = new StatusBarVisual(MinValue: 0, MaxValue: 100, DefaultValue: 50),
+            },
             _ => null,
         };
         var frame = new FrameDef
@@ -1578,7 +1724,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Parent = parent,
             Kind = kind,
             Width = kind == FrameKind.TEXTURE ? 64 : 120,
-            Height = kind == FrameKind.FONTSTRING ? 24 : 64,
+            Height = kind == FrameKind.FONTSTRING ? 24 : (kind == FrameKind.STATUSBAR ? 16 : 64),
             Point = AnchorPoint.CENTER,
             RelativePoint = AnchorPoint.CENTER,
             Visual = visual,
@@ -2282,6 +2428,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
               ?? project.Find(selection)?.Visual?.Text?.Text
               ?? string.Empty;
         RefreshTextStyleUi(project, selection);
+        RefreshStatusBarUi(project, selection);
         _syncingDesignUi = false;
         CanvasSelectionNames.Clear();
         foreach (var name in Layout.PaintOrder)
@@ -2431,6 +2578,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
         TextStyleValidation = string.Empty;
     }
 
+    private void RefreshStatusBarUi(Project project, string? selection)
+    {
+        var frame = project.Find(selection);
+        var bar = frame is { Kind: FrameKind.STATUSBAR } ? frame.Visual?.StatusBar : null;
+        StatusBarMinDraft = bar?.MinValue is { } min ? Number(min) : string.Empty;
+        StatusBarMaxDraft = bar?.MaxValue is { } max ? Number(max) : string.Empty;
+        StatusBarValueDraft = bar?.DefaultValue is { } value ? Number(value) : string.Empty;
+        StatusBarTextureDraft = bar?.BarTexture ?? string.Empty;
+        StatusBarColorDraft = bar?.BarColor is { } color ? ColorHex(color) : string.Empty;
+        StatusBarValidation = string.Empty;
+        OnPropertyChanged(nameof(SelectedStatusBarFractionText));
+        OnPropertyChanged(nameof(SelectedStatusBarColorSwatch));
+        OnPropertyChanged(nameof(SelectedStatusBarTexturePhysical));
+    }
+
     private static string ColorHex(ColorRgba color) => $"#{Channel(color.A):X2}{Channel(color.R):X2}{Channel(color.G):X2}{Channel(color.B):X2}";
     private static byte Channel(double value) => (byte)Math.Round(Math.Clamp(value, 0, 1) * 255);
 
@@ -2546,6 +2708,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(StockFrameworkAction));
         OnPropertyChanged(nameof(IsDesignImageSelected));
         OnPropertyChanged(nameof(IsDesignTextSelected));
+        OnPropertyChanged(nameof(IsDesignStatusBarSelected));
+        OnPropertyChanged(nameof(CanEditDesignStatusBar));
+        OnPropertyChanged(nameof(SelectedStatusBarFractionText));
+        OnPropertyChanged(nameof(SelectedStatusBarColorSwatch));
+        OnPropertyChanged(nameof(SelectedStatusBarTexturePhysical));
         OnPropertyChanged(nameof(CanEditTextStyle));
         OnPropertyChanged(nameof(CanPasteTextStyle));
         OnPropertyChanged(nameof(SelectedTextBaseStyle));

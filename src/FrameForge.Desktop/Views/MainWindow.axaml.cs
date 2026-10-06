@@ -105,6 +105,7 @@ public partial class MainWindow : Window
     private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
     private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
     private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();
+    private void OnAddDesignStatusBarClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignStatusBar();
     private void OnBringToFrontClick(object? sender, RoutedEventArgs e) => ViewModel?.BringSelectedToFront();
     private void OnBringForwardClick(object? sender, RoutedEventArgs e) => ViewModel?.BringSelectedForward();
     private void OnSendBackwardClick(object? sender, RoutedEventArgs e) => ViewModel?.SendSelectedBackward();
@@ -159,6 +160,39 @@ public partial class MainWindow : Window
     {
         if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
         if (field == "textStyleSize") vm.CommitTextStyleSize(); else vm.CommitTextStyleColor();
+    }
+
+    private void OnStatusBarFieldKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
+        if (e.Key == Key.Enter)
+        {
+            vm.CommitStatusBarField(field);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            vm.CancelStatusBarField(field);
+            e.Handled = true;
+        }
+    }
+
+    private void OnStatusBarFieldLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
+        vm.CommitStatusBarField(field);
+    }
+
+    private async void OnBrowseNewStatusBarTextureClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || !vm.PrepareDesignAssetBrowse())
+            return;
+        if (await PickDesignImageAsync() is { } path)
+        {
+            var import = await ConfirmExternalAssetImportIfNeededAsync(vm, path);
+            if (import is not null && vm.SetSelectedStatusBarTextureFromFile(path, import.Value))
+                Canvas.InvalidateVisual();
+        }
     }
 
     private void OnCopyTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.CopySelectedTextStyle();
@@ -603,14 +637,21 @@ public partial class MainWindow : Window
         ViewModel?.Select(ViewModel.SelectedName);
 
     /// <summary>
-    /// Turns Ctrl/Cmd/Shift-clicking a tree row into a selection change the view model owns.
+    /// Makes every tree-row click a selection change the view model owns.
     /// </summary>
     /// <remarks>
-    /// Avalonia's TreeView has no multi-select mode: it highlights one item and raises
-    /// <c>SelectionChanged</c>, so an unmodified click there already does the right thing through
-    /// <c>SelectedTreeNode</c>. A modified click is different - the TreeView would still collapse
-    /// to the clicked row - so the gesture is handled here and marked handled, which stops the
-    /// TreeView's own selection logic from running after this one.
+    /// The tree is the authoritative source of exact-object selection, so a plain click always
+    /// resolves to <see cref="MainWindowViewModel.Select"/> - it replaces the selection with
+    /// exactly the clicked object, which is what collapses a multi-selection back to one. The
+    /// gesture is marked handled because Avalonia's TreeView highlights a single item and raises
+    /// no event when the clicked row is already the highlighted primary; routing the click
+    /// ourselves means re-clicking the primary still collapses, and the highlight follows the
+    /// view model's own re-synchronization.
+    /// <para>
+    /// A Ctrl/Cmd/Shift click adds or removes one object via
+    /// <see cref="MainWindowViewModel.ToggleSelection"/>, and would otherwise collapse to the
+    /// clicked row.
+    /// </para>
     /// <para>
     /// A click on an expander gutter or a blank area is left alone: those are navigation and
     /// deselect actions, and swallowing them would break expanding a collapsed group.
@@ -618,12 +659,8 @@ public partial class MainWindow : Window
     /// </remarks>
     private void OnFrameTreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (ViewModel is not { } vm
-            || e.Source is not Visual source
-            || !LayoutCanvas.IsAdditiveModifier(e.KeyModifiers))
-        {
+        if (ViewModel is not { } vm || e.Source is not Visual source)
             return;
-        }
 
         // The expander is a ToggleButton inside the same row, so it would otherwise read as
         // "the user clicked this frame". Expanding is navigation, not selection.
@@ -633,7 +670,10 @@ public partial class MainWindow : Window
         if (FindTreeNode(source) is not { } node)
             return;
 
-        vm.ToggleSelection(node.Name);
+        if (LayoutCanvas.IsAdditiveModifier(e.KeyModifiers))
+            vm.ToggleSelection(node.Name);
+        else
+            vm.Select(node.Name);
         e.Handled = true;
     }
 

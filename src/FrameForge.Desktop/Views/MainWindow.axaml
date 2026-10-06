@@ -345,6 +345,7 @@
                                     <Button Content="Frame" Click="OnAddDesignFrameClick" Margin="0,0,4,4" />
                                     <Button Content="Text" Click="OnAddDesignTextClick" Margin="0,0,4,4" />
                                     <Button Content="Image" Click="OnAddDesignImageClick" Margin="0,0,4,4" />
+                                    <Button Content="Status Bar" Click="OnAddDesignStatusBarClick" Margin="0,0,4,4" />
                                 </WrapPanel>
                             </StackPanel>
                         </Expander>
@@ -390,6 +391,7 @@
                                TextWrapping="Wrap" Margin="0,8,0,0" />
                     <TreeView x:Name="FrameTree"
                               SelectionMode="Single"
+                              AutoScrollToSelectedItem="True"
                               PointerPressed="OnFrameTreePointerPressed"
                               ItemsSource="{Binding TreeRoots}"
                               SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
@@ -580,6 +582,48 @@
                                                TextWrapping="Wrap" />
                                     <Button Content="Browse / Change..." HorizontalAlignment="Left"
                                             Click="OnChangeDesignImageClick" />
+                                </StackPanel>
+                                <StackPanel IsVisible="{Binding IsDesignStatusBarSelected}" Spacing="3" Margin="0,5,0,0">
+                                    <TextBlock Classes="label" Text="STATUS BAR" />
+                                    <TextBlock Text="{Binding SelectedStatusBarFractionText}" TextWrapping="Wrap" />
+                                    <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="4">
+                                        <TextBlock Grid.Row="0" Classes="label" Text="Min" />
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding StatusBarMinDraft, Mode=TwoWay}"
+                                                 Tag="statusBarMin" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                 KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus" />
+                                        <TextBlock Grid.Row="1" Classes="label" Text="Max" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StatusBarMaxDraft, Mode=TwoWay}"
+                                                 Tag="statusBarMax" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                 KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus" />
+                                        <TextBlock Grid.Row="2" Classes="label" Text="Preview Value" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding StatusBarValueDraft, Mode=TwoWay}"
+                                                 Tag="statusBarValue" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                 KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus" />
+                                    </Grid>
+                                    <TextBlock Classes="label" Text="BAR TEXTURE" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                        <TextBox Grid.Column="0" Text="{Binding StatusBarTextureDraft, Mode=TwoWay}"
+                                                 Tag="statusBarTexture" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                 KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus"
+                                                 ToolTip.Tip="A WoW texture reference (e.g. Interface\\TargetingFrame\\UI-StatusBar) or a project-owned asset." />
+                                        <Button Grid.Column="1" Content="Browse..." IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                Click="OnBrowseNewStatusBarTextureClick" />
+                                    </Grid>
+                                    <TextBlock Classes="mono" Text="{Binding SelectedStatusBarTexturePhysical}"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Classes="label" Text="BAR COLOR" />
+                                    <Grid ColumnDefinitions="72,*" ColumnSpacing="6">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <Border Width="20" Height="14" BorderBrush="#8FA6B4" BorderThickness="1"
+                                                    Background="{Binding SelectedStatusBarColorSwatch}" />
+                                            <TextBlock Classes="label" Text="RGBA" />
+                                        </StackPanel>
+                                        <TextBox Grid.Column="1" Text="{Binding StatusBarColorDraft, Mode=TwoWay}"
+                                                 Tag="statusBarColor" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                 KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus"
+                                                 PlaceholderText="#RRGGBB or #AARRGGBB" />
+                                    </Grid>
+                                    <TextBlock Classes="validation" Text="{Binding StatusBarValidation}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
                                 <StackPanel Spacing="3" Margin="0,5,0,0" IsVisible="{Binding CanChangeDesignOrder}">
