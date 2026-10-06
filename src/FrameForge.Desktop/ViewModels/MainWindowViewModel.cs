@@ -73,10 +73,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private DesignStateChoice? _selectedAuthoredState;
     public ObservableCollection<DesignStateChoice> DesignStateOptions { get; } = [];
     public ObservableCollection<DesignStateChoice> AuthoredStateOptions { get; } = [];
-    public string SelectedStateMembership => SelectedName is null ? "All States" :
-        Project.Editor.DesignObjectFor(SelectedName) is not { StateIds.Count: > 0 } item
-            ? "All States"
-            : string.Join(", ", item.StateIds.Select(id => Project.Editor.DesignStates.FirstOrDefault(s => s.Id == id)?.Name ?? id));
+    /// <summary>
+    /// The STATE MEMBERSHIP line for the current selection: one shared membership, or Mixed when
+    /// the selected objects disagree. An empty membership is All States, never "no state".
+    /// </summary>
+    public string SelectedStateMembership
+    {
+        get
+        {
+            IReadOnlyList<string>? membership = null;
+            foreach (var name in _selectedNames)
+            {
+                if (!Project.Contains(name))
+                    continue;
+                var ids = Project.Editor.DesignObjectFor(name)?.StateIds ?? [];
+                if (membership is null)
+                    membership = ids;
+                else if (!StateMembershipChooser.SameMembership(membership, ids))
+                    return "Mixed";
+            }
+            return StateMembershipChooser.Describe(Project.Editor, membership ?? []);
+        }
+    }
     public bool HasConceptualStockFramework => Project.Editor.Groups.Any(group => group.Concept == "stock-framework");
     public EditorGroup? ConceptualStockFramework => Project.Editor.Groups.FirstOrDefault(group => group.Concept == "stock-framework");
     public bool IsStockFrameworkSelected => ConceptualStockFramework?.Members.Contains(SelectedName ?? string.Empty, StringComparer.Ordinal) == true;
@@ -1675,35 +1693,131 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }, $"Deleted design state \"{name}\"; affected objects now use their remaining memberships or All States.");
     }
 
-    public void AssignSelectionToAllStates() => SetSelectionStateIds([]);
+    /// <summary>Builds the state-membership chooser for the current selection, or null without one.</summary>
+    /// <remarks>
+    /// A fresh chooser reads the live project, so its rows are always the states that exist right
+    /// now and its pre-checks describe what the selection currently shares - Mixed when it does
+    /// not share one. Nothing is written until <see cref="ApplyStateMembership"/> runs, which is
+    /// what makes Cancel a genuine no-op.
+    /// </remarks>
+    public StateMembershipChooser? CreateStateMembershipChooser() =>
+        _selectedNames.Count == 0 ? null : new StateMembershipChooser(Project.Editor, _selectedNames);
 
+    /// <summary>
+    /// Applies one chooser decision to the whole selection: bulk assignment, not a per-object merge.
+    /// </summary>
+    /// <returns>True only when the project actually changed.</returns>
+    public bool ApplyStateMembership(StateMembershipChooser chooser)
+    {
+        if (!chooser.TryGetResult(out var allStates, out var stateIds))
+        {
+            Status = chooser.ValidationMessage;
+            return false;
+        }
+
+        string[] ids = allStates ? [] : [.. stateIds];
+        var description = StateMembershipChooser.Describe(Project.Editor, ids);
+        return ApplyMembershipToSelection((_, _) => ids,
+            count => $"Set state membership to {description} for {count} object(s).",
+            $"State membership is already {description}; nothing changed.");
+    }
+
+    /// <summary>Assigns every selected object to All States.</summary>
+    public void AssignSelectionToAllStates() =>
+        ApplyMembershipToSelection((_, _) => [],
+            count => $"Assigned {count} object(s) to All States.",
+            "State membership is already All States; nothing changed.");
+
+    /// <summary>Adds the chosen authored state to every selected object's own membership.</summary>
     public void AssignSelectionToSelectedState()
     {
-        if (SelectedAuthoredState?.Id is { } id)
-        {
-            var current = Project.Editor.DesignObjectFor(SelectedName)?.StateIds ?? [];
-            SetSelectionStateIds(current.Contains(id, StringComparer.Ordinal) ? current : [.. current, id]);
-        }
+        if (SelectedAuthoredState?.Id is not { } id)
+            return;
+        var name = SelectedAuthoredState.Name;
+        ApplyMembershipToSelection((_, current) => current.Contains(id, StringComparer.Ordinal) ? current : [.. current, id],
+            count => $"Added \"{name}\" to {count} object(s).",
+            $"Already assigned to \"{name}\"; nothing changed.");
     }
 
+    /// <summary>Drops the chosen authored state from every selected object's membership.</summary>
     public void RemoveSelectionFromSelectedState()
     {
-        if (SelectedAuthoredState?.Id is not { } id) return;
-        var current = Project.Editor.DesignObjectFor(SelectedName)?.StateIds ?? [];
-        SetSelectionStateIds([.. current.Where(item => item != id)]);
+        if (SelectedAuthoredState?.Id is not { } id)
+            return;
+        var name = SelectedAuthoredState.Name;
+        ApplyMembershipToSelection((_, current) => [.. current.Where(item => item != id)],
+            count => $"Removed \"{name}\" from {count} object(s).",
+            $"Not assigned to \"{name}\"; nothing changed.");
     }
 
-    private void SetSelectionStateIds(IReadOnlyList<string> stateIds)
+    /// <summary>
+    /// Rewrites state membership for every editable object in the current selection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The rewrite is computed per object and compared against that object's own membership, so
+    /// applying what an object already has is a genuine no-op: the project is not rebuilt, the
+    /// canvas is not re-laid out and the dirty flag is not raised. An apply that does change
+    /// something runs through <see cref="UpdateEditor"/>, which marks the project dirty and
+    /// re-resolves the layout, so the canvas reflects the new membership immediately.
+    /// </para>
+    /// <para>
+    /// Locked objects are never rewritten. They stay selected and are reported in the status line
+    /// rather than silently skipped, so a mixed locked-plus-editable selection changes exactly the
+    /// editable DESIGN objects and says how many it left alone.
+    /// </para>
+    /// </remarks>
+    private bool ApplyMembershipToSelection(
+        Func<string, IReadOnlyList<string>, IReadOnlyList<string>> nextMembership,
+        Func<int, string> changedStatus,
+        string unchangedStatus)
     {
-        if (SelectedName is null) return;
+        var selected = _selectedNames.Where(name => Project.Contains(name))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        if (selected.Length == 0)
+        {
+            Status = "No frame selected.";
+            return false;
+        }
+
+        var editable = selected.Where(name => !Project.Editor.IsLocked(name)).ToArray();
+        if (editable.Length == 0)
+        {
+            Status = "Nothing changed: every selected object is locked.";
+            return false;
+        }
+
         var values = Project.Editor.DesignObjects.ToList();
-        var index = values.FindIndex(item => item.FrameName == SelectedName);
-        var existing = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = SelectedName };
-        var updated = existing with { StateIds = [.. stateIds] };
-        if (index >= 0) values[index] = updated; else values.Add(updated);
-        UpdateEditor(Project.Editor with { DesignObjects = values }, stateIds.Count == 0
-            ? $"Assigned {Project.Editor.DisplayNameFor(SelectedFrame!)} to All States."
-            : $"Assigned {Project.Editor.DisplayNameFor(SelectedFrame!)} to {SelectedAuthoredState?.Name}.");
+        var changed = 0;
+        foreach (var name in editable)
+        {
+            var current = Project.Editor.DesignObjectFor(name)?.StateIds ?? [];
+            var next = nextMembership(name, current);
+            if (StateMembershipChooser.SameMembership(current, next))
+                continue;
+
+            var index = values.FindIndex(item => item.FrameName == name);
+            var existing = index >= 0 ? values[index] : new DesignObjectMetadata { FrameName = name };
+            var updated = existing with { StateIds = [.. next] };
+            if (index >= 0)
+                values[index] = updated;
+            else
+                values.Add(updated);
+            changed++;
+        }
+
+        if (changed == 0)
+        {
+            Status = unchangedStatus;
+            return false;
+        }
+
+        var lockedSkipped = selected.Length - editable.Length;
+        var status = changedStatus(changed);
+        if (lockedSkipped > 0)
+            status += $" {lockedSkipped} locked object(s) left unchanged.";
+        UpdateEditor(Project.Editor with { DesignObjects = values }, status);
+        return true;
     }
 
     /// <summary>

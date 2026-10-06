@@ -62,6 +62,17 @@ Imported Native Hunts preview states remain a separate evidence-backed catalog: 
 Standard Hunt, Elite Hunt, and Hunt Complete. Keeping these concepts separate avoids pretending an
 arbitrary addon Lua state machine has been imported or authored.
 
+Membership is edited through the **Choose States...** chooser, which offers All States plus the
+states the project currently has and nothing hardcoded. All States and a specific list are
+mutually exclusive, and the chooser normalizes to one of them before anything is written: an
+object either has no state IDs - All States - or exactly the chosen IDs, never an ambiguous pair.
+The decision is a **replace**, not a merge, applied identically to every editable object in the
+selection; an object that already has that membership keeps it untouched, so re-applying the
+current membership does not dirty the project. Locked objects are never rewritten: the chooser
+says how many it will leave alone, and Apply still proceeds for the rest. Selecting objects that
+disagree reports Mixed and refuses to apply until a choice is made. Nothing is written until
+Apply, so Cancel changes nothing.
+
 ## Multi-selection
 
 DESIGN keeps one ordered selection with a defined primary. Clicking replaces it; Ctrl/Cmd/Shift-click
@@ -77,9 +88,12 @@ selection, and the user would have no way to see what the next align was about t
 stay exclusive to the primary: four widgets' anchors at once is a hairball, not more information.
 
 During a multi-selection the single-object editors (name, parent, size, anchors, offsets, appearance,
-state membership, draw order) are hidden rather than left populated. Every one of those fields
+draw order) are hidden rather than left populated. Every one of those fields
 describes exactly one object, so leaving them editable while four objects are selected is how a
-background panel gets renamed by accident. **Show only primary** narrows the selection back to one
+background panel gets renamed by accident. State membership is the exception, because it is a bulk
+decision rather than a per-object property: the STATE MEMBERSHIP block stays visible and its
+**Choose States...** chooser applies one membership to the whole selection, locking the objects it
+may not touch instead of hiding them. **Show only primary** narrows the selection back to one
 object, and INSPECT states plainly that it is describing the primary only.
 
 Dragging any member of a multi-selection moves the whole selection as one rigid group, by the same

@@ -2,8 +2,10 @@ using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
@@ -250,9 +252,124 @@ public partial class MainWindow : Window
     private void OnCreateStateClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateDesignState();
     private void OnRenameStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedDesignState();
     private void OnDeleteStateClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteSelectedDesignState();
-    private void OnAssignAllStatesClick(object? sender, RoutedEventArgs e) => ViewModel?.AssignSelectionToAllStates();
-    private void OnAssignSelectedStateClick(object? sender, RoutedEventArgs e) => ViewModel?.AssignSelectionToSelectedState();
-    private void OnRemoveSelectedStateClick(object? sender, RoutedEventArgs e) => ViewModel?.RemoveSelectionFromSelectedState();
+
+    /// <summary>
+    /// Opens the compact state-membership chooser for the current selection.
+    /// </summary>
+    /// <remarks>
+    /// The dialog is built from the chooser view model, so its rows are the project's current
+    /// authored states - All States first, nothing hardcoded - and it carries the selection's
+    /// starting point: pre-checked when the selection shares one membership, Mixed and empty when
+    /// it does not. Nothing is written until Apply: Cancel discards the chooser, which is what
+    /// keeps a cancelled dialog from touching the project or dirtying it.
+    /// </remarks>
+    private async void OnChooseStatesClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || vm.CreateStateMembershipChooser() is not { } chooser)
+            return;
+
+        var (dialog, applyRequested) = CreateStateMembershipDialog(chooser);
+        await dialog.ShowDialog(this);
+        if (applyRequested())
+            vm.ApplyStateMembership(chooser);
+    }
+
+    /// <summary>
+    /// Builds the chooser dialog for one <see cref="StateMembershipChooser"/> and reports whether
+    /// Apply was pressed when it closes. Separate from the click handler so the dialog's bindings
+    /// can be exercised without a modal owner in the way.
+    /// </summary>
+    internal static (Window Dialog, Func<bool> ApplyRequested) CreateStateMembershipDialog(StateMembershipChooser chooser)
+    {
+        var rows = new StackPanel { Spacing = 2 };
+        foreach (var option in chooser.Options)
+        {
+            var box = new CheckBox { Content = option.Name };
+            box.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(StateMembershipOption.IsChecked))
+            {
+                Source = option,
+                Mode = BindingMode.TwoWay,
+            });
+            box.Bind(InputElement.IsEnabledProperty, new Binding(nameof(StateMembershipOption.IsEnabled))
+            {
+                Source = option,
+                Mode = BindingMode.OneWay,
+            });
+            rows.Children.Add(box);
+        }
+
+        var mixedNote = new TextBlock
+        {
+            Text = chooser.MixedNote,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.Parse("#F2C14E")),
+            IsVisible = chooser.IsMixed,
+        };
+        var lockNote = new TextBlock
+        {
+            Text = chooser.LockNote,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.Parse("#8FA3B0")),
+        };
+        var validation = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.Parse("#E5796B")),
+        };
+        validation.Bind(TextBlock.TextProperty, new Binding(nameof(StateMembershipChooser.ValidationMessage))
+        {
+            Source = chooser,
+            Mode = BindingMode.OneWay,
+        });
+
+        var cancel = new Button { Content = "Cancel", MinWidth = 88 };
+        var apply = new Button { Content = "Apply", MinWidth = 88, IsEnabled = chooser.CanApply };
+        apply.Bind(InputElement.IsEnabledProperty, new Binding(nameof(StateMembershipChooser.CanApply))
+        {
+            Source = chooser,
+            Mode = BindingMode.OneWay,
+        });
+
+        var applyRequested = false;
+        var dialog = new Window
+        {
+            Title = "State Membership",
+            Width = 340,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(18),
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock { Text = "State Membership", FontWeight = FontWeight.Bold },
+                    mixedNote,
+                    new TextBlock
+                    {
+                        Text = "Applies to the whole selection. Locked objects are kept as they are.",
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = new SolidColorBrush(Color.Parse("#8FA3B0")),
+                    },
+                    rows,
+                    lockNote,
+                    validation,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancel, apply },
+                    },
+                },
+            },
+        };
+        cancel.Click += (_, _) => dialog.Close();
+        apply.Click += (_, _) => { applyRequested = true; dialog.Close(); };
+        return (dialog, () => applyRequested);
+    }
+
     private void OnExpandStockClick(object? sender, RoutedEventArgs e) => ViewModel?.SetConceptualStockExpanded(true);
     private void OnCollapseStockClick(object? sender, RoutedEventArgs e) => ViewModel?.SetConceptualStockExpanded(false);
 

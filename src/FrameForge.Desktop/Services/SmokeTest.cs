@@ -1732,6 +1732,72 @@ public static class SmokeTest
             }
         }
 
+        // 9b. The STATE MEMBERSHIP chooser is the one editor that survives a multi-selection, so
+        //     it is driven end to end: the button in the selection chrome, the dialog the view
+        //     model actually builds, and the TwoWay checkbox bindings that keep All States and an
+        //     explicit list mutually exclusive - a pair the file format cannot hold. The dialog
+        //     comes from the same factory the click handler uses and is closed again here, so the
+        //     run cannot end parked on it, and nothing is applied, so the project is untouched.
+        vm.SetWorkspace(WorkspaceExperience.Design);
+        if (vm.Project.Editor.DesignStates.Count == 0)
+        {
+            vm.StateNameDraft = "Idle";
+            vm.CreateDesignState();
+        }
+        vm.NewObjectName = "Membership Probe";
+        vm.AddDesignFrame();
+        Check("a fresh DESIGN frame is available for the membership probe",
+            vm.SelectedName is { Length: > 0 } && vm.SelectedStateMembership == "All States",
+            $"{vm.SelectedName ?? "<none>"} / {vm.SelectedStateMembership}");
+        var membershipTarget = vm.SelectedName;
+        await PumpAsync(1);
+        var chooseStatesButton = window.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(button => string.Equals(button.Content?.ToString(), "Choose States...", StringComparison.Ordinal));
+        Check("STATE MEMBERSHIP offers Choose States...",
+            chooseStatesButton is { IsVisible: true },
+            chooseStatesButton is null ? "<missing>" : $"visible={chooseStatesButton.IsVisible}");
+
+        var membershipChooser = membershipTarget is null ? null : vm.CreateStateMembershipChooser();
+        Check("an All States object opens a uniform, non-mixed chooser",
+            membershipChooser is { IsAllStates: true, IsMixed: false, EditableTargetNames.Count: 1 });
+        if (membershipChooser is not null)
+        {
+            var (dialog, applyRequested) = MainWindow.CreateStateMembershipDialog(membershipChooser);
+            dialog.Show();
+            await PumpAsync(2);
+            var membershipBoxes = dialog.GetVisualDescendants().OfType<CheckBox>().ToArray();
+            var expectedRows = new[] { "All States" }
+                .Concat(vm.Project.Editor.DesignStates.Select(state => state.Name))
+                .ToArray();
+            Check("the chooser dialog lists All States plus every authored state",
+                membershipBoxes.Length > 0 && membershipBoxes.Select(box => box.Content?.ToString()).SequenceEqual(expectedRows),
+                string.Join(", ", membershipBoxes.Select(box => box.Content)));
+            Check("an All States selection opens with All States checked and the rows cleared",
+                membershipBoxes.Length > 0 && membershipBoxes[0].IsChecked == true
+                                          && membershipBoxes.Skip(1).All(box => box.IsChecked == false && box.IsEnabled == false),
+                string.Join(" | ", membershipBoxes.Select(box => $"{box.IsChecked}:{box.IsEnabled}")));
+
+            var firstStateBox = membershipBoxes.Skip(1).FirstOrDefault();
+            if (firstStateBox is not null)
+            {
+                firstStateBox.IsChecked = true;
+                await PumpAsync(1);
+                Check("checking a state row in the dialog clears All States",
+                    membershipBoxes.Length > 0 && membershipBoxes[0].IsChecked == false
+                                              && firstStateBox.IsChecked == true
+                                              && !membershipChooser.IsAllStates);
+                Check("checking a state row re-enables every state row",
+                    membershipBoxes.Skip(1).All(box => box.IsEnabled));
+            }
+
+            dialog.Close();
+            await PumpAsync(2);
+            Check("closing the chooser without Apply leaves membership untouched",
+                !applyRequested() && vm.SelectedStateMembership == "All States"
+                && vm.Project.Editor.DesignObjectFor(membershipTarget)?.StateIds.Count is null or 0,
+                vm.SelectedStateMembership);
+        }
+
         // 10. The Open picker contract. Last, because re-opening replaces vm's project.
         //
         //     The Linux Open dialog is the XDG desktop portal: Avalonia hands it the whole filter

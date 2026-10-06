@@ -499,6 +499,21 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- State membership is a bulk decision, so it lives outside the
+                             single-object editors: one selected object and a three-object
+                             selection both get the same chooser, and Apply assigns the same
+                             membership to every editable object in the selection. -->
+                        <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
+                                CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
+                            <StackPanel Spacing="5">
+                                <TextBlock Classes="label" Text="STATE MEMBERSHIP"
+                                           ToolTip.Tip="All States means the object appears in every current design state and in states created later. Choosing specific states keeps it in exactly those states, and no others." />
+                                <TextBlock Classes="value" Text="{Binding SelectedStateMembership}" TextWrapping="Wrap" />
+                                <Button Content="Choose States..." Click="OnChooseStatesClick"
+                                        HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
                         <StackPanel IsVisible="{Binding ShowsSingleObjectEditors}">
                         <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
                                 CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
@@ -566,13 +581,6 @@
                                     <Button Content="Browse / Change..." HorizontalAlignment="Left"
                                             Click="OnChangeDesignImageClick" />
                                 </StackPanel>
-                                <TextBlock Classes="label" Text="STATE MEMBERSHIP" Margin="0,5,0,0" />
-                                <TextBlock Classes="value" Text="{Binding SelectedStateMembership}" TextWrapping="Wrap" />
-                                <WrapPanel>
-                                    <Button Content="All States" Click="OnAssignAllStatesClick" Margin="0,0,4,4" />
-                                    <Button Content="Add State" Click="OnAssignSelectedStateClick" Margin="0,0,4,4" />
-                                    <Button Content="Remove State" Click="OnRemoveSelectedStateClick" Margin="0,0,4,4" />
-                                </WrapPanel>
                                 <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
                                 <StackPanel Spacing="3" Margin="0,5,0,0" IsVisible="{Binding CanChangeDesignOrder}">
                                     <TextBlock Classes="label" Text="DRAW ORDER" />
