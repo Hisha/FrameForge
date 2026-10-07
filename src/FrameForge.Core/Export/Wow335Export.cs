@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -36,9 +37,13 @@ public sealed record WowExportObject(
     string? JustifyV);
 
 public sealed record WowExportAsset(
-    string SourceProjectAsset,
+    IReadOnlyList<string> ProjectReferences,
+    string SourcePhysicalPath,
+    string PackageSource,
+    string ContentSha256,
     string LogicalTexture,
     string PackagingTarget,
+    string Conversion,
     IReadOnlyList<string> Consumers);
 
 public sealed record WowExportModel(
@@ -107,6 +112,7 @@ public static partial class Wow335ExportBuilder
 
         var projectDirectory = string.IsNullOrWhiteSpace(projectFilePath) ? null : Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
         var assetConsumers = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+        var assetFrames = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
         var objects = new List<WowExportObject>();
         foreach (var metadata in authored.OrderBy(m => rank.GetValueOrDefault(m.FrameName, int.MaxValue)).ThenBy(m => m.FrameName, StringComparer.Ordinal))
         {
@@ -117,17 +123,12 @@ public static partial class Wow335ExportBuilder
             if (!string.IsNullOrWhiteSpace(metadata.DesignAsset))
             {
                 var asset = NormalizePortablePath(metadata.DesignAsset!);
-                if (Path.IsPathRooted(metadata.DesignAsset!) || IsMachinePath(metadata.DesignAsset!))
-                    diagnostics.Add(new(ExportSeverity.Error, "ASSET_ABSOLUTE", "Project artwork must use a portable path relative to the .fforge.json file.", frame.Name));
-                var physical = projectDirectory is null ? null : Path.GetFullPath(Path.Combine(projectDirectory, asset.Replace('/', Path.DirectorySeparatorChar)));
-                if (physical is not null && !physical.StartsWith(projectDirectory! + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                    diagnostics.Add(new(ExportSeverity.Error, "ASSET_ESCAPE", $"Project artwork '{asset}' escapes the project directory.", frame.Name));
-                if (physical is null || !File.Exists(physical))
-                    diagnostics.Add(new(ExportSeverity.Error, "ASSET_UNRESOLVED", $"Project artwork '{asset}' was not found beside the project.", frame.Name));
                 var stem = SafePathSegment(Path.GetFileNameWithoutExtension(asset));
                 texture = $@"Interface\FrameForge\{SafePathSegment(project.Name)}\{stem}";
                 if (!assetConsumers.TryGetValue(asset, out var consumers)) assetConsumers[asset] = consumers = [];
                 consumers.Add(runtime);
+                if (!assetFrames.TryGetValue(asset, out var frames)) assetFrames[asset] = frames = [];
+                frames.Add(frame.Name);
             }
             else if (frame.Kind == FrameKind.TEXTURE && frame.Visual?.Texture?.File is { Length: > 0 } stockTexture)
             {
@@ -152,12 +153,12 @@ public static partial class Wow335ExportBuilder
                 style?.Shadow, style?.JustifyH ?? frame.Visual?.Text?.JustifyH, frame.Visual?.Text?.JustifyV));
         }
 
-        var assets = assetConsumers.Select(pair =>
-        {
-            var stem = SafePathSegment(Path.GetFileNameWithoutExtension(pair.Key));
-            return new WowExportAsset(pair.Key, $@"Interface\FrameForge\{SafePathSegment(project.Name)}\{stem}",
-                $"textures/{stem}.tga", [.. pair.Value.Order(StringComparer.Ordinal)]);
-        }).ToArray();
+        var assets = BuildAssets(project.Name, projectDirectory, assetConsumers, assetFrames, diagnostics,
+            out var logicalByProjectReference);
+        objects = objects.Select(item => item.Metadata.DesignAsset is { Length: > 0 } reference
+                && logicalByProjectReference.TryGetValue(NormalizePortablePath(reference), out var logical)
+            ? item with { TextureReference = logical }
+            : item).ToList();
 
         foreach (var conflict in objects
                      .Where(item => !string.IsNullOrWhiteSpace(item.Metadata.RuntimeBinding))
@@ -228,6 +229,131 @@ public static partial class Wow335ExportBuilder
     }
     private static bool IsMachinePath(string value) => Regex.IsMatch(value, @"(^[A-Za-z]:[\\/])|(^/home/)|AppData|FrameForge[\\/]cache", RegexOptions.IgnoreCase);
     private static string SafePathSegment(string value) => SafeIdentifier(value).Trim('_');
+
+    private sealed record AssetCandidate(string ProjectReference, string PhysicalPath, string ContentSha256,
+        string Extension, string BaseFileName, string BaseLogicalStem, IReadOnlyList<string> Consumers);
+
+    private static IReadOnlyList<WowExportAsset> BuildAssets(
+        string projectName,
+        string? projectDirectory,
+        IReadOnlyDictionary<string, List<string>> assetConsumers,
+        IReadOnlyDictionary<string, List<string>> assetFrames,
+        List<ExportDiagnostic> diagnostics,
+        out IReadOnlyDictionary<string, string> logicalByProjectReference)
+    {
+        var candidates = new List<AssetCandidate>();
+        foreach (var pair in assetConsumers.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var frameName = assetFrames[pair.Key].Order(StringComparer.Ordinal).First();
+            if (!TryResolveProjectAsset(pair.Key, projectDirectory, frameName, diagnostics, out var physical, out var hash))
+                continue;
+            var extension = Path.GetExtension(pair.Key).ToLowerInvariant();
+            if (extension is not (".png" or ".tga" or ".blp"))
+            {
+                diagnostics.Add(new(ExportSeverity.Error, "ASSET_FORMAT_UNSUPPORTED",
+                    $"Project artwork '{pair.Key}' must be PNG, TGA, or BLP.", frameName));
+                continue;
+            }
+            var stem = SafePathSegment(Path.GetFileNameWithoutExtension(pair.Key));
+            if (stem.Length == 0) stem = "asset";
+            candidates.Add(new(pair.Key, physical!, hash!, extension, stem + extension, stem,
+                [.. pair.Value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]));
+        }
+
+        var fileCollisions = candidates.GroupBy(item => item.BaseFileName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => group.Select(item => item.ContentSha256).Distinct(StringComparer.Ordinal).Count() > 1,
+                StringComparer.OrdinalIgnoreCase);
+        var logicalCollisions = candidates.GroupBy(item => item.BaseLogicalStem, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => group.Select(item => item.ContentSha256).Distinct(StringComparer.Ordinal).Count() > 1,
+                StringComparer.OrdinalIgnoreCase);
+
+        var resolved = candidates.Select(item =>
+        {
+            var suffix = item.ContentSha256[..12].ToLowerInvariant();
+            var fileName = fileCollisions[item.BaseFileName]
+                ? $"{item.BaseLogicalStem}-{suffix}{item.Extension}"
+                : item.BaseFileName;
+            var logicalStem = logicalCollisions[item.BaseLogicalStem]
+                ? $"{item.BaseLogicalStem}_{suffix}"
+                : item.BaseLogicalStem;
+            return (Candidate: item, FileName: fileName, LogicalStem: logicalStem);
+        }).ToArray();
+
+        var canonicalPackageByHash = resolved.GroupBy(item => item.Candidate.ContentSha256, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => "assets/" + group.Select(item => item.FileName).Order(StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
+        var logicalMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rows = new List<WowExportAsset>();
+        foreach (var group in resolved.GroupBy(item => (item.LogicalStem, item.Candidate.ContentSha256)))
+        {
+            var members = group.OrderBy(item => item.Candidate.ProjectReference, StringComparer.Ordinal).ToArray();
+            var logical = $@"Interface\FrameForge\{SafePathSegment(projectName)}\{group.Key.LogicalStem}";
+            foreach (var member in members)
+                logicalMap[member.Candidate.ProjectReference] = logical;
+            var canonical = members[0].Candidate;
+            rows.Add(new(
+                [.. members.Select(item => item.Candidate.ProjectReference).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+                canonical.PhysicalPath,
+                canonicalPackageByHash[group.Key.ContentSha256],
+                group.Key.ContentSha256,
+                logical,
+                $"textures/{group.Key.LogicalStem}.tga",
+                canonical.Extension == ".png" ? "png-to-wow-compatible-tga-or-blp" : "copy-wow-compatible-artwork",
+                [.. members.SelectMany(item => item.Candidate.Consumers).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]));
+        }
+        logicalByProjectReference = logicalMap;
+        return [.. rows.OrderBy(item => item.LogicalTexture, StringComparer.Ordinal)];
+    }
+
+    private static bool TryResolveProjectAsset(string reference, string? projectDirectory, string frameName,
+        List<ExportDiagnostic> diagnostics, out string? physical, out string? hash)
+    {
+        physical = null;
+        hash = null;
+        if (projectDirectory is null)
+        {
+            diagnostics.Add(new(ExportSeverity.Error, "ASSET_PROJECT_UNSAVED",
+                $"Project artwork '{reference}' cannot be packaged until the project has a file location.", frameName));
+            return false;
+        }
+        if (Path.IsPathRooted(reference) || IsMachinePath(reference))
+        {
+            diagnostics.Add(new(ExportSeverity.Error, "ASSET_ABSOLUTE",
+                $"Project artwork '{reference}' must use a portable path relative to the .fforge.json file.", frameName));
+            return false;
+        }
+        try
+        {
+            physical = Path.GetFullPath(Path.Combine(projectDirectory,
+                reference.Replace('/', Path.DirectorySeparatorChar)));
+            var relative = Path.GetRelativePath(projectDirectory, physical);
+            if (Path.IsPathRooted(relative) || relative == ".."
+                || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                diagnostics.Add(new(ExportSeverity.Error, "ASSET_ESCAPE",
+                    $"Project artwork '{reference}' escapes the project directory.", frameName));
+                return false;
+            }
+            if (!File.Exists(physical))
+            {
+                diagnostics.Add(new(ExportSeverity.Error, "ASSET_UNRESOLVED",
+                    $"Project artwork '{reference}' was not found beside the project.", frameName));
+                return false;
+            }
+            using var stream = new FileStream(physical, FileMode.Open, FileAccess.Read, FileShare.Read);
+            hash = Convert.ToHexString(SHA256.HashData(stream));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            diagnostics.Add(new(ExportSeverity.Error, "ASSET_UNREADABLE",
+                $"Project artwork '{reference}' could not be read: {ex.Message}", frameName));
+            return false;
+        }
+    }
     public static string SafeIdentifier(string value)
     {
         var safe = InvalidIdentifierChars().Replace(value.Trim(), "_");
@@ -240,7 +366,7 @@ public static partial class Wow335ExportBuilder
     [GeneratedRegex("_+")] private static partial Regex RepeatedUnderscores();
 }
 
-/// <summary>Writes deterministic FrameXML and versioned contracts; it never copies texture files.</summary>
+/// <summary>Writes deterministic FrameXML, versioned contracts, and project-owned source artwork.</summary>
 public static class Wow335Exporter
 {
     public const string XmlFileName = "FrameForgeLayout.xml";
@@ -253,33 +379,146 @@ public static class Wow335Exporter
         var model = Wow335ExportBuilder.Build(project, projectFilePath);
         if (model.Diagnostics.Any(d => d.Severity == ExportSeverity.Error))
             return new(false, model, model.Diagnostics, []);
-        Directory.CreateDirectory(destination);
-        var files = new[]
+        var destinationRoot = Path.GetFullPath(destination);
+        Directory.CreateDirectory(destinationRoot);
+        var staging = Path.Combine(destinationRoot, $".frameforge-staging-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        var finalFiles = new[]
         {
-            Path.Combine(destination, XmlFileName), Path.Combine(destination, ManifestFileName),
-            Path.Combine(destination, AssetsFileName), Path.Combine(destination, ReportFileName),
+            Path.Combine(destinationRoot, XmlFileName), Path.Combine(destinationRoot, ManifestFileName),
+            Path.Combine(destinationRoot, AssetsFileName), Path.Combine(destinationRoot, ReportFileName),
         };
-        File.WriteAllText(files[0], WriteXml(model), new UTF8Encoding(false));
-        File.WriteAllText(files[1], WriteManifest(model), new UTF8Encoding(false));
-        File.WriteAllText(files[2], WriteAssets(model), new UTF8Encoding(false));
-        var roundTrip = FrameXmlImporter.ImportFile(files[0]);
-        if (!roundTrip.Ok || roundTrip.Project is null)
-            throw new InvalidDataException("Generated FrameXML failed the independent importer self-check: " +
-                                           string.Join(" ", roundTrip.Errors.Select(e => e.Message)));
-        var importedNames = roundTrip.Project.Frames.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
-        var missing = model.Objects.Select(o => o.RuntimeName).Where(name => !importedNames.Contains(name)).ToArray();
-        if (missing.Length > 0)
-            throw new InvalidDataException($"Generated FrameXML importer self-check lost {missing.Length} runtime object(s): {string.Join(", ", missing.Take(5))}.");
-        File.WriteAllText(files[3], WriteReport(model) + $"Round-trip self-check: PASS ({model.Objects.Count}/{model.Objects.Count} runtime identities)\n", new UTF8Encoding(false));
-        foreach (var path in files)
+        try
         {
-            var text = File.ReadAllText(path);
-            if (Regex.IsMatch(text, @"[A-Za-z]:\\|/home/|AppData", RegexOptions.IgnoreCase))
-                throw new InvalidDataException($"Portable export audit rejected a machine-local path in {Path.GetFileName(path)}.");
+            var stagedFiles = new[]
+            {
+                Path.Combine(staging, XmlFileName), Path.Combine(staging, ManifestFileName),
+                Path.Combine(staging, AssetsFileName), Path.Combine(staging, ReportFileName),
+            };
+            foreach (var group in model.Assets.GroupBy(asset => asset.PackageSource, StringComparer.Ordinal))
+            {
+                var asset = group.First();
+                var target = ResolvePackagePath(staging, asset.PackageSource);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(asset.SourcePhysicalPath, target, true);
+                using var copied = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var copiedHash = Convert.ToHexString(SHA256.HashData(copied));
+                if (!string.Equals(copiedHash, asset.ContentSha256, StringComparison.Ordinal))
+                    throw new InvalidDataException($"Project artwork '{asset.ProjectReferences[0]}' changed while the export was being written.");
+            }
+
+            File.WriteAllText(stagedFiles[0], WriteXml(model), new UTF8Encoding(false));
+            File.WriteAllText(stagedFiles[1], WriteManifest(model), new UTF8Encoding(false));
+            File.WriteAllText(stagedFiles[2], WriteAssets(model), new UTF8Encoding(false));
+            var roundTrip = FrameXmlImporter.ImportFile(stagedFiles[0]);
+            if (!roundTrip.Ok || roundTrip.Project is null)
+                throw new InvalidDataException("Generated FrameXML failed the independent importer self-check: " +
+                                               string.Join(" ", roundTrip.Errors.Select(e => e.Message)));
+            var importedNames = roundTrip.Project.Frames.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+            var missing = model.Objects.Select(o => o.RuntimeName).Where(name => !importedNames.Contains(name)).ToArray();
+            if (missing.Length > 0)
+                throw new InvalidDataException($"Generated FrameXML importer self-check lost {missing.Length} runtime object(s): {string.Join(", ", missing.Take(5))}.");
+            File.WriteAllText(stagedFiles[3], WriteReport(model) + $"Round-trip self-check: PASS ({model.Objects.Count}/{model.Objects.Count} runtime identities)\n", new UTF8Encoding(false));
+            foreach (var path in stagedFiles)
+            {
+                var text = File.ReadAllText(path);
+                if (Regex.IsMatch(text, @"[A-Za-z]:\\|/home/|AppData", RegexOptions.IgnoreCase))
+                    throw new InvalidDataException($"Portable export audit rejected a machine-local path in {Path.GetFileName(path)}.");
+            }
+            using (var reader = XmlReader.Create(stagedFiles[0]))
+                while (reader.Read()) { }
+
+            PublishStagedPackage(staging, destinationRoot, stagedFiles, finalFiles, model.Assets);
+            return new(true, model, model.Diagnostics, finalFiles);
         }
-        using (var reader = XmlReader.Create(files[0]))
-            while (reader.Read()) { }
-        return new(true, model, model.Diagnostics, files);
+        finally
+        {
+            if (Directory.Exists(staging)
+                && staging.StartsWith(destinationRoot + Path.DirectorySeparatorChar + ".frameforge-staging-", StringComparison.OrdinalIgnoreCase))
+                Directory.Delete(staging, true);
+        }
+    }
+
+    private static void PublishStagedPackage(string staging, string destinationRoot,
+        IReadOnlyList<string> stagedFiles, IReadOnlyList<string> finalFiles, IReadOnlyList<WowExportAsset> assets)
+    {
+        var previouslyManaged = ReadPreviouslyManagedAssets(destinationRoot);
+        var newAssets = assets.GroupBy(asset => asset.PackageSource, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().ContentSha256, StringComparer.Ordinal);
+
+        foreach (var pair in newAssets)
+        {
+            var target = ResolvePackagePath(destinationRoot, pair.Key);
+            if (!File.Exists(target))
+                continue;
+            using var stream = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var existingHash = Convert.ToHexString(SHA256.HashData(stream));
+            if (!string.Equals(existingHash, pair.Value, StringComparison.Ordinal)
+                && !previouslyManaged.ContainsKey(pair.Key))
+                throw new InvalidDataException($"Export asset '{pair.Key}' would overwrite a file not owned by a previous FrameForge export.");
+        }
+
+        foreach (var pair in newAssets.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var source = ResolvePackagePath(staging, pair.Key);
+            var target = ResolvePackagePath(destinationRoot, pair.Key);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(source, target, true);
+        }
+        for (var index = 0; index < stagedFiles.Count; index++)
+            File.Copy(stagedFiles[index], finalFiles[index], true);
+
+        foreach (var stale in previouslyManaged.Keys.Except(newAssets.Keys, StringComparer.Ordinal))
+        {
+            var path = ResolvePackagePath(destinationRoot, stale);
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    private static Dictionary<string, string> ReadPreviouslyManagedAssets(string destinationRoot)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var manifestPath = Path.Combine(destinationRoot, AssetsFileName);
+        if (!File.Exists(manifestPath))
+            return result;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("schema", out var schema)
+                || schema.GetString() != "frameforge-wow335-assets"
+                || !root.TryGetProperty("version", out var version) || version.GetInt32() != 2
+                || !root.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+                return result;
+            foreach (var asset in assets.EnumerateArray())
+            {
+                if (!asset.TryGetProperty("source", out var source) || source.ValueKind != JsonValueKind.String
+                    || !asset.TryGetProperty("contentSha256", out var hash) || hash.ValueKind != JsonValueKind.String)
+                    continue;
+                var relative = source.GetString();
+                if (relative is null || !relative.StartsWith("assets/", StringComparison.Ordinal))
+                    continue;
+                _ = ResolvePackagePath(destinationRoot, relative);
+                result[relative] = hash.GetString()!;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return new(StringComparer.Ordinal);
+        }
+        return result;
+    }
+
+    private static string ResolvePackagePath(string root, string relative)
+    {
+        if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative))
+            throw new InvalidDataException($"Export package path '{relative}' is not portable.");
+        var rootPath = Path.GetFullPath(root);
+        var path = Path.GetFullPath(Path.Combine(rootPath, relative.Replace('/', Path.DirectorySeparatorChar)));
+        if (!path.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Export package path '{relative}' escapes the selected directory.");
+        return path;
     }
 
     public static string WriteXml(WowExportModel model)
@@ -410,10 +649,25 @@ public static class Wow335Exporter
         }).ToArray();
         return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = model.StockParentRuntimeName, strategy = "reference-client-owned-foundation" }, states, bindings }, JsonOptions());
     }
-    public static string WriteAssets(WowExportModel model) => JsonSerializer.Serialize(new { schema = "frameforge-wow335-assets", version = 1, note = "Project PNGs require conversion by a later content-packaging phase. Stock client artwork is referenced and never copied.", assets = model.Assets.Select(a => new { sourceProjectAsset = a.SourceProjectAsset, logicalTexture = a.LogicalTexture, packagingTarget = a.PackagingTarget, conversion = "png-to-wow-compatible-tga-or-blp", consumers = a.Consumers }) }, JsonOptions());
+    public static string WriteAssets(WowExportModel model) => JsonSerializer.Serialize(new
+    {
+        schema = "frameforge-wow335-assets",
+        version = 2,
+        note = "Project-owned source artwork is packaged below this manifest. Stock client artwork is referenced and never copied.",
+        assets = model.Assets.Select(a => new
+        {
+            source = a.PackageSource,
+            projectReferences = a.ProjectReferences,
+            contentSha256 = a.ContentSha256,
+            logicalTexture = a.LogicalTexture,
+            packagingTarget = a.PackagingTarget,
+            conversion = a.Conversion,
+            consumers = a.Consumers,
+        }),
+    }, JsonOptions());
     public static string WriteReport(WowExportModel model)
     {
-        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine("Stock foundation: referenced; not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
+        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine("Stock foundation: referenced; not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
         foreach (var d in model.Diagnostics.OrderBy(d => d.Severity).ThenBy(d => d.Code, StringComparer.Ordinal).ThenBy(d => d.FrameName, StringComparer.Ordinal)) b.AppendLine($"{d.Severity.ToString().ToUpperInvariant()} {d.Code}{(d.FrameName is null ? "" : $" [{d.FrameName}]")}: {d.Message}");
         return b.ToString().Replace("\r\n", "\n");
     }

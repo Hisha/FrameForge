@@ -18,12 +18,15 @@ public sealed class Wow335ExportTests
         Assert.True(first.Success, string.Join("\n", first.Diagnostics));
         foreach (var file in first.WrittenFiles.Select(Path.GetFileName))
             Assert.Equal(File.ReadAllText(Path.Combine(fixture.Output1, file!)), File.ReadAllText(Path.Combine(fixture.Output2, file!)));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Output1, "assets", "panel.png")),
+            File.ReadAllBytes(Path.Combine(fixture.Output2, "assets", "panel.png")));
         _ = XDocument.Load(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName));
         var all = string.Join("\n", first.WrittenFiles.Select(File.ReadAllText));
         Assert.DoesNotContain(fixture.Root, all, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("AppData", all, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.blp", SearchOption.AllDirectories));
-        Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.png", SearchOption.AllDirectories));
+        Assert.Equal(new[] { Path.Combine(fixture.Output1, "assets", "panel.png") },
+            Directory.EnumerateFiles(fixture.Output1, "*.png", SearchOption.AllDirectories));
         Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.ttf", SearchOption.AllDirectories));
     }
 
@@ -39,7 +42,8 @@ public sealed class Wow335ExportTests
         Assert.Equal(new[] { "tracking", "located" }, model.Objects[0].StateIds);
         Assert.Empty(model.Objects[1].StateIds);
         Assert.Equal(@"Interface\FrameForge\Fixture\panel", model.Assets.Single().LogicalTexture);
-        Assert.Equal("panel.png", model.Assets.Single().SourceProjectAsset);
+        Assert.Equal(["panel.png"], model.Assets.Single().ProjectReferences);
+        Assert.Equal("assets/panel.png", model.Assets.Single().PackageSource);
         Assert.Equal("GameFontHighlight", model.Objects[0].FontStyle);
         Assert.Equal(17, model.Objects[0].FontSize);
         Assert.Equal(0, model.Objects[0].Frame.OffsetX);
@@ -156,6 +160,120 @@ public sealed class Wow335ExportTests
     }
 
     [Fact]
+    public void AssetManifestUsesPackagedRelativeSourcesAndStockArtworkIsNeverCopied()
+    {
+        using var fixture = ExportFixture.Create();
+        var result = Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1);
+        Assert.True(result.Success, result.Summary);
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
+        Assert.Equal(2, manifest.RootElement.GetProperty("version").GetInt32());
+        var asset = Assert.Single(manifest.RootElement.GetProperty("assets").EnumerateArray());
+        Assert.Equal("assets/panel.png", asset.GetProperty("source").GetString());
+        Assert.False(Path.IsPathRooted(asset.GetProperty("source").GetString()));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Root, "panel.png")),
+            File.ReadAllBytes(Path.Combine(fixture.Output1, "assets", "panel.png")));
+        Assert.DoesNotContain(manifest.RootElement.GetRawText(), "UI-StatusBar", StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.blp", SearchOption.AllDirectories));
+        Assert.Contains(@"Interface\TargetingFrame\UI-StatusBar",
+            File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName)));
+    }
+
+    [Fact]
+    public void DuplicateReferencesDeduplicateAndDifferentContentFilenameCollisionsAreStable()
+    {
+        using var fixture = ExportFixture.Create();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "a"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "b"));
+        File.WriteAllBytes(Path.Combine(fixture.Root, "a", "shared.png"), [10, 11]);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "b", "shared.png"), [20, 21]);
+        var project = AddTextures(fixture.Project,
+            ("A1", "a/shared.png"), ("A2", "a/shared.png"), ("B", "b/shared.png"));
+
+        var first = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
+        var second = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output2);
+        Assert.True(first.Success, first.Summary);
+        Assert.True(second.Success, second.Summary);
+        var shared = first.Model!.Assets.Where(asset => asset.ProjectReferences.Contains("a/shared.png", StringComparer.Ordinal)).Single();
+        Assert.Equal(2, shared.Consumers.Count);
+        var collisionAssets = first.Model.Assets.Where(asset => asset.ProjectReferences.Any(reference => reference.EndsWith("shared.png", StringComparison.Ordinal))).ToArray();
+        Assert.Equal(2, collisionAssets.Length);
+        Assert.Equal(2, collisionAssets.Select(asset => asset.PackageSource).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(collisionAssets, asset => Assert.Contains("-", Path.GetFileNameWithoutExtension(asset.PackageSource)));
+        Assert.Equal(
+            Directory.EnumerateFiles(fixture.Output1, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture.Output1, path)).Order().ToArray(),
+            Directory.EnumerateFiles(fixture.Output2, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture.Output2, path)).Order().ToArray());
+        foreach (var relative in Directory.EnumerateFiles(fixture.Output1, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture.Output1, path)))
+            Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Output1, relative)), File.ReadAllBytes(Path.Combine(fixture.Output2, relative)));
+    }
+
+    [Fact]
+    public void IdenticalContentAtDifferentReferencesUsesOnePackagedSourceFile()
+    {
+        using var fixture = ExportFixture.Create();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "copies"));
+        File.WriteAllBytes(Path.Combine(fixture.Root, "copies", "same.png"), [1, 2, 3]);
+        var project = AddTextures(fixture.Project, ("Copy", "copies/same.png"));
+        var result = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
+        Assert.True(result.Success, result.Summary);
+        Assert.Equal(2, result.Model!.Assets.Count);
+        Assert.Single(result.Model.Assets.Select(asset => asset.PackageSource).Distinct(StringComparer.Ordinal));
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(fixture.Output1, "assets")));
+    }
+
+    [Fact]
+    public void MissingAndEscapingAssetsBlockExportBeforeDestinationIsCreated()
+    {
+        using var fixture = ExportFixture.Create();
+        var missing = AddTextures(fixture.Project, ("Missing", "missing.png"));
+        var missingResult = Wow335Exporter.Export(missing, fixture.ProjectPath, fixture.Output1);
+        Assert.False(missingResult.Success);
+        Assert.Contains(missingResult.Diagnostics, diagnostic => diagnostic.Code == "ASSET_UNRESOLVED"
+            && diagnostic.Message.Contains("missing.png", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(fixture.Output1));
+
+        var escaping = AddTextures(fixture.Project, ("Escape", "../escape.png"));
+        var escapeResult = Wow335Exporter.Export(escaping, fixture.ProjectPath, fixture.Output2);
+        Assert.False(escapeResult.Success);
+        Assert.Contains(escapeResult.Diagnostics, diagnostic => diagnostic.Code == "ASSET_ESCAPE");
+        Assert.False(Directory.Exists(fixture.Output2));
+    }
+
+    [Fact]
+    public void ReexportRemovesOnlyPreviouslyManifestedStaleAssets()
+    {
+        using var fixture = ExportFixture.Create();
+        Assert.True(Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1).Success);
+        var userFile = Path.Combine(fixture.Output1, "assets", "user-note.txt");
+        File.WriteAllText(userFile, "keep");
+        var withoutImage = fixture.Project with
+        {
+            Frames = fixture.Project.Frames.Where(frame => frame.Name != "Image").ToArray(),
+            Editor = fixture.Project.Editor with
+            {
+                DesignObjects = fixture.Project.Editor.DesignObjects.Where(item => item.FrameName != "Image").ToArray(),
+                DesignOrder = fixture.Project.Editor.DesignOrder.Where(name => name != "Image").ToArray(),
+            },
+        };
+        Assert.True(Wow335Exporter.Export(withoutImage, fixture.ProjectPath, fixture.Output1).Success);
+        Assert.False(File.Exists(Path.Combine(fixture.Output1, "assets", "panel.png")));
+        Assert.Equal("keep", File.ReadAllText(userFile));
+    }
+
+    [Fact]
+    public void ExportWillNotOverwriteAnUnownedConflictingAsset()
+    {
+        using var fixture = ExportFixture.Create();
+        Directory.CreateDirectory(Path.Combine(fixture.Output1, "assets"));
+        var conflict = Path.Combine(fixture.Output1, "assets", "panel.png");
+        File.WriteAllBytes(conflict, [99]);
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1));
+        Assert.Contains("not owned", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([99], File.ReadAllBytes(conflict));
+        Assert.False(File.Exists(Path.Combine(fixture.Output1, Wow335Exporter.ManifestFileName)));
+    }
+
+    [Fact]
     public void UnsafeProjectsFailBeforeWriting()
     {
         using var fixture = ExportFixture.Create();
@@ -223,11 +341,50 @@ public sealed class Wow335ExportTests
             Assert.True(result.Success, result.Summary);
             Assert.Equal(sourceBefore, File.ReadAllBytes(path));
             Assert.Contains("Round-trip self-check: PASS (49/49 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
+            Assert.Equal(11, result.Model!.Assets.Count);
+            Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());
+            using var assets = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, Wow335Exporter.AssetsFileName)));
+            foreach (var entry in assets.RootElement.GetProperty("assets").EnumerateArray())
+            {
+                var source = entry.GetProperty("source").GetString()!;
+                Assert.StartsWith("assets/", source, StringComparison.Ordinal);
+                Assert.True(File.Exists(Path.Combine(destination, source.Replace('/', Path.DirectorySeparatorChar))));
+            }
+            var relocated = Path.Combine(Path.GetTempPath(), "frameforge-native-hunts-relocated-" + Guid.NewGuid().ToString("N"));
+            Directory.Move(destination, relocated);
+            destination = relocated;
+            foreach (var entry in assets.RootElement.GetProperty("assets").EnumerateArray())
+                Assert.True(File.Exists(Path.Combine(destination, entry.GetProperty("source").GetString()!.Replace('/', Path.DirectorySeparatorChar))));
+            Assert.Empty(Directory.EnumerateFiles(destination, "*.blp", SearchOption.AllDirectories));
         }
         finally
         {
             if (Directory.Exists(destination)) Directory.Delete(destination, true);
         }
+    }
+
+    private static Project AddTextures(Project project, params (string Name, string Asset)[] textures)
+    {
+        return project with
+        {
+            Frames = [.. project.Frames, .. textures.Select(texture => new FrameDef
+            {
+                Name = texture.Name,
+                Kind = FrameKind.TEXTURE,
+                Width = 16,
+                Height = 16,
+            })],
+            Editor = project.Editor with
+            {
+                DesignObjects = [.. project.Editor.DesignObjects, .. textures.Select(texture => new DesignObjectMetadata
+                {
+                    FrameName = texture.Name,
+                    DisplayName = texture.Name,
+                    DesignAsset = texture.Asset,
+                })],
+                DesignOrder = [.. project.Editor.DesignOrder, .. textures.Select(texture => texture.Name)],
+            },
+        };
     }
 
     private static Project ApplyNativeHuntsBindings(Project project)

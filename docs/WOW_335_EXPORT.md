@@ -13,6 +13,7 @@ then written as:
 - `frameforge-manifest.json`: versioned state and runtime-binding contract.
 - `assets-manifest.json`: project artwork conversion/packaging contract.
 - `export-report.txt`: deterministic diagnostics and importer self-check result.
+- `assets/`: deduplicated project-owned source artwork required by the package.
 
 Desktop exposes this through **Export → WoW 3.3.5a Layout…**. The same path is available for
 automation as `FrameForge --export-wow335 <project.fforge.json> <directory>`.
@@ -62,9 +63,17 @@ only as `editorPreviewDefault` in the manifest and is deliberately omitted from 
 initialization, leaving `SetValue` to addon Lua.
 
 Stock textures such as `Interface\TargetingFrame\UI-StatusBar` remain logical client references.
-Project PNGs are not copied into the export. Their manifest entries map the project-relative
-source to a logical `Interface\FrameForge\...` identity and a future `.tga` packaging target.
-Conversion and placement in mod-content-manager/EPF are intentionally deferred.
+Project-owned PNG, TGA, and BLP inputs are copied into the export's `assets/` directory. Each
+manifest entry names that package-relative source, its SHA-256, original project reference(s),
+logical `Interface\FrameForge\...` identity, and downstream packaging target. Identical content
+shares one packaged source file. Same-name files with different content receive deterministic
+hash suffixes instead of overwriting each other. PNG conversion and placement in a client patch
+remain downstream packaging responsibilities.
+
+Re-export replaces the four root contract files and its declared asset files. It removes a stale
+asset only when the previous version-2 FrameForge asset manifest proves ownership of that exact
+path; unrelated files in the selected directory are preserved. A conflicting unowned file blocks
+the export rather than being overwritten.
 
 ## Validation
 
