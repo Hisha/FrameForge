@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
 #Requires -Version 5.1
 param(
+    [string]$Version,
     [switch]$Installer
 )
 $ErrorActionPreference = 'Stop'
@@ -50,10 +51,12 @@ if (-not (Get-Command Compress-Archive -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$Version = & dotnet msbuild $Project -getProperty:Version
-if ($LASTEXITCODE -ne 0 -or -not $Version) {
-    Write-Error 'Failed to read the project version.'
-    exit 1
+if (-not $Version) {
+	$Version = & dotnet msbuild $Project -getProperty:Version
+	if ($LASTEXITCODE -ne 0 -or -not $Version) {
+    	Write-Error 'Failed to read the project version.'
+    	exit 1
+	}
 }
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.-]+)?$') {
     Write-Error "Invalid project version: $Version"

@@ -15,7 +15,7 @@ command -v zip >/dev/null 2>&1 || {
     exit 1
 }
 
-VERSION="$(dotnet msbuild "$PROJECT" -getProperty:Version)"
+VERSION="${FRAMEFORGE_VERSION:-$(dotnet msbuild "$PROJECT" -getProperty:Version)}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.-]+)?$ ]] || { echo "Invalid project version: $VERSION" >&2; exit 1; }
 PACKAGE_DIR="$DIST/FrameForge-$VERSION-$RID"
 ARCHIVE="$DIST/FrameForge-$VERSION-$RID.zip"
