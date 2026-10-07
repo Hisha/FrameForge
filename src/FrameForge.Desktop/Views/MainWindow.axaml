@@ -521,7 +521,15 @@
                                 CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
                             <StackPanel Spacing="5">
                                 <TextBlock Classes="label" Text="NAME" />
-                                <TextBox Text="{Binding DesignNameDraft, Mode=TwoWay}" />
+                                <!-- A locked element is selectable for reference only: no authoring
+                                     fields, no rename, no partial DESIGN object editor. -->
+                                <Border Background="#2A1418" BorderBrush="#B0533F" BorderThickness="1"
+                                        CornerRadius="4" Padding="8,5" IsVisible="{Binding IsSelectionLocked}">
+                                    <TextBlock Classes="value" TextWrapping="Wrap"
+                                               Text="{Binding DesignLockedSummary}" />
+                                </Border>
+                                <TextBox Text="{Binding DesignNameDraft, Mode=TwoWay}"
+                                         IsEnabled="{Binding CanEditSelection}" />
                                 <StackPanel IsVisible="{Binding IsDesignTextSelected}" Spacing="3" Margin="0,5,0,0">
                                     <TextBlock Classes="label" Text="TEXT" />
                                     <TextBox Text="{Binding DesignTextDraft, Mode=OneWay}"
@@ -601,13 +609,17 @@
                                                  KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus" />
                                     </Grid>
                                     <TextBlock Classes="label" Text="BAR TEXTURE" />
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                                         <TextBox Grid.Column="0" Text="{Binding StatusBarTextureDraft, Mode=TwoWay}"
                                                  Tag="statusBarTexture" IsEnabled="{Binding CanEditDesignStatusBar}"
                                                  KeyDown="OnStatusBarFieldKeyDown" LostFocus="OnStatusBarFieldLostFocus"
-                                                 ToolTip.Tip="A WoW texture reference (e.g. Interface\\TargetingFrame\\UI-StatusBar) or a project-owned asset." />
-                                        <Button Grid.Column="1" Content="Browse..." IsEnabled="{Binding CanEditDesignStatusBar}"
-                                                Click="OnBrowseNewStatusBarTextureClick" />
+                                                 ToolTip.Tip="A project-owned asset (e.g. assets\\hunt_bar.png) that is persisted in the project, or a WoW reference (e.g. Interface\\TargetingFrame\\UI-StatusBar) that resolves against your WoW client. Machine paths are never stored." />
+                                        <Button Grid.Column="1" Content="Artwork…" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                Click="OnBrowseNewStatusBarTextureClick"
+                                                ToolTip.Tip="Pick an image from your machine; it is copied into the project so the project stays portable." />
+                                        <Button Grid.Column="2" Content="WoW Client…" IsEnabled="{Binding CanEditDesignStatusBar}"
+                                                Click="OnBrowseWowStatusBarTextureClick"
+                                                ToolTip.Tip="Choose stock WoW Interface art as a logical reference; no machine path is saved." />
                                     </Grid>
                                     <TextBlock Classes="mono" Text="{Binding SelectedStatusBarTexturePhysical}"
                                                TextWrapping="Wrap" />

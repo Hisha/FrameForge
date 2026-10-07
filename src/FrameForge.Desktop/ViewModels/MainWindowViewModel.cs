@@ -229,8 +229,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     private readonly List<string> _selectedNames = [];
 
-    /// <summary>Set while this class writes <see cref="SelectedName"/> itself.</summary>
-    private bool _syncingSelection;
+    /// <summary>
+    /// Depth counter for tree selection re-synchronization. While non-zero, <c>SelectedTreeNode</c>
+    /// writes are this class pushing the authoritative projection into the tree, not the user, so
+    /// callbacks that observe the property must ignore them. Incremented while the tree is rebuilt
+    /// AND while the programmatic selection is published, because rebuilding an
+    /// <c>ObservableCollection</c> makes the TreeView clear its selected item and write the cleared
+    /// value back through the TwoWay binding - honouring that write would collapse the selection
+    /// every time the tree tree is rebuilt or refreshed.
+    /// </summary>
+    private int _selectionSyncDepth;
 
     /// <summary>Whether the last drag moved the whole selection or only one frame.</summary>
     private bool _lastDragMovedSelection;
@@ -389,6 +397,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ? $"Effective values differ under {ActivePreviewOverrides.State.Label}; source data is unchanged."
         : "No design-time override on this element.";
     public bool IsSelectionLocked => Project.Editor.IsLocked(SelectedName);
+
+    /// <summary>Concise locked/reference summary for the DESIGN panel's locked banner.</summary>
+    public string DesignLockedSummary
+    {
+        get
+        {
+            var frame = SelectedFrame;
+            if (frame is null)
+                return "Locked. Selectable for inspection only.";
+            var display = Project.Editor.DisplayNameFor(frame);
+            return IsStockFrameworkSelected
+                ? $"🔒 {display} — locked Blizzard stock / reference element. Selectable for inspection; not editable."
+                : $"🔒 {display} ({SelectedElementKind}) — locked. Selectable for inspection; not editable.";
+        }
+    }
     public bool SelectedElementLocked
     {
         get => Project.Editor.IsLocked(SelectedName);
@@ -535,7 +558,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     partial void OnDesignNameDraftChanged(string value)
     {
-        if (_syncingDesignUi || SelectedFrame is null || string.IsNullOrWhiteSpace(value))
+        if (_syncingDesignUi || SelectedFrame is null || string.IsNullOrWhiteSpace(value) || IsSelectionLocked)
             return;
         var values = Project.Editor.DesignObjects.ToList();
         var index = values.FindIndex(item => item.FrameName == SelectedFrame.Name);
@@ -685,6 +708,89 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         return true;
     }
+
+    public bool SetSelectedStatusBarTextureFromWow(string reference)
+    {
+        if (!IsDesignStatusBarSelected || SelectedName is not { } name || SelectedFrame is not { } frame)
+            return false;
+        if (IsSelectionLocked)
+        {
+            Status = $"{name} is locked. Unlock it before changing its bar texture.";
+            return false;
+        }
+        var normalized = (reference ?? string.Empty).Trim();
+        if (!WoWClientAssetProvider.TryNormalizeInterfacePath(normalized, out _, out var error))
+        {
+            Status = error;
+            return false;
+        }
+        normalized = normalized.Replace('\\', '/');
+        var bar = frame.Visual?.StatusBar ?? new StatusBarVisual();
+        if (ReplaceStatusBar(frame, bar with { BarTexture = normalized }))
+        {
+            ConfigureAssets();
+            Status = $"Set the status bar fill texture to {normalized} (WoW client asset).";
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The logical stock references offered by the WoW Client… picker: the curated built-in list,
+    /// every <c>Interface/...</c> reference this project already uses, and everything queued in the
+    /// extracted WoW cache. All are portable <c>Interface/...</c> paths - never machine paths.
+    /// </summary>
+    public IReadOnlyList<StockTextureEntry> StatusBarStockTextureChoices()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entries = new List<StockTextureEntry>();
+        foreach (var entry in StockTextureCatalog.Curated)
+        {
+            if (seen.Add(entry.InterfacePath))
+                entries.Add(entry);
+        }
+        foreach (var reference in EnumerateAssetReferences())
+        {
+            if (!IsWowClientReference(reference) || !seen.Add(reference))
+                continue;
+            entries.Add(new StockTextureEntry(reference.Replace('\\', '/'), "Used by this project",
+                "A logical reference already used by a frame in this project."));
+        }
+        EnumerateCachedStockTextures(seen, entries);
+        return entries;
+    }
+
+    private void EnumerateCachedStockTextures(HashSet<string> seen, List<StockTextureEntry> entries)
+    {
+        var interfaceRoot = Path.Combine(_wowAssets.CacheRoot, "Interface");
+        if (!Directory.Exists(interfaceRoot))
+            return;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(interfaceRoot, "*", SearchOption.AllDirectories))
+            {
+                var extension = Path.GetExtension(file);
+                if (!extension.Equals(".blp", StringComparison.OrdinalIgnoreCase)
+                    && !extension.Equals(".tga", StringComparison.OrdinalIgnoreCase)
+                    && !extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var logical = Path.GetRelativePath(_wowAssets.CacheRoot, file);
+                if (IsWowClientReference(logical) && seen.Add(logical))
+                {
+                    entries.Add(new StockTextureEntry(logical.Replace('\\', '/'), "Already extracted",
+                        "Extracted from your configured WoW client; resolves immediately."));
+                }
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static bool IsWowClientReference(string reference) =>
+        WoWClientAssetProvider.TryNormalizeInterfacePath(reference, out _, out _);
 
     private bool CommitStatusBarNumber(
         FrameDef frame, StatusBarVisual bar, string label, string draft,
@@ -1311,22 +1417,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Keeps the tree selection in step when the user clicks the tree.</summary>
     /// <remarks>
     /// CommunityToolkit.Mvvm assigns the backing field before invoking this callback, so
-    /// <c>value</c> is always identical to <see cref="SelectedTreeNode"/> already - any
-    /// reference comparison against the current property would be permanently true and the
-    /// callback would never select anything. The only guard that distinguishes a user click
-    /// from a programmatic re-publish is <see cref="_syncingSelection"/>; everything else is
-    /// a genuine click (or a binding write) and must win.
+    /// <c>value</c> is already the new property value when this runs. The authoritative source of
+    /// selection is the view model's own list - <see cref="Select"/> / <see cref="ToggleSelection"/>
+    /// - and the tree is a projection of it. The only writes that should be treated as selection
+    /// requests are real user gestures that arrive while the projection is NOT being rebuilt or
+    /// re-published; every write that arrives while <see cref="_selectionSyncDepth"/> is non-zero is
+    /// generated by the tree reacting to its own <c>ItemsSource</c> changing (for example the
+    /// TreeView clearing the selected row when <see cref="TreeRoots"/> is rebuilt) and would clear
+    /// or move a selection the user did not touch.
     /// </remarks>
     partial void OnSelectedTreeNodeChanged(FrameTreeNode? value)
     {
-        // The tree rebuilds on every refresh and re-publishes its selected item, so a plain
-        // re-assignment of the same node is not a user click and must not collapse a
-        // multi-selection down to one object. Only the re-synchronization flag counts.
-        if (_syncingSelection)
+        if (_selectionSyncDepth > 0)
             return;
 
         Select(value?.Name);
     }
+
+    /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
 
     /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
     partial void OnTreeSearchChanged(string value) => RebuildTree(Project);
@@ -1762,7 +1870,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsDirty = true;
         foreach (var option in WorkspaceOptions) option.Refresh();
         RebuildTree(Project);
-        SelectedTreeNode = FindNode(SelectedName);
+        _selectionSyncDepth++;
+        try
+        {
+            SelectedTreeNode = FindNode(SelectedName);
+        }
+        finally
+        {
+            _selectionSyncDepth--;
+        }
         NotifySelectionInspection();
         Status = workspace == WorkspaceExperience.Design
             ? "DESIGN: concise objects and authoring controls."
@@ -2267,7 +2383,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private IReadOnlyList<string> EffectiveAssetRoots() => [.. AssetRoots, _wowAssets.CacheRoot];
 
     private void ConfigureAssets() => Assets.Configure(_assetSourcePath, EffectiveAssetRoots(), ProjectPath,
-        Project.Editor.DesignObjects.Select(item => item.DesignAsset).OfType<string>());
+        EnumerateDesignReferences());
+
+    private IEnumerable<string> EnumerateDesignReferences()
+    {
+        foreach (var reference in Project.Editor.DesignObjects.Select(item => item.DesignAsset).OfType<string>())
+            yield return reference;
+        foreach (var reference in Project.Frames
+            .Select(frame => frame.Visual?.StatusBar?.BarTexture)
+            .OfType<string>()
+            .Where(reference => !IsWowClientReference(reference)))
+            yield return reference;
+    }
 
     private IReadOnlyList<string> StockAssetReferences() => EnumerateAssetReferences()
         .Where(reference => Assets.Resolve(reference).SourceKind is not (AssetSourceKind.SourceRelative or AssetSourceKind.ProjectRelative))
@@ -2411,10 +2538,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SelectedName = selection;
 
         RefreshPresentation(project);
-        RebuildTree(project);
-        _syncingSelection = true;
-        SelectedTreeNode = FindNode(selection);
-        _syncingSelection = false;
+        _selectionSyncDepth++;
+        try
+        {
+            RebuildTree(project);
+            SelectedTreeNode = FindNode(selection);
+        }
+        finally
+        {
+            _selectionSyncDepth--;
+        }
         Editor.Refresh(project, selection);
         Editor.RefreshResolved(selection is not null && Layout.Frames.TryGetValue(selection, out var selectedLayout)
             ? selectedLayout
@@ -2699,6 +2832,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedGroupMembership));
         OnPropertyChanged(nameof(SelectedPreviewProvenance));
         OnPropertyChanged(nameof(IsSelectionLocked));
+        OnPropertyChanged(nameof(DesignLockedSummary));
         OnPropertyChanged(nameof(SelectedElementLocked));
         OnPropertyChanged(nameof(SelectedGroupLocked));
         OnPropertyChanged(nameof(SelectedStateMembership));
@@ -2753,8 +2887,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// Filtering and searching decide what is DISPLAYED and never what EXISTS: the projection is
     /// discarded and recomputed from the project every time, so a filter cannot delete a widget and
     /// clearing the search box always restores the full hierarchy.
+    /// <para>
+    /// Rebuilding the <c>TreeRoots</c> collection makes the TreeView clear and re-realize rows,
+    /// which writes the cleared selection back through the TwoWay binding. That write is feedback
+    /// from the projection changing and must not touch the model's selection, so the whole rebuild
+    /// is done under <see cref="_selectionSyncDepth"/>.
+    /// </para>
     /// </remarks>
     private void RebuildTree(Project project)
+    {
+        _selectionSyncDepth++;
+        try
+        {
+            RebuildTreeCore(project);
+        }
+        finally
+        {
+            _selectionSyncDepth--;
+        }
+    }
+
+    private void RebuildTreeCore(Project project)
     {
         _treeProjection = TreeProjectionBuilder.Resolve(project, TreeFilter, TreeSearch);
         var visible = _treeProjection.Visible;

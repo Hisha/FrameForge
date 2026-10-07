@@ -195,6 +195,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnBrowseWowStatusBarTextureClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || !vm.IsDesignStatusBarSelected)
+            return;
+        var chooser = new StockTextureChooserWindow(
+            vm.StatusBarStockTextureChoices(),
+            vm.StatusBarTextureDraft,
+            vm.WoWClientStatus,
+            vm.HasWoWClientSelection);
+        await chooser.ShowDialog(this);
+        if (chooser.SelectedInterfacePath is { } reference && vm.SetSelectedStatusBarTextureFromWow(reference))
+            Canvas.InvalidateVisual();
+    }
+
     private void OnCopyTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.CopySelectedTextStyle();
     private void OnPasteTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.PasteSelectedTextStyle();
     private void OnResetTextStyleClick(object? sender, RoutedEventArgs e) => ViewModel?.ResetTextStyleOverrides();

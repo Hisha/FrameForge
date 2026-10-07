@@ -249,13 +249,21 @@ public sealed class VisualContentLayer : ICanvasLayer
     }
 
     /// <summary>
-    /// A StatusBar as its track plus a fill at the fraction its declared default implies.
+    /// A StatusBar as its fill at the fraction its declared default implies.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The fill is the <c>defaultValue</c> the document stated, not the runtime value - which only
     /// Lua knows - and not a made-up midpoint. NativeHunts' bar declares 0 of 0..100, so this draws
     /// it empty, which is what the file actually says. The bar colour is the declared
     /// <c>&lt;BarColor&gt;</c>.
+    /// </para>
+    /// <para>
+    /// A StatusBar has no mandatory background of its own: WoW's is whatever texture the document
+    /// assigns, so the area the fill does not cover stays transparent (here, the canvas behind the
+    /// bar). Painting a synthetic track over the whole bar would pretend the file declared a
+    /// background that it did not.
+    /// </para>
     /// </remarks>
     private static void DrawStatusBar(
         DrawingContext context,
@@ -264,11 +272,8 @@ public sealed class VisualContentLayer : ICanvasLayer
         Rect rect,
         StatusBarVisual? bar)
     {
-        context.FillRectangle(new SolidColorBrush(Color.Parse("#1B242B")), rect);
-        context.DrawRectangle(null, new Pen(new SolidColorBrush(Color.Parse("#54636D")), 1), rect);
-
         // The declared range identifies an empty authored bar as a bar rather than a missing
-        // renderer, so it belongs on the track even when the default fraction is zero.
+        // renderer, so it is surfaced even when the default fraction is zero.
         if (bar?.MinValue is { } min && bar.MaxValue is { } max)
             DrawTag(context, rect, $"{Num(min)}-{Num(max)}", Color.Parse("#8FA6B4"));
 
