@@ -1,21 +1,109 @@
-name: Build Release
-
-permissions:
-  contents: write
+name: Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - 'v*'
 
-jobs:
-  build-windows:
-    runs-on: windows-latest
+permissions:
+  contents: read
 
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout repository
+      - name: Validate release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "ERROR: release tag must match vMAJOR.MINOR.PATCH; received: $tag" >&2
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+  build-and-test:
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore FrameForge.slnx
+
+      - name: Build
+        run: dotnet build FrameForge.slnx -c Release --no-restore -p:Version=${{ needs.validate-tag.outputs.version }}
+
+      - name: Test
+        run: dotnet test FrameForge.slnx -c Release --no-build -p:Version=${{ needs.validate-tag.outputs.version }}
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Source smoke test
+        run: xvfb-run -a dotnet run --project src/FrameForge.Desktop/FrameForge.Desktop.csproj -c Release --no-build -p:Version=${{ needs.validate-tag.outputs.version }} -- --smoke
+
+  build-linux:
+    needs:
+      - validate-tag
+      - build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install packaging dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Build Linux release package
+        env:
+          FRAMEFORGE_VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: bash ./scripts/publish-linux.sh
+
+      - name: Verify Linux artifact
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: test -f "dist/FrameForge-${VERSION}-linux-x64.zip"
+
+      - name: Upload Linux release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameForge-Linux-${{ needs.validate-tag.outputs.version }}
+          path: dist/FrameForge-${{ needs.validate-tag.outputs.version }}-linux-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    needs:
+      - validate-tag
+      - build-and-test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -24,98 +112,97 @@ jobs:
 
       - name: Install Inno Setup
         shell: powershell
-        run: choco install innosetup -y
-
-      - name: Build and test
-        shell: pwsh
-        run: |
-          dotnet restore FrameForge.slnx
-          dotnet build FrameForge.slnx -c Release --no-restore
-          dotnet test FrameForge.slnx -c Release --no-build
+        run: choco install innosetup -y --no-progress
 
       - name: Build Windows release packages
         shell: pwsh
-        run: ./scripts/publish-win.ps1 -Installer
+        run: ./scripts/publish-win.ps1 -Version '${{ needs.validate-tag.outputs.version }}' -Installer
+
+      - name: Verify Windows artifacts
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          $Expected = @(
+            "dist/FrameForge-$env:VERSION-win-x64.zip",
+            "dist/FrameForge-Setup-$env:VERSION.exe"
+          )
+          foreach ($Path in $Expected) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+              throw "Missing expected release artifact: $Path"
+            }
+          }
 
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FrameForge-Windows
+          name: FrameForge-Windows-${{ needs.validate-tag.outputs.version }}
           path: |
-            dist/FrameForge-*-win-x64.zip
-            dist/FrameForge-Setup-*.exe
+            dist/FrameForge-${{ needs.validate-tag.outputs.version }}-win-x64.zip
+            dist/FrameForge-Setup-${{ needs.validate-tag.outputs.version }}.exe
           if-no-files-found: error
-
-  build-linux:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zip
-
-      - name: Build and test
-        run: |
-          dotnet restore FrameForge.slnx
-          dotnet build FrameForge.slnx -c Release --no-restore
-          dotnet test FrameForge.slnx -c Release --no-build
-
-      - name: Build Linux release package
-        run: bash ./scripts/publish-linux.sh
-
-      - name: Upload Linux release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FrameForge-Linux
-          path: dist/FrameForge-*-linux-x64.zip
-          if-no-files-found: error
+          retention-days: 7
 
   create-release:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs:
-      - build-windows
+      - validate-tag
       - build-linux
+      - build-windows
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FrameForge-Linux-${{ needs.validate-tag.outputs.version }}
+          path: release-assets
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: FrameForge-Windows
+          name: FrameForge-Windows-${{ needs.validate-tag.outputs.version }}
           path: release-assets
 
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: FrameForge-Linux
-          path: release-assets
-
-      - name: Show release files
-        run: ls -lh release-assets
+      - name: Verify exact release asset set
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "FrameForge-${VERSION}-linux-x64.zip"
+            "FrameForge-${VERSION}-win-x64.zip"
+            "FrameForge-Setup-${VERSION}.exe"
+          )
+          mapfile -t actual < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
+          if [[ "${actual[*]}" != "${wanted[*]}" ]]; then
+            echo 'ERROR: release assets do not exactly match the expected set.' >&2
+            printf 'Expected:\n  %s\n' "${wanted[@]}" >&2
+            printf 'Actual:\n  %s\n' "${actual[@]}" >&2
+            exit 1
+          fi
+          ls -lh release-assets
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           gh release create "$TAG" \
-            release-assets/FrameForge-*-win-x64.zip \
-            release-assets/FrameForge-Setup-*.exe \
-            release-assets/FrameForge-*-linux-x64.zip \
+            "release-assets/FrameForge-${VERSION}-linux-x64.zip" \
+            "release-assets/FrameForge-${VERSION}-win-x64.zip" \
+            "release-assets/FrameForge-Setup-${VERSION}.exe" \
             --title "FrameForge $TAG" \
             --generate-notes \
             --verify-tag
+            
+            
+            
