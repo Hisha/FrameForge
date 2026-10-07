@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
@@ -51,7 +52,12 @@ public sealed record CanvasSelectionEventArgs(string? FrameName, bool Additive);
 /// </remarks>
 public class LayoutCanvas : Control
 {
-    private static readonly IBrush CanvasFill = new SolidColorBrush(Color.Parse("#0C1116"));
+    // A LayoutCanvas is exercised by multiple independent headless dispatchers in one test
+    // process. Shared AvaloniaObject resources such as SolidColorBrush acquire dispatcher
+    // ownership when composed, so a later session cannot reuse them. This fill is constant and
+    // intentionally shared; keep it dispatcher-neutral by using Avalonia's immutable brush.
+    private static readonly IImmutableBrush CanvasFill =
+        new ImmutableSolidColorBrush(Color.Parse("#0C1116"));
 
     private LayoutResult? _layout;
     private Project? _project;
