@@ -82,7 +82,9 @@ public sealed record Project
                    && pair.First.DisplayName == pair.Second.DisplayName
                    && pair.First.DesignAsset == pair.Second.DesignAsset
                    && pair.First.TextOverride == pair.Second.TextOverride
-                    && pair.First.TextStyle == pair.Second.TextStyle
+                   && pair.First.TextStyle == pair.Second.TextStyle
+                   && pair.First.RuntimeValueRequired == pair.Second.RuntimeValueRequired
+                   && pair.First.RuntimeBinding == pair.Second.RuntimeBinding
                    && pair.First.StateIds.SequenceEqual(pair.Second.StateIds))
                && Editor.Groups.Count == other.Editor.Groups.Count
                && Editor.Groups.Zip(other.Editor.Groups).All(pair =>
@@ -127,6 +129,8 @@ public sealed record Project
             hash.Add(item.DesignAsset);
             hash.Add(item.TextOverride);
             hash.Add(item.TextStyle);
+            hash.Add(item.RuntimeValueRequired);
+            hash.Add(item.RuntimeBinding);
             foreach (var stateId in item.StateIds)
                 hash.Add(stateId);
         }

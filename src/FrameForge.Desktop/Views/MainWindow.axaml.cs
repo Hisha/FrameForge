@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using FrameForge.Core.Geometry;
+using FrameForge.Core.Export;
 using FrameForge.Core.Serialization;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.ViewModels;
@@ -181,6 +182,33 @@ public partial class MainWindow : Window
     {
         if (ViewModel is not { } vm || sender is not TextBox { Tag: string field }) return;
         vm.CommitStatusBarField(field);
+    }
+
+    private void OnRuntimeValueRequiredClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is CheckBox checkBox)
+            vm.SetRuntimeValueRequired(checkBox.IsChecked == true);
+    }
+
+    private void OnRuntimeBindingKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm) return;
+        if (e.Key == Key.Enter)
+        {
+            vm.CommitRuntimeBinding();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            vm.CancelRuntimeBinding();
+            e.Handled = true;
+        }
+    }
+
+    private void OnRuntimeBindingLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { RuntimeValueRequiredDraft: true } vm)
+            vm.CommitRuntimeBinding();
     }
 
     private async void OnBrowseNewStatusBarTextureClick(object? sender, RoutedEventArgs e)
@@ -593,6 +621,40 @@ public partial class MainWindow : Window
 
         if (file?.Path.LocalPath is { Length: > 0 } path)
             vm.SaveToFile(path);
+    }
+
+    private async void OnExportWow335Click(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+            return;
+
+        var validation = Wow335ExportBuilder.Build(vm.Project,
+            string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath);
+        var errors = validation.Diagnostics.Where(d => d.Severity == ExportSeverity.Error).ToArray();
+        if (errors.Length > 0)
+        {
+            vm.Status = $"Export blocked: {string.Join(" ", errors.Take(3).Select(d => $"{d.Code}: {d.Message}"))}";
+            return;
+        }
+
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose an empty or existing WoW 3.3.5a export directory",
+            AllowMultiple = false,
+        });
+        if (folders.Count == 0 || folders[0].Path.LocalPath is not { Length: > 0 } destination)
+            return;
+
+        try
+        {
+            var result = Wow335Exporter.Export(vm.Project,
+                string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath, destination);
+            vm.Status = result.Summary + $" Output: {destination}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            vm.Status = $"Export failed safely: {ex.Message}";
+        }
     }
 
     private void OnCanvasSelectionRequested(object? sender, CanvasSelectionEventArgs e)

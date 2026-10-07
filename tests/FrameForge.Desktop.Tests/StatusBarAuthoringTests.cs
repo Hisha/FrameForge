@@ -141,6 +141,62 @@ public sealed class StatusBarAuthoringTests
         Assert.Equal(0.7, restored.DefaultFraction!.Value, 9);
     }
 
+    [Fact]
+    public void Runtime_binding_is_explicit_persistent_and_marks_the_project_dirty()
+    {
+        var vm = NewViewModel();
+        vm.AddDesignStatusBar();
+        var name = vm.SelectedName!;
+        var project = vm.Project;
+        vm.Load(project, null, "Reopened.");
+        vm.Select(name);
+        Assert.False(vm.IsDirty);
+        Assert.True(vm.IsRuntimeBindingEligible);
+
+        vm.SetRuntimeValueRequired(true);
+        vm.RuntimeBindingDraft = "hunt.progress";
+        Assert.True(vm.CommitRuntimeBinding());
+
+        Assert.True(vm.IsDirty);
+        var metadata = vm.Project.Editor.DesignObjectFor(name)!;
+        Assert.True(metadata.RuntimeValueRequired);
+        Assert.Equal("hunt.progress", metadata.RuntimeBinding);
+        var reopened = ProjectCodec.Parse(ProjectCodec.Serialize(vm.Project));
+        Assert.True(reopened.Ok, reopened.ErrorText);
+        Assert.Equal("hunt.progress", reopened.Project!.Editor.DesignObjectFor(name)!.RuntimeBinding);
+    }
+
+    [Fact]
+    public void Runtime_binding_rejects_editor_ids_and_respects_object_locking()
+    {
+        var vm = NewViewModel();
+        vm.AddDesignStatusBar();
+        vm.SetRuntimeValueRequired(true);
+        vm.RuntimeBindingDraft = "DesignObject17";
+        Assert.False(vm.CommitRuntimeBinding());
+        Assert.Contains("semantic", vm.RuntimeBindingValidation, StringComparison.OrdinalIgnoreCase);
+
+        var name = vm.SelectedName!;
+        vm.SetElementLocked(name, true);
+        Assert.False(vm.CanEditRuntimeBinding);
+        vm.RuntimeBindingDraft = "hunt.progress";
+        Assert.False(vm.CommitRuntimeBinding());
+        Assert.Null(vm.Project.Editor.DesignObjectFor(name)!.RuntimeBinding);
+    }
+
+    [Fact]
+    public void FontString_exposes_the_same_string_binding_contract()
+    {
+        var vm = NewViewModel();
+        vm.AddDesignText();
+        Assert.True(vm.IsRuntimeBindingEligible);
+        Assert.Contains("SetText", vm.RuntimeBindingOperationSummary, StringComparison.Ordinal);
+        vm.SetRuntimeValueRequired(true);
+        vm.RuntimeBindingDraft = "hunt.targetName";
+        Assert.True(vm.CommitRuntimeBinding());
+        Assert.Equal("hunt.targetName", vm.Project.Editor.DesignObjectFor(vm.SelectedName!)!.RuntimeBinding);
+    }
+
     /// <summary>
     /// The focused render assertion: the fill rectangle the canvas paints - through the shared
     /// <see cref="StatusBarRendering"/> helper - stretches with the authored Preview value, drawn

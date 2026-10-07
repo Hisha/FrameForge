@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace FrameForge.Core.Models;
 
 /// <summary>A logical editor-only group. It never changes the FrameXML parent hierarchy.</summary>
@@ -32,8 +34,33 @@ public sealed record DesignObjectMetadata
     public string? TextOverride { get; init; }
     /// <summary>Optional DESIGN-only overrides layered over an authentic client stock style.</summary>
     public DesignTextStyleMetadata? TextStyle { get; init; }
+    /// <summary>True when the exported object expects its displayed value from the runtime adapter.</summary>
+    public bool RuntimeValueRequired { get; init; }
+    /// <summary>
+    /// Stable semantic key consumed by a runtime adapter. This is deliberately independent of
+    /// editor/source identities and only applies to FontString and StatusBar DESIGN objects.
+    /// </summary>
+    public string? RuntimeBinding { get; init; }
     /// <summary>Empty means All States. Otherwise these are authored state IDs.</summary>
     public IReadOnlyList<string> StateIds { get; init; } = [];
+}
+
+/// <summary>The portable grammar for semantic runtime binding keys.</summary>
+public static class RuntimeBindingKeys
+{
+    public const string GrammarDescription = "dot-separated lowerCamel identifiers (for example hunt.targetName)";
+
+    private static readonly Regex ValidPattern = new(
+        "^[a-z][A-Za-z0-9]*(?:\\.[a-z][A-Za-z0-9]*)+$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex EditorIdentityPattern = new(
+        "(?:^|\\.)DesignObject[0-9]*(?:$|\\.)",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static bool IsValid(string? value) => value is not null && ValidPattern.IsMatch(value);
+
+    public static bool LooksLikeEditorIdentity(string? value) =>
+        value is not null && EditorIdentityPattern.IsMatch(value);
 }
 
 /// <summary>Portable text-authoring metadata. Null properties inherit from <see cref="BaseStyle"/>.</summary>

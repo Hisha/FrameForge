@@ -68,6 +68,14 @@
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
                 <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
 
+                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuItem Header="WoW 3.3.5a Layout…" Click="OnExportWow335Click" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
                 <Button Content="Add Frame" Click="OnAddFrameClick" />
@@ -600,7 +608,7 @@
                                     <TextBlock Classes="mono" Text="{Binding SelectedStatusBarTexturePhysical}"
                                                TextWrapping="Wrap" />
                                     <TextBlock Classes="label" Text="BAR COLOR" />
-                                    <Grid ColumnDefinitions="72,*" ColumnSpacing="6">
+                                    <Grid ColumnDefinitions="72,*" ColumnSpacing="6" IsEnabled="{Binding CanEditRuntimeBinding}">
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <Border Width="20" Height="14" BorderBrush="#8FA6B4" BorderThickness="1"
                                                     Background="{Binding SelectedStatusBarColorSwatch}" />
@@ -612,6 +620,23 @@
                                                  PlaceholderText="#RRGGBB or #AARRGGBB" />
                                     </Grid>
                                     <TextBlock Classes="validation" Text="{Binding StatusBarValidation}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel IsVisible="{Binding IsRuntimeBindingEligible}" Spacing="3" Margin="0,7,0,0">
+                                    <TextBlock Classes="label" Text="RUNTIME BINDING" />
+                                    <CheckBox Content="Runtime value"
+                                              IsChecked="{Binding RuntimeValueRequiredDraft, Mode=OneWay}"
+                                              IsEnabled="{Binding CanEditRuntimeBinding}"
+                                              Click="OnRuntimeValueRequiredClick" />
+                                    <Grid ColumnDefinitions="72,*" ColumnSpacing="6">
+                                        <TextBlock Classes="label" Text="Binding Key" />
+                                        <TextBox Grid.Column="1" Text="{Binding RuntimeBindingDraft, Mode=TwoWay}"
+                                                 IsEnabled="{Binding RuntimeValueRequiredDraft}"
+                                                 KeyDown="OnRuntimeBindingKeyDown"
+                                                 LostFocus="OnRuntimeBindingLostFocus"
+                                                 PlaceholderText="hunt.targetName" />
+                                    </Grid>
+                                    <TextBlock Classes="label" Text="{Binding RuntimeBindingOperationSummary}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="validation" Text="{Binding RuntimeBindingValidation}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
                                 <StackPanel Spacing="3" Margin="0,5,0,0" IsVisible="{Binding CanChangeDesignOrder}">

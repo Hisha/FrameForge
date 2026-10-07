@@ -72,6 +72,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private string _statusBarTextureDraft = string.Empty;
     [ObservableProperty] private string _statusBarColorDraft = string.Empty;
     [ObservableProperty] private string _statusBarValidation = string.Empty;
+    [ObservableProperty] private bool _runtimeValueRequiredDraft;
+    [ObservableProperty] private string _runtimeBindingDraft = string.Empty;
+    [ObservableProperty] private string _runtimeBindingValidation = string.Empty;
     [ObservableProperty] private string _newObjectName = string.Empty;
     [ObservableProperty] private string _newImageAsset = string.Empty;
     [ObservableProperty] private string _stateNameDraft = string.Empty;
@@ -112,6 +115,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool IsDesignTextSelected => SelectedFrame?.Kind == FrameKind.FONTSTRING;
     public bool IsDesignStatusBarSelected => SelectedFrame?.Kind == FrameKind.STATUSBAR;
     public bool CanEditDesignStatusBar => IsDesignStatusBarSelected && !IsSelectionLocked;
+    public bool IsRuntimeBindingEligible => IsDesignWorkspace
+        && SelectedFrame?.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR
+        && Project.Editor.DesignObjectFor(SelectedName) is not null;
+    public bool CanEditRuntimeBinding => IsRuntimeBindingEligible && !IsSelectionLocked;
+    public string RuntimeBindingOperationSummary => SelectedFrame?.Kind == FrameKind.STATUSBAR
+        ? "Adapter contract: number → SetValue"
+        : "Adapter contract: string → SetText";
     private StatusBarVisual? SelectedStatusBar => SelectedFrame is { Kind: FrameKind.STATUSBAR } frame
         ? frame.Visual?.StatusBar
         : null;
@@ -689,6 +699,65 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshStatusBarUi(Project, SelectedName);
         StatusBarValidation = string.Empty;
     }
+
+    public void SetRuntimeValueRequired(bool enabled)
+    {
+        if (!CanEditRuntimeBinding || SelectedName is not { } name)
+            return;
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == name);
+        if (index < 0)
+            return;
+        var current = values[index];
+        if (current.RuntimeValueRequired == enabled && (enabled || current.RuntimeBinding is null))
+            return;
+        values[index] = current with
+        {
+            RuntimeValueRequired = enabled,
+            RuntimeBinding = enabled ? current.RuntimeBinding : null,
+        };
+        UpdateEditor(Project.Editor with { DesignObjects = values },
+            enabled ? $"Enabled runtime value binding for {Project.Editor.DisplayNameFor(SelectedFrame!)}."
+                : $"Removed runtime value binding from {Project.Editor.DisplayNameFor(SelectedFrame!)}.");
+    }
+
+    public bool CommitRuntimeBinding()
+    {
+        if (!CanEditRuntimeBinding || SelectedName is not { } name)
+            return false;
+        if (!RuntimeValueRequiredDraft)
+        {
+            RuntimeBindingValidation = "Enable Runtime value before setting a binding key.";
+            return false;
+        }
+        var key = RuntimeBindingDraft.Trim();
+        if (RuntimeBindingKeys.LooksLikeEditorIdentity(key)
+            || string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+        {
+            RuntimeBindingValidation = "Use an application-semantic key, not an editor/source object ID.";
+            return false;
+        }
+        if (!RuntimeBindingKeys.IsValid(key))
+        {
+            RuntimeBindingValidation = $"Use {RuntimeBindingKeys.GrammarDescription}.";
+            return false;
+        }
+        var values = Project.Editor.DesignObjects.ToList();
+        var index = values.FindIndex(item => item.FrameName == name);
+        if (index < 0)
+            return false;
+        if (values[index].RuntimeBinding == key)
+        {
+            RuntimeBindingValidation = string.Empty;
+            return true;
+        }
+        values[index] = values[index] with { RuntimeBinding = key };
+        RuntimeBindingValidation = string.Empty;
+        UpdateEditor(Project.Editor with { DesignObjects = values }, $"Bound {Project.Editor.DisplayNameFor(SelectedFrame!)} to {key}.");
+        return true;
+    }
+
+    public void CancelRuntimeBinding() => RefreshRuntimeBindingUi(Project, SelectedName);
 
     public bool SetSelectedStatusBarTextureFromFile(string path, bool importExternal = false)
     {
@@ -2584,6 +2653,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
               ?? string.Empty;
         RefreshTextStyleUi(project, selection);
         RefreshStatusBarUi(project, selection);
+        RefreshRuntimeBindingUi(project, selection);
         _syncingDesignUi = false;
         CanvasSelectionNames.Clear();
         foreach (var name in Layout.PaintOrder)
@@ -2748,6 +2818,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedStatusBarTexturePhysical));
     }
 
+    private void RefreshRuntimeBindingUi(Project project, string? selection)
+    {
+        var metadata = project.Editor.DesignObjectFor(selection);
+        RuntimeValueRequiredDraft = metadata?.RuntimeValueRequired == true;
+        RuntimeBindingDraft = metadata?.RuntimeBinding ?? string.Empty;
+        RuntimeBindingValidation = string.Empty;
+        OnPropertyChanged(nameof(RuntimeBindingOperationSummary));
+    }
+
     private static string ColorHex(ColorRgba color) => $"#{Channel(color.A):X2}{Channel(color.R):X2}{Channel(color.G):X2}{Channel(color.B):X2}";
     private static byte Channel(double value) => (byte)Math.Round(Math.Clamp(value, 0, 1) * 255);
 
@@ -2866,6 +2945,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsDesignTextSelected));
         OnPropertyChanged(nameof(IsDesignStatusBarSelected));
         OnPropertyChanged(nameof(CanEditDesignStatusBar));
+        OnPropertyChanged(nameof(IsRuntimeBindingEligible));
+        OnPropertyChanged(nameof(CanEditRuntimeBinding));
+        OnPropertyChanged(nameof(RuntimeBindingOperationSummary));
         OnPropertyChanged(nameof(SelectedStatusBarFractionText));
         OnPropertyChanged(nameof(SelectedStatusBarColorSwatch));
         OnPropertyChanged(nameof(SelectedStatusBarTexturePhysical));

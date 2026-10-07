@@ -330,6 +330,10 @@ public static class ProjectCodec
                             writer.WriteString("designAsset", designAsset);
                         if (item.TextOverride is not null)
                             writer.WriteString("textOverride", item.TextOverride);
+                        if (item.RuntimeValueRequired)
+                            writer.WriteBoolean("runtimeValueRequired", true);
+                        if (item.RuntimeBinding is not null)
+                            writer.WriteString("runtimeBinding", item.RuntimeBinding);
                         if (item.TextStyle is { } textStyle)
                         {
                             writer.WriteStartObject("textStyle");
@@ -731,6 +735,9 @@ public static class ProjectCodec
                         DesignAsset = ReadOptionalString(entry, "designAsset"),
                         TextOverride = ReadOptionalString(entry, "textOverride"),
                         TextStyle = ReadDesignTextStyle(entry, objectPath, errors),
+                        RuntimeValueRequired = entry.TryGetProperty("runtimeValueRequired", out var runtimeValue)
+                            && runtimeValue.ValueKind == JsonValueKind.True,
+                        RuntimeBinding = ReadOptionalString(entry, "runtimeBinding"),
                         StateIds = ReadStringArray(entry, "states", objectPath, validStateIds, errors),
                     });
                 }
