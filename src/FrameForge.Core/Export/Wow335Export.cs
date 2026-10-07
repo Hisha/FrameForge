@@ -379,10 +379,11 @@ public static class Wow335Exporter
         var model = Wow335ExportBuilder.Build(project, projectFilePath);
         if (model.Diagnostics.Any(d => d.Severity == ExportSeverity.Error))
             return new(false, model, model.Diagnostics, []);
-        var destinationRoot = Path.GetFullPath(destination);
+        // Folder pickers may preserve a trailing separator. Keep one canonical root
+        // for both staging and final-package containment checks.
+        var destinationRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
         Directory.CreateDirectory(destinationRoot);
         var staging = Path.Combine(destinationRoot, $".frameforge-staging-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(staging);
         var finalFiles = new[]
         {
             Path.Combine(destinationRoot, XmlFileName), Path.Combine(destinationRoot, ManifestFileName),
@@ -390,6 +391,7 @@ public static class Wow335Exporter
         };
         try
         {
+            Directory.CreateDirectory(staging);
             var stagedFiles = new[]
             {
                 Path.Combine(staging, XmlFileName), Path.Combine(staging, ManifestFileName),
@@ -433,8 +435,9 @@ public static class Wow335Exporter
         }
         finally
         {
-            if (Directory.Exists(staging)
-                && staging.StartsWith(destinationRoot + Path.DirectorySeparatorChar + ".frameforge-staging-", StringComparison.OrdinalIgnoreCase))
+            // This is the exact unique directory created above; never broaden cleanup
+            // to the selected directory or to a wildcard match.
+            if (Directory.Exists(staging))
                 Directory.Delete(staging, true);
         }
     }
@@ -510,13 +513,27 @@ public static class Wow335Exporter
         return result;
     }
 
-    private static string ResolvePackagePath(string root, string relative)
+    internal static string ResolvePackagePath(string root, string relative)
     {
-        if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative))
+        if (string.IsNullOrWhiteSpace(relative))
             throw new InvalidDataException($"Export package path '{relative}' is not portable.");
-        var rootPath = Path.GetFullPath(root);
-        var path = Path.GetFullPath(Path.Combine(rootPath, relative.Replace('/', Path.DirectorySeparatorChar)));
-        if (!path.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+
+        // Treat both separator spellings as package separators on every host so a
+        // path unsafe on Windows cannot become a harmless-looking filename on Unix.
+        var portableRelative = relative
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+        if (Path.IsPathRooted(relative) || Path.IsPathRooted(portableRelative)
+            || Regex.IsMatch(relative, @"^[A-Za-z]:[\\/]"))
+            throw new InvalidDataException($"Export package path '{relative}' is not portable.");
+
+        var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var path = Path.GetFullPath(Path.Combine(rootPath, portableRelative));
+        var fromRoot = Path.GetRelativePath(rootPath, path);
+        if (Path.IsPathRooted(fromRoot)
+            || string.Equals(fromRoot, "..", StringComparison.Ordinal)
+            || fromRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || fromRoot.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
             throw new InvalidDataException($"Export package path '{relative}' escapes the selected directory.");
         return path;
     }

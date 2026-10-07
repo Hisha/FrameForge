@@ -179,6 +179,35 @@ public sealed class Wow335ExportTests
     }
 
     [Fact]
+    public void TrailingSeparatorExportRootAcceptsAssetsInFinalAndStagingRoots()
+    {
+        using var fixture = ExportFixture.Create();
+        var destinationFromFolderPicker = fixture.Output1 + Path.DirectorySeparatorChar;
+
+        var finalAsset = Wow335Exporter.ResolvePackagePath(destinationFromFolderPicker, "assets/hunt_circle_icon.png");
+        var staging = Path.Combine(destinationFromFolderPicker, ".frameforge-staging-test");
+        var stagedAsset = Wow335Exporter.ResolvePackagePath(staging, "assets/hunt_circle_icon.png");
+
+        Assert.Equal(Path.Combine(fixture.Output1, "assets", "hunt_circle_icon.png"), finalAsset);
+        Assert.Equal(Path.Combine(staging, "assets", "hunt_circle_icon.png"), stagedAsset);
+        var result = Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, destinationFromFolderPicker);
+        Assert.True(result.Success, result.Summary);
+        Assert.True(File.Exists(Path.Combine(fixture.Output1, "assets", "panel.png")));
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Output1, ".frameforge-staging-*"));
+    }
+
+    [Theory]
+    [InlineData("../hunt_circle_icon.png")]
+    [InlineData("assets/../../hunt_circle_icon.png")]
+    [InlineData("..\\hunt_circle_icon.png")]
+    [InlineData("C:\\outside\\hunt_circle_icon.png")]
+    public void PackagePathContainmentRejectsTraversalAndRootedPaths(string relative)
+    {
+        using var fixture = ExportFixture.Create();
+        Assert.Throws<InvalidDataException>(() => Wow335Exporter.ResolvePackagePath(fixture.Output1, relative));
+    }
+
+    [Fact]
     public void DuplicateReferencesDeduplicateAndDifferentContentFilenameCollisionsAreStable()
     {
         using var fixture = ExportFixture.Create();
@@ -267,10 +296,11 @@ public sealed class Wow335ExportTests
         var conflict = Path.Combine(fixture.Output1, "assets", "panel.png");
         File.WriteAllBytes(conflict, [99]);
         var exception = Assert.Throws<InvalidDataException>(() =>
-            Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1));
+            Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1 + Path.DirectorySeparatorChar));
         Assert.Contains("not owned", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal([99], File.ReadAllBytes(conflict));
         Assert.False(File.Exists(Path.Combine(fixture.Output1, Wow335Exporter.ManifestFileName)));
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Output1, ".frameforge-staging-*"));
     }
 
     [Fact]
@@ -355,7 +385,8 @@ public sealed class Wow335ExportTests
             destination = relocated;
             foreach (var entry in assets.RootElement.GetProperty("assets").EnumerateArray())
                 Assert.True(File.Exists(Path.Combine(destination, entry.GetProperty("source").GetString()!.Replace('/', Path.DirectorySeparatorChar))));
-            Assert.Empty(Directory.EnumerateFiles(destination, "*.blp", SearchOption.AllDirectories));
+            foreach (var forbiddenPattern in new[] { "*.blp", "*.mpq", "*.tga", "*.ttf", "*.otf" })
+                Assert.Empty(Directory.EnumerateFiles(destination, forbiddenPattern, SearchOption.AllDirectories));
         }
         finally
         {
