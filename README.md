@@ -173,7 +173,23 @@ Returns `0` on SMOKE_PASS. Writes two screenshots: one for the built-in example,
 bash scripts/publish-linux.sh
 ```
 
-Produces `dist/FrameForge-0.1.0-linux-x64.zip` (self-contained, no .NET runtime required).
+Produces `dist/FrameForge-<version>-linux-x64.zip` (self-contained, no .NET runtime required).
+After extracting the ZIP, run `./FrameForge` directly or install it for the current user:
+
+```bash
+bash install.sh
+```
+
+The installer requires no sudo. It copies the complete application to
+`$XDG_DATA_HOME/FrameForge-app` (normally `~/.local/share/FrameForge-app`) and writes
+`frameforge.desktop` under `$XDG_DATA_HOME/applications`. Running a newer package's installer
+again replaces only the marked application directory and refreshes the launcher. FrameForge
+settings, its machine-local WoW asset cache, and user projects remain outside that directory and
+are not removed.
+
+To uninstall the application files, remove `FrameForge-app` and
+`applications/frameforge.desktop` from the XDG data directory. This intentionally leaves settings,
+caches, extracted assets, and projects intact.
 
 ## Self-Contained Publish (Windows x64)
 
