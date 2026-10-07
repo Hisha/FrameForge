@@ -51,6 +51,9 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
     private string? _projectRoot;
     private string[] _assetRoots = [];
     private HashSet<string> _designReferences = new(StringComparer.Ordinal);
+    private IWoWClientAssetProvider? _stockProvider;
+    private WowClientValidation _stockClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
+        "No WoW client is configured.");
 
     public int DecodeCount { get; private set; }
     public int CacheHitCount { get; private set; }
@@ -111,6 +114,21 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
         CacheHitCount = 0;
     }
 
+    /// <summary>
+    /// Declares the authoritative machine-local stock source for logical WoW references: the
+    /// configured WoW client and its managed cache. Resolution of <c>Interface/...</c> and
+    /// <c>Fonts/...</c> references consults the cache first and, on a miss, materializes the
+    /// reference through the configured client before falling back to legacy sources.
+    /// </summary>
+    public void ConfigureWowAssetSource(IWoWClientAssetProvider provider, WowClientValidation validation)
+    {
+        if (ReferenceEquals(_stockProvider, provider) && _stockClient == validation)
+            return;
+        _stockProvider = provider;
+        _stockClient = validation;
+        Refresh();
+    }
+
     private ResolvedTextureAsset ResolveUncached(string reference)
     {
         var portableReference = reference.Trim().Replace('\\', '/');
@@ -120,12 +138,61 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
         if (!TryNormalize(reference, out var segments, out var invalidReason))
             return Failure(reference, AssetResolutionStatus.InvalidPath, invalidReason!);
 
-        var sources = new List<(string Root, AssetSourceKind Kind)>();
-        if (FindContentRoot(_sourcePath) is { } sourceRoot)
-            sources.Add((sourceRoot, AssetSourceKind.SourceRelative));
-        sources.AddRange(_assetRoots.Select(root => (root, AssetSourceKind.ConfiguredRoot)));
-
+        var stockRoot = _stockProvider is null ? null : NormalizePhysicalPath(_stockProvider.CacheRoot);
         var invalidRoots = new List<string>();
+
+        // Priority 1: the managed stock cache, which mirrors the authoritative configured client.
+        if (stockRoot is not null)
+        {
+            var cached = ResolveFromSources(reference, segments,
+                [(stockRoot, AssetSourceKind.ConfiguredRoot)], invalidRoots);
+            if (cached is not null)
+                return cached;
+        }
+
+        // Priority 2: the configured WoW client. A normal rendering request for a valid logical
+        // asset populates the cache through the existing safe extractor, once; later resolves hit
+        // the cache instead of re-reading the MPQs.
+        string? clientDiagnostic = null;
+        if (stockRoot is not null && _stockClient.IsValid && IsStockWoWReference(segments))
+        {
+            var materialized = MaterializeFromClient(reference);
+            if (materialized is not null)
+            {
+                clientDiagnostic = materialized.Message;
+                if (materialized.Success)
+                {
+                    var extracted = ResolveFromSources(reference, segments,
+                        [(stockRoot, AssetSourceKind.ConfiguredRoot)], invalidRoots);
+                    if (extracted is not null)
+                        return extracted;
+                }
+            }
+        }
+
+        // Priority 3: the source-relative content hierarchy (an imported layout extracted from an
+        // Interface tree) and legacy manual asset roots. These are advanced, diagnostic, and
+        // back-compat sources; they can never shadow project-owned artwork, which resolves above.
+        var legacy = new List<(string Root, AssetSourceKind Kind)>();
+        if (FindContentRoot(_sourcePath) is { } sourceRoot)
+            legacy.Add((sourceRoot, AssetSourceKind.SourceRelative));
+        legacy.AddRange(_assetRoots.Select(root => (root, AssetSourceKind.ConfiguredRoot)));
+        if (legacy.Count > 0)
+        {
+            var fallback = ResolveFromSources(reference, segments, legacy, invalidRoots);
+            if (fallback is not null)
+                return fallback;
+        }
+
+        var suffix = invalidRoots.Count == 0 ? string.Empty
+            : $" Invalid or missing roots: {string.Join(", ", invalidRoots)}.";
+        return Failure(reference, AssetResolutionStatus.Missing,
+            $"{UnresolvedStockDiagnostic(reference, clientDiagnostic)}{suffix}");
+    }
+
+    private ResolvedTextureAsset? ResolveFromSources(string reference, string[] segments,
+        IReadOnlyList<(string Root, AssetSourceKind Kind)> sources, List<string> invalidRoots)
+    {
         foreach (var source in sources)
         {
             if (!Directory.Exists(source.Root))
@@ -152,11 +219,40 @@ public sealed class TextureAssetResolver : ITextureAssetResolver, IDisposable
                 continue;
             return Decode(reference, located.Path, source.Kind, source.Root);
         }
-
-        var suffix = invalidRoots.Count == 0 ? string.Empty : $" Invalid or missing roots: {string.Join(", ", invalidRoots)}.";
-        return Failure(reference, AssetResolutionStatus.Missing,
-            $"No matching asset was found in the source hierarchy or configured roots.{suffix}");
+        return null;
     }
+
+    private AssetMaterializationResult? MaterializeFromClient(string reference)
+    {
+        try
+        {
+            return _stockProvider!.Materialize(reference, _stockClient);
+        }
+        catch (Exception ex)
+        {
+            return new AssetMaterializationResult(false, reference, null, null, false,
+                $"Could not read the WoW client archives: {ex.Message}");
+        }
+    }
+
+    private string UnresolvedStockDiagnostic(string reference, string? materializedMessage)
+    {
+        if (_stockProvider is null)
+            return $"No matching asset was found for \"{reference}\".";
+        if (!_stockClient.IsValid)
+        {
+            return _stockClient.Status == WowClientValidationStatus.NotConfigured
+                ? $"\"{reference}\" is not in the managed stock cache and no WoW client is configured. Configure a WoW 3.3.5a build-12340 client (or place the file in {_stockProvider.CacheRoot})."
+                : $"\"{reference}\" is not in the managed stock cache and the configured WoW client is {_stockClient.Status}: {_stockClient.Message}";
+        }
+        return $"\"{reference}\" is not cached and the configured WoW client does not provide it. {(materializedMessage is { Length: > 0 } ? materializedMessage : string.Empty)}"
+            .TrimEnd();
+    }
+
+    private static bool IsStockWoWReference(string[] segments) =>
+        segments.Length > 0
+        && (segments[0].Equals("Interface", StringComparison.OrdinalIgnoreCase)
+            || segments[0].Equals("Fonts", StringComparison.OrdinalIgnoreCase));
 
     public static bool TryNormalize(string reference, out string[] segments, out string? reason)
     {

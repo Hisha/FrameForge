@@ -180,6 +180,82 @@ public sealed class StatusBarPixelRenderingTests
         AssertAllInBarAreBackground(render, "0% fill must leave the bar entirely unpainted by the fill");
     }
 
+    [Fact]
+    public void Resolver_with_configured_client_and_zero_roots_materializes_and_paints_the_stock_bar_blp()
+    {
+        // A normal render request resolves a stock logical reference through a configured client
+        // with NO manual asset root: the resolver auto-populates the managed cache, then the
+        // render pipeline paints the decoded texture. This is the flagship "authoritative client"
+        // proof at the pixel level.
+        var clientId = Guid.NewGuid().ToString("N");
+        var clientRoot = Path.Combine(Path.GetTempPath(), $"frameforge-client-{clientId}");
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"frameforge-cache-{clientId}");
+        try
+        {
+            MakeClient(clientRoot);
+            var archive = Path.Combine(clientRoot, "Data", "enUS", "locale-enUS.MPQ");
+            var reader = new FakeArchiveReader();
+            reader.Add(archive, @"Interface\TargetingFrame\UI-StatusBar.blp", DecoratedBlp());
+            var provider = new WoWClientAssetProvider(cacheRoot, reader, new FakeBuildReader());
+            var validation = provider.ValidateClient(clientRoot);
+            Assert.True(validation.IsValid, validation.Message);
+
+            using var session = NewSession();
+            using var resolver = new TextureAssetResolver();
+            resolver.ConfigureWowAssetSource(provider, validation);
+
+            var textured = RenderStatusBar(
+                new StatusBarVisual(0, 100, 50, "Interface/TargetingFrame/UI-StatusBar"), resolver, session);
+
+            // The materialized texture painted the fill: red top half, blue bottom half, nothing
+            // beyond the 50% fraction - identical to the known machine-root geometry.
+            AssertRed(textured, x: 68, y: 158, "stock BLP fill's top half");
+            AssertBlue(textured, x: 68, y: 228, "stock BLP fill's bottom half");
+            AssertIsBackground(textured, x: 340, y: 158, "unfilled right half stays empty");
+            Assert.True(File.Exists(Path.Combine(cacheRoot, "Interface", "TargetingFrame", "UI-StatusBar.blp")),
+                "the first render auto-populated the managed cache");
+        }
+        finally
+        {
+            TryDeleteDirectory(cacheRoot);
+            TryDeleteDirectory(clientRoot);
+        }
+    }
+
+    [Fact]
+    public void A_stock_tga_bar_texture_auto_materializes_and_paints_through_the_configured_client()
+    {
+        var clientId = Guid.NewGuid().ToString("N");
+        var clientRoot = Path.Combine(Path.GetTempPath(), $"frameforge-client-{clientId}");
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"frameforge-cache-{clientId}");
+        try
+        {
+            MakeClient(clientRoot);
+            var archive = Path.Combine(clientRoot, "Data", "enUS", "locale-enUS.MPQ");
+            var reader = new FakeArchiveReader();
+            reader.Add(archive, @"Interface\PixelBar\SplitFill.tga", Tga(200, 40, 40));
+            var provider = new WoWClientAssetProvider(cacheRoot, reader, new FakeBuildReader());
+
+            using var session = NewSession();
+            using var resolver = new TextureAssetResolver();
+            resolver.ConfigureWowAssetSource(provider, provider.ValidateClient(clientRoot));
+
+            var textured = RenderStatusBar(
+                new StatusBarVisual(0, 100, 50, "Interface/PixelBar/SplitFill"), resolver, session);
+            var fallback = RenderStatusBar(new StatusBarVisual(0, 100, 50, null), null, session);
+
+            AssertRed(textured, x: 68, y: 158, "stock TGA fill");
+            AssertIsBackground(textured, x: 340, y: 158, "TGA fill respects the fraction edge");
+            var changed = CountPixelsWhere(textured, fallback, (a, b) => !Close(a, b));
+            Assert.True(changed > 20_000, $"stock TGA did not repaint the fill from the fallback; changed={changed}");
+        }
+        finally
+        {
+            TryDeleteDirectory(cacheRoot);
+            TryDeleteDirectory(clientRoot);
+        }
+    }
+
     private static HeadlessUnitTestSession NewSession() => HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
 
     private static T OnUi<T>(HeadlessUnitTestSession session, Func<T> action) =>
@@ -303,6 +379,40 @@ public sealed class StatusBarPixelRenderingTests
         BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(2, 2), color1);
         block[4] = block[5] = block[6] = block[7] = indices;
         return block;
+    }
+
+    private static void MakeClient(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, "Data"));
+        File.WriteAllBytes(Path.Combine(root, "Wow.exe"), [0]);
+        File.WriteAllBytes(Path.Combine(root, "Data", "common.MPQ"), [0]);
+        Directory.CreateDirectory(Path.Combine(root, "Data", "enUS"));
+        File.WriteAllBytes(Path.Combine(root, "Data", "enUS", "locale-enUS.MPQ"), [0]);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try { Directory.Delete(path, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>A 2x2 uncompressed 32-bit TGA with a consistent fill color.</summary>
+    private static byte[] Tga(int red = 200, int green = 40, int blue = 40)
+    {
+        var bytes = new byte[18 + 2 * 2 * 4];
+        bytes[2] = 2;
+        bytes[12] = 2; // width = 2
+        bytes[14] = 2; // height = 2
+        bytes[16] = 32;
+        bytes[17] = 0x08 | 0x20;
+        for (var i = 0; i < 4; i++)
+        {
+            bytes[18 + i * 4] = (byte)blue;
+            bytes[19 + i * 4] = (byte)green;
+            bytes[20 + i * 4] = (byte)red;
+            bytes[21 + i * 4] = 255;
+        }
+        return bytes;
     }
 
     private sealed class AssetRoot : IDisposable
@@ -439,5 +549,33 @@ public sealed class StatusBarPixelRenderingTests
     private sealed record StatusBarBitmap(SKBitmap Pixels, IntBox Bar)
     {
         public SKColor Pixel(int x, int y) => Pixels.GetPixel(x, y);
+    }
+
+    private sealed class FakeBuildReader : IWoWClientBuildReader
+    {
+        public bool TryRead(string executablePath, out WowClientBuild? result, out string diagnostic)
+        {
+            result = new WowClientBuild(3, 3, 5, 12340);
+            diagnostic = "Detected 3.3.5a / 12340.";
+            return true;
+        }
+    }
+
+    private sealed class FakeArchiveReader : IWoWArchiveReader
+    {
+        private readonly Dictionary<string, byte[]> _files = new(StringComparer.OrdinalIgnoreCase);
+        public int ReadCount { get; private set; }
+        public void Add(string archive, string entry, byte[] bytes) => _files[$"{archive}|{entry}"] = bytes;
+        public bool TryRead(string archivePath, string entryPath, out byte[]? bytes)
+        {
+            ReadCount++;
+            if (_files.TryGetValue($"{archivePath}|{entryPath}", out var found))
+            {
+                bytes = [.. found];
+                return true;
+            }
+            bytes = null;
+            return false;
+        }
     }
 }

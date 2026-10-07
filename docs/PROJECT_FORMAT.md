@@ -121,6 +121,22 @@ and uses texture fallbacks when it has been moved or deleted. When the project f
 absolute source reference is made relative to the project, falling back to just the file name, so no
 developer-machine absolute path is serialized and a project/XML pair can be copied together.
 
+Artwork resolution rules:
+
+- **Project-owned artwork** (`designAsset`, or a status bar `BarTexture` whose path is not a
+  `Interface`/`Fonts` reference) is always resolved relative to the directory containing the
+  project file. When a project already lives inside a directory named `assets`, importing new
+  artwork leaves it beside the project (never `assets/assets/...`); otherwise imports go under
+  `<project>/assets/`. These references are committed with the project and survive relocation.
+- **Logical stock references** (`Interface/...`, `Fonts/...`) are resolved from the managed cache,
+  then automatically from the configured WoW 3.3.5a build-12340 client on a cache miss, then from
+  legacy manual roots as an advanced fallback. They are never rewritten and never resolve through
+  a project-relative path.
+- **Nothing machine-local is serialized.** Asset roots, the WoW client path, and the managed cache
+  root live only in the machine settings file; opening the same project on another machine resolves
+  the same asset with that machine's configured client. Older projects that happen to carry a
+  top-level `assetRoots` node are loaded (the unknown node is ignored) and never re-export it.
+
 ## `editor`
 
 ```json

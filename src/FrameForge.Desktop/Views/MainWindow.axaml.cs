@@ -497,25 +497,6 @@ public partial class MainWindow : Window
         vm.ResetViewToModeDefaults();
     }
 
-    private async void OnAddAssetRootClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not { } vm)
-            return;
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Add a WoW Interface asset root",
-            AllowMultiple = false,
-        });
-        if (folders.Count > 0 && folders[0].Path.LocalPath is { Length: > 0 } path)
-            vm.AddAssetRoot(path);
-    }
-
-    private void OnRemoveAssetRootClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is { } vm && sender is Button { Tag: string path })
-            vm.RemoveAssetRoot(path);
-    }
-
     private void OnRefreshAssetsClick(object? sender, RoutedEventArgs e)
     {
         ViewModel?.RefreshAssets();

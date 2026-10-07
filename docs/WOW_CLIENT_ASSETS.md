@@ -10,10 +10,13 @@ releases.
 1. Expand **WoW Client**, choose **Browse**, and select the directory containing `Wow.exe` and
    `Data`.
 2. FrameForge validates exactly WoW 3.3.5a build 12340 and detects one locale.
-3. Open FrameXML. Source-relative and manually configured assets resolve as usual.
-4. FrameForge reports unresolved stock references. Choose **Resolve Missing Assets** to copy only
-   those unique files plus the focused definition/font dependency set into the managed cache,
-   rebuild the in-memory definition index, and repaint Preview.
+3. Open FrameXML. Project-owned artwork resolves relative to the project file, and logical
+   `Interface/...` references resolve from the managed cache.
+4. Unresolved stock references are now resolved automatically: a normal Preview/DESIGN render of a
+   logical reference on a cache miss materializes just that file plus the focused definition/font
+   dependency set through the configured client and repaints. **Resolve Missing Assets** remains as
+   a manual batch/extraction-and-reindex command (and reports provenance), but is not required for
+   everyday rendering.
 5. Use **Revalidate**, **Clear**, or **Clear Stock Cache** to refresh the client state, forget the
    selection, or remove only FrameForge-owned cached stock files.
 
@@ -85,14 +88,22 @@ The managed cache uses the platform local-application-data directory:
   `~/.local/share/FrameForge/assets/wow-3.3.5a-12340`;
 - Windows: `%LOCALAPPDATA%\FrameForge\assets\wow-3.3.5a-12340`.
 
-These are local state, not portable project data. Texture resolution remains:
+These are local state, not portable project data. Resolution order:
 
-1. source-relative project/content hierarchy;
-2. explicit manual asset roots, in visible configured order;
-3. FrameForge-managed stock cache.
+1. project-owned artwork (`designAsset` / BarTexture with a project-relative path),
+   resolved relative to the directory containing the `.fforge.json`, never shadowed;
+2. logical WoW references (`Interface/...`, `Fonts/...`) resolved from the
+   FrameForge-managed stock cache;
+3. on a managed-cache miss, normal rendering automatically materializes the reference
+   through the configured build-12340 client (the same safe extractor as **Resolve
+   Missing Assets**, invoked without a button press);
+4. legacy manual asset roots as an advanced/diagnostic fallback.
 
-Manual roots therefore remain useful for development, overrides, alternate extracted trees, and
-troubleshooting without letting the managed cache shadow project-owned art.
+The configured WoW client is therefore authoritative for Blizzard stock art. A project no
+longer needs an asset root to render `Interface/...` references: select the client once and a
+normal resolve takes care of the cache. Manual roots remain supported only as a troubleshooting
+and override escape hatch for unusual installations; `Add Asset Root` is no longer part of the
+normal DESIGN toolbar (the ViewModel keeps the underlying APIs for advanced/back-compat use).
 
 ## Materialization, provenance, and safety
 

@@ -344,7 +344,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private WowClientValidation _wowClient = new(WowClientValidationStatus.NotConfigured, null, null, null, [],
         "No WoW client is configured.");
 
-    /// <summary>Application-local roots searched after source-relative content.</summary>
+    /// <summary>
+    /// Legacy machine-local roots retained for advanced/diagnostic use and back-compat. These are
+    /// NOT a normal DESIGN prerequisite: project-owned artwork resolves beside the project file
+    /// and logical WoW references resolve through the configured client and its managed cache.
+    /// </summary>
     public ObservableCollection<string> AssetRoots { get; } = [];
 
     /// <summary>The reusable resolver shared by the inspector and canvas.</summary>
@@ -1732,15 +1736,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(ProjectPath))!;
-            var assetsDirectory = Path.Combine(projectDirectory, "assets");
-            Directory.CreateDirectory(assetsDirectory);
+            // When the project itself already lives inside the intended artwork directory (a
+            // project directory named "assets"), importing beside the project is the clean
+            // portable result: avoiding assets/assets/foo.png. Otherwise the established
+            // <project>/assets/ import folder applies.
+            var artworkDirectory = Path.GetFileName(projectDirectory).Equals("assets", StringComparison.OrdinalIgnoreCase)
+                ? projectDirectory
+                : Path.Combine(projectDirectory, "assets");
+            Directory.CreateDirectory(artworkDirectory);
             var source = Path.GetFullPath(sourcePath);
             var stem = Path.GetFileNameWithoutExtension(source);
             var extension = Path.GetExtension(source).ToLowerInvariant();
-            var destination = Path.Combine(assetsDirectory, $"{stem}{extension}");
+            var destination = Path.Combine(artworkDirectory, $"{stem}{extension}");
             var suffix = 2;
             while (File.Exists(destination) && !FilesAreIdentical(source, destination))
-                destination = Path.Combine(assetsDirectory, $"{stem}-{suffix++}{extension}");
+                destination = Path.Combine(artworkDirectory, $"{stem}-{suffix++}{extension}");
             if (!File.Exists(destination))
                 File.Copy(source, destination, overwrite: false);
             reference = Path.GetRelativePath(projectDirectory, destination).Replace('\\', '/');
@@ -2285,6 +2295,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void SetWoWClientPath(string path)
     {
         _wowClient = _wowAssets.ValidateClient(path);
+        ConfigureAssets();
         SaveLocalSettings();
         RefreshAssetPresentation(_wowClient.Message);
         NotifyWoWClientState();
@@ -2293,6 +2304,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void ClearWoWClientPath()
     {
         _wowClient = _wowAssets.ValidateClient(null);
+        ConfigureAssets();
         SaveLocalSettings();
         RefreshAssetPresentation("WoW client selection cleared; existing managed cache remains available.");
         NotifyWoWClientState();
@@ -2301,6 +2313,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void RevalidateWoWClient()
     {
         _wowClient = _wowAssets.ValidateClient(_wowClient.ClientPath);
+        ConfigureAssets();
         RefreshAssetPresentation(_wowClient.Message);
         NotifyWoWClientState();
     }
@@ -2380,10 +2393,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Status = status;
     }
 
-    private IReadOnlyList<string> EffectiveAssetRoots() => [.. AssetRoots, _wowAssets.CacheRoot];
+    /// <summary>Legacy advanced manual roots; the managed stock cache is no longer a "root" here.</summary>
+    private IReadOnlyList<string> LegacyAssetRoots() => [.. AssetRoots];
 
-    private void ConfigureAssets() => Assets.Configure(_assetSourcePath, EffectiveAssetRoots(), ProjectPath,
-        EnumerateDesignReferences());
+    /// <summary>
+    /// Configures resolution order: project-owned artwork beside the project file, logical WoW
+    /// references through the configured client and its managed cache, then any legacy roots.
+    /// </summary>
+    private void ConfigureAssets()
+    {
+        Assets.Configure(_assetSourcePath, LegacyAssetRoots(), ProjectPath,
+            EnumerateDesignReferences());
+        Assets.ConfigureWowAssetSource(_wowAssets, _wowClient);
+    }
 
     private IEnumerable<string> EnumerateDesignReferences()
     {
