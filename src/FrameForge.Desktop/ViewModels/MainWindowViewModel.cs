@@ -124,7 +124,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool HasFunctionalExport => Project.FunctionalExport is not null;
     public bool CanExportFunctionalDesign => Project.FunctionalExport is not null;
     public string FunctionalExportSummary => Project.FunctionalExport is { } profile
-        ? $"Associated with {profile.Source.DisplayName} · host {profile.HostFrameName} · {profile.States.Count} state probes · {profile.Values.Count} value sources"
+        ? $"Associated with {profile.Source.DisplayName} · host {profile.HostFrameName} · {profile.States.Count} optional state probes · {profile.Values.Count} optional value mirrors"
         : "No functional FrameXML associated.";
     public ObservableCollection<string> FunctionalValueSourceOptions { get; } = [];
     public bool CanMapFunctionalValue => HasFunctionalExport && RuntimeValueRequiredDraft && IsRuntimeBindingEligible;
@@ -800,7 +800,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsDirty = true;
         Status = normalized is null
             ? $"Removed the functional value source for {Project.Editor.DisplayNameFor(SelectedFrame!)}."
-            : $"{Project.Editor.DisplayNameFor(SelectedFrame!)} will mirror {normalized} in functional export.";
+            : $"{Project.Editor.DisplayNameFor(SelectedFrame!)} will optionally mirror {normalized} in functional export.";
         NotifyFunctionalExportState();
     }
 

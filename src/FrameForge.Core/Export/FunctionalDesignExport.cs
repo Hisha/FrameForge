@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
+using System.Globalization;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
@@ -46,49 +47,36 @@ public static class FunctionalDesignExporter
 
         var model = Wow335ExportBuilder.Build(design, projectPath);
         diagnostics.AddRange(model.Diagnostics);
-        var undeclaredRuntimeCandidates = model.Objects.Where(item =>
-                (item.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR)
-                && !item.Metadata.RuntimeValueRequired
-                && (string.IsNullOrWhiteSpace(item.Text)
-                    || item.Text is "0" or "Text"))
-            .Select(item => item.Metadata.DisplayName ?? item.SourceName).ToArray();
-        if (undeclaredRuntimeCandidates.Length > 0)
-            diagnostics.Add(new(ExportSeverity.Warning, "FUNCTIONAL_VALUES_UNDECLARED",
-                $"{undeclaredRuntimeCandidates.Length} value-like DESIGN object(s) are still static. Enable Runtime value and choose an XML source for each value that must follow addon data: {string.Join(", ", undeclaredRuntimeCandidates.Take(8))}{(undeclaredRuntimeCandidates.Length > 8 ? ", …" : string.Empty)}."));
         var authoredNames = model.Objects.Select(item => item.SourceName).ToHashSet(StringComparer.Ordinal);
 
-        foreach (var duplicate in model.Objects.Select(item => item.RuntimeName)
-                     .Where(sourceNames.Contains).Distinct(StringComparer.Ordinal))
+        var generatedIdentities = model.Objects.SelectMany(item =>
+                item.Kind is FrameKind.TEXTURE or FrameKind.FONTSTRING
+                    ? new[] { item.RuntimeName, item.WrapperName }
+                    : new[] { item.RuntimeName })
+            .Prepend(model.RootRuntimeName).ToArray();
+        foreach (var duplicate in generatedIdentities.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_GENERATED_IDENTITY_COLLISION",
+                $"Generated FrameXML identity '{duplicate.Key}' would be declared more than once."));
+        foreach (var collision in generatedIdentities.Where(sourceNames.Contains).Distinct(StringComparer.Ordinal))
             diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_IDENTITY_COLLISION",
-                $"Generated runtime identity '{duplicate}' already exists in the functional source."));
+                $"Generated FrameXML identity '{collision}' already exists in the functional source."));
 
-        var usedStates = model.Objects.SelectMany(item => item.StateIds).Distinct(StringComparer.Ordinal).ToArray();
         var stateMap = profile.States.ToDictionary(item => item.StateId, StringComparer.Ordinal);
-        foreach (var stateId in usedStates)
+        foreach (var binding in stateMap.Values)
         {
-            if (!stateMap.TryGetValue(stateId, out var binding))
-            {
-                diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_STATE_UNMAPPED",
-                    $"Design state '{stateId}' is used by exported objects but has no functional source probe."));
-                continue;
-            }
             if (!sourceNames.Contains(binding.SourceFrameName))
                 diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_STATE_SOURCE_MISSING",
-                    $"State '{stateId}' refers to missing source frame '{binding.SourceFrameName}'."));
+                    $"State '{binding.StateId}' refers to missing source frame '{binding.SourceFrameName}'."));
             if (binding.TextEquals is null && binding.Visible is null)
                 diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_STATE_PROBE_EMPTY",
-                    $"State '{stateId}' needs a text or visibility condition."));
+                    $"State '{binding.StateId}' needs a text or visibility condition."));
         }
 
         var valueMap = profile.Values.ToDictionary(item => item.DesignFrameName, StringComparer.Ordinal);
         foreach (var item in model.Objects.Where(item => item.Metadata.RuntimeValueRequired))
         {
             if (!valueMap.TryGetValue(item.SourceName, out var binding))
-            {
-                diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_VALUE_UNMAPPED",
-                    $"Runtime DESIGN object '{item.SourceName}' has no functional value source.", item.SourceName));
                 continue;
-            }
             var sourceFrame = source.Find(binding.SourceFrameName);
             if (sourceFrame is null)
                 diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_VALUE_SOURCE_MISSING",
@@ -112,7 +100,9 @@ public static class FunctionalDesignExporter
         var generatedRoot = ExtractGeneratedRoot(Wow335Exporter.WriteXml(rebased));
         generatedRoot.SetAttributeValue("parent", profile.HostFrameName);
         generatedRoot.SetAttributeValue("setAllPoints", "true");
-        AddRuntimeBridge(generatedRoot, rebased, profile);
+        PreserveUnmappedDefaults(generatedRoot, rebased, profile);
+        if (HasRuntimeBridge(rebased, profile))
+            AddRuntimeBridge(generatedRoot, rebased, profile);
 
         var insertion = "\n\t" + generatedRoot.ToString(SaveOptions.DisableFormatting).Replace("\n", "\n\t") + "\n";
         var close = sourceXml.LastIndexOf("</Ui>", StringComparison.Ordinal);
@@ -179,6 +169,30 @@ public static class FunctionalDesignExporter
     {
         var document = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         return new XElement(document.Root!.Elements().Single());
+    }
+
+    private static bool HasRuntimeBridge(WowExportModel model, FunctionalExportProfile profile)
+    {
+        if (profile.States.Count > 0)
+            return true;
+        var mapped = profile.Values.Select(item => item.DesignFrameName).ToHashSet(StringComparer.Ordinal);
+        return model.Objects.Any(item => item.Metadata.RuntimeValueRequired && mapped.Contains(item.SourceName));
+    }
+
+    private static void PreserveUnmappedDefaults(XElement root, WowExportModel model, FunctionalExportProfile profile)
+    {
+        var configured = profile.Values.Select(item => item.DesignFrameName).ToHashSet(StringComparer.Ordinal);
+        var mapped = model.Objects.Where(item => item.Metadata.RuntimeValueRequired && configured.Contains(item.SourceName))
+            .Select(item => item.SourceName).ToHashSet(StringComparer.Ordinal);
+        foreach (var item in model.Objects.Where(item => item.Kind == FrameKind.STATUSBAR
+                     && !mapped.Contains(item.SourceName)
+                     && item.Frame.Visual?.StatusBar?.DefaultValue is not null))
+        {
+            var element = root.DescendantsAndSelf()
+                .Single(node => string.Equals((string?)node.Attribute("name"), item.RuntimeName, StringComparison.Ordinal));
+            element.SetAttributeValue("defaultValue",
+                item.Frame.Visual!.StatusBar!.DefaultValue!.Value.ToString("0.################", CultureInfo.InvariantCulture));
+        }
     }
 
     private static void AddRuntimeBridge(XElement root, WowExportModel model, FunctionalExportProfile profile)
@@ -282,7 +296,7 @@ public static class FunctionalDesignPackageExporter
             var stagedAssets = Path.Combine(staging, Wow335Exporter.AssetsFileName);
             var stagedReport = Path.Combine(staging, Wow335Exporter.ReportFileName);
             File.WriteAllText(stagedXml, prepared.Xml, new UTF8Encoding(false));
-            File.WriteAllText(stagedManifest, FunctionalManifest(model, sourceName, project.FunctionalExport), new UTF8Encoding(false));
+            File.WriteAllText(stagedManifest, FunctionalManifest(model, sourceName, project.FunctionalExport, prepared.Xml), new UTF8Encoding(false));
             File.WriteAllText(stagedAssets, Wow335Exporter.WriteAssets(model), new UTF8Encoding(false));
             File.WriteAllText(stagedReport, FunctionalReport(model, sourceName, prepared.DesignObjectCount), new UTF8Encoding(false));
 
@@ -334,7 +348,7 @@ public static class FunctionalDesignPackageExporter
                 $"Functional export requires an empty directory and found '{Path.GetFileName(existing[0])}'.");
     }
 
-    private static string FunctionalManifest(WowExportModel model, string sourceName, FunctionalExportProfile profile)
+    private static string FunctionalManifest(WowExportModel model, string sourceName, FunctionalExportProfile profile, string exportedXml)
     {
         var root = JsonNode.Parse(Wow335Exporter.WriteManifest(model))!.AsObject();
         root["layout"] = sourceName;
@@ -344,12 +358,40 @@ public static class FunctionalDesignPackageExporter
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         root["stateProbes"] = JsonSerializer.SerializeToNode(profile.States, options);
         root["valueSources"] = JsonSerializer.SerializeToNode(profile.Values, options);
+        root["controlInventory"] = BuildControlInventory(model, exportedXml);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static JsonArray BuildControlInventory(WowExportModel model, string exportedXml)
+    {
+        var document = XDocument.Parse(exportedXml, LoadOptions.PreserveWhitespace);
+        var inventory = new JsonArray();
+        foreach (var item in model.Objects.OrderBy(item => item.DrawOrder).ThenBy(item => item.RuntimeName, StringComparer.Ordinal))
+        {
+            // Authoritative XML commonly repeats parent-relative source names such as
+            // "$parentBackground". Search only for already collision-checked generated names.
+            var element = document.Descendants().Single(node =>
+                string.Equals((string?)node.Attribute("name"), item.RuntimeName, StringComparison.Ordinal));
+            var parentPath = string.Join("/", element.Ancestors().Reverse()
+                .Select(ancestor => (string?)ancestor.Attribute("name"))
+                .Where(name => !string.IsNullOrWhiteSpace(name)));
+            inventory.Add(new JsonObject
+            {
+                ["authoredName"] = item.Metadata.DisplayName ?? item.SourceName,
+                ["sourceObject"] = item.SourceName,
+                ["exportedName"] = (string)element.Attribute("name")!,
+                ["type"] = element.Name.LocalName,
+                ["parentPath"] = parentPath,
+                ["luaAccess"] = $"_G[{JsonSerializer.Serialize(item.RuntimeName)}]",
+            });
+        }
+        return inventory;
     }
 
     private static string FunctionalReport(WowExportModel model, string sourceName, int objectCount) =>
         Wow335Exporter.WriteReport(model)
         + $"\nExport mode: functional source composition\nAuthoritative FrameXML: {sourceName}\n"
         + $"Composed design objects: {objectCount}\nSource scripts, templates, hierarchy, and identities: preserved\n"
-        + "Packaging note: keep the addon's existing Lua files and TOC/XML load-order entries; FrameForge does not copy or generate Lua.\n";
+        + "Control inventory: frameforge-manifest.json > controlInventory\n"
+        + "Packaging note: keep the addon's existing Lua files and TOC/XML load-order entries; FrameForge does not copy or generate application Lua.\n";
 }

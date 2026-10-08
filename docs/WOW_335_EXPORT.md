@@ -24,22 +24,25 @@ automation as `FrameForge --export-wow335 <project.fforge.json> <directory>`.
 ## Functional source composition
 
 Use **Export → Associate Functional FrameXML…** once on an existing DESIGN project. FrameForge
-stores the source's portable relative path, SHA-256, selected host frame, state probes, and value
-sources in the project; it does not import a second visual design or discard the current one. The
-association is rejected when no unambiguous concrete `setAllPoints` host exists or state probes
-cannot be inferred safely.
+stores the source's portable relative path, SHA-256, and selected host frame in the project; it does
+not import a second visual design or discard the current one. The association is rejected when no
+unambiguous concrete `setAllPoints` host exists. It does not infer module-specific state or value
+behavior.
 
-For a runtime FontString or StatusBar, enable **Runtime value**, keep its semantic binding key, and
-choose the corresponding existing XML control in **XML source**. Functional export is blocked if
-any required value lacks a source, has the wrong widget type, or refers to a missing control. It is
-also blocked if the source hash changed, a generated identity collides with an existing one, state
-coverage is incomplete, or the design cannot be rebased against its stock-framework foundation.
+The normal workflow requires no runtime-value mappings: name the authored FontString, StatusBar,
+Texture, or Frame and let module Lua populate it using the control inventory. Unmapped FontStrings
+retain their authored text and unmapped StatusBars retain their authored default value. Existing
+projects may keep an explicit **Optional mirror**; a present mirror is type checked and must refer
+to an existing source control. Functional export is blocked if the source hash changed, a generated
+identity collides with an existing name, an explicitly configured probe or mirror is invalid, or the
+design cannot be rebased against its stock-framework foundation.
 
 The output keeps the associated XML file name and inserts one generated design child under the
 selected functional host. Root-level DESIGN geometry is rebased from the saved stock foundation,
 so an existing screen-space design is not emitted as an unrelated `UIParent` layout. A small inline
-bridge mirrors explicitly mapped values and applies authored state visibility from the saved state
-probes. The original source bytes before the final `</Ui>` remain unchanged. The package also
+bridge is emitted only when an existing project explicitly retains value mirrors or state probes.
+With no optional mappings FrameForge generates no scripts. The original source bytes before the
+final `</Ui>` remain unchanged. The package also
 contains the normal manifests, report, and project-owned artwork. Keep the addon's existing Lua
 files and TOC/XML load-order entries: they remain authoritative and are neither copied nor replaced.
 
@@ -50,7 +53,11 @@ or an unrelated addon package.
 
 The DESIGN display name is the preferred runtime identity. Invalid identifier characters are
 replaced with underscores, leading digits are protected, and collisions receive stable numeric
-suffixes in authored order. The manifest records the internal-to-runtime mapping and object type.
+suffixes in authored order. Existing valid names are preserved. Every emitted name (including
+region wrappers and the generated root) is checked against the authoritative XML and against other
+generated names. The `controlInventory` in `frameforge-manifest.json` is derived from the completed
+XML and records authored name, exported name, actual element type, named parent path, and Lua lookup.
+See [MODULE_INTEGRATION.md](MODULE_INTEGRATION.md) for the complete generic Lua integration contract.
 
 An empty state membership means `allStates: true`. Each authored state has explicit `show` and
 `hide` arrays, so later addon code can implement `ApplyState(name)` without FrameForge knowing

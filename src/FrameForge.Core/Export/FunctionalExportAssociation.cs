@@ -29,16 +29,14 @@ public static class FunctionalExportAssociator
                     ? "No concrete setAllPoints Frame was found to host the design."
                     : $"More than one possible functional host was found ({string.Join(", ", hosts.Select(item => item.Name))}).");
 
-        var stateBindings = SuggestStates(design, functional, diagnostics);
-        var valueCandidates = design.Editor.DesignObjects
-            .Where(item => !item.RuntimeValueRequired && design.Find(item.FrameName) is { } frame
-                && (frame.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR)
-                && (string.IsNullOrWhiteSpace(item.TextOverride ?? frame.Visual?.Text?.Text)
-                    || (item.TextOverride ?? frame.Visual?.Text?.Text) is "0" or "Text"))
-            .Select(item => item.DisplayName ?? item.FrameName).ToArray();
-        if (valueCandidates.Length > 0)
-            diagnostics.Add(new(ExportSeverity.Warning, "FUNCTIONAL_VALUES_UNDECLARED",
-                $"{valueCandidates.Length} value-like DESIGN object(s) still need explicit Runtime value and XML source mappings: {string.Join(", ", valueCandidates.Take(8))}{(valueCandidates.Length > 8 ? ", …" : string.Empty)}."));
+        // Association establishes only the generic composition boundary. Runtime values and
+        // state changes belong to the consuming module, which can address exported controls by
+        // the identities in the manifest. Older projects may retain explicit probes/mirrors, but
+        // FrameForge must not infer application behavior while associating a new source.
+        IReadOnlyList<FunctionalStateBinding> stateBindings = [];
+        if (design.Editor.DesignStates.Count > 0)
+            diagnostics.Add(new(ExportSeverity.Warning, "FUNCTIONAL_STATES_MODULE_MANAGED",
+                $"{design.Editor.DesignStates.Count} design state(s) will be exported without inferred source probes. The consuming module owns runtime visibility."));
         var reference = Path.GetFileName(sourcePath);
         if (!string.IsNullOrWhiteSpace(projectPath))
             reference = Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(projectPath))!, Path.GetFullPath(sourcePath));
@@ -65,51 +63,4 @@ public static class FunctionalExportAssociator
         }
     }
 
-    private static IReadOnlyList<FunctionalStateBinding> SuggestStates(
-        Project design, Project source, List<ExportDiagnostic> diagnostics)
-    {
-        var result = new List<FunctionalStateBinding>();
-        var rank = design.Editor.EffectiveDesignOrder(design)
-            .Select((name, index) => (name, index)).ToDictionary(item => item.name, item => item.index, StringComparer.Ordinal);
-        var headerCandidates = source.Frames.Where(frame => frame.Kind == FrameKind.FONTSTRING
-            && (frame.SourceName ?? frame.Name).Contains("Header", StringComparison.OrdinalIgnoreCase)).ToArray();
-
-        foreach (var state in design.Editor.DesignStates)
-        {
-            var visibilityFrame = source.Frames.FirstOrDefault(frame => frame.Kind == FrameKind.FRAME
-                && (frame.SourceName ?? frame.Name).Contains(state.Name, StringComparison.OrdinalIgnoreCase));
-            if (visibilityFrame is not null)
-            {
-                result.Add(new FunctionalStateBinding
-                {
-                    StateId = state.Id,
-                    SourceFrameName = visibilityFrame.Name,
-                    Visible = true,
-                });
-                continue;
-            }
-
-            var label = design.Editor.DesignObjects
-                .Where(item => item.StateIds.Count == 1 && item.StateIds[0] == state.Id)
-                .Select(item => (Metadata: item, Frame: design.Find(item.FrameName)))
-                .Where(item => item.Frame?.Kind == FrameKind.FONTSTRING)
-                .OrderBy(item => rank.GetValueOrDefault(item.Metadata.FrameName, int.MaxValue))
-                .Select(item => item.Metadata.TextOverride ?? item.Frame!.Visual?.Text?.Text)
-                .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
-            if (headerCandidates.Length == 1 && label is not null)
-            {
-                result.Add(new FunctionalStateBinding
-                {
-                    StateId = state.Id,
-                    SourceFrameName = headerCandidates[0].Name,
-                    TextEquals = label,
-                });
-                continue;
-            }
-
-            diagnostics.Add(new(ExportSeverity.Error, "FUNCTIONAL_STATE_UNMAPPED",
-                $"Could not safely infer a functional runtime probe for design state '{state.Name}'."));
-        }
-        return result;
-    }
 }

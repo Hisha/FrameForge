@@ -235,7 +235,11 @@ FrameXML. This is export metadata, not another imported frame tree:
 ```
 
 `referencePath` is made relative when the project is saved. The hash prevents composing against a
-silently changed runtime document. State probes use an existing source control's visibility and/or
-exact case-insensitive text. Value sources are explicit and type checked: FontString mirrors
-FontString with `GetText`/`SetText`, and StatusBar mirrors StatusBar with `GetValue`/`SetValue`.
-Projects without this optional object retain the v1 behavior and remain valid.
+silently changed runtime document. State probes and value sources are optional compatibility
+features. New associations leave both arrays empty: the consuming module addresses exported
+controls using the generated control inventory and owns runtime behavior. When retained by an older
+project, state probes use an existing source control's visibility and/or exact case-insensitive
+text. Value sources are explicit and type checked: FontString mirrors FontString with
+`GetText`/`SetText`, and StatusBar mirrors StatusBar with `GetValue`/`SetValue`. Missing value
+mappings never block functional export. Projects without this optional object retain the v1
+behavior and remain valid.

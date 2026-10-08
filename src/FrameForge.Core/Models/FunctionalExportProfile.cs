@@ -10,9 +10,9 @@ public sealed record FunctionalExportProfile
     public required ProjectSource Source { get; init; }
     /// <summary>Existing source frame that owns the generated design composition.</summary>
     public required string HostFrameName { get; init; }
-    /// <summary>How authored states are detected from source controls at runtime.</summary>
+    /// <summary>Optional legacy bridge probes. Empty means the consuming module owns state visibility.</summary>
     public IReadOnlyList<FunctionalStateBinding> States { get; init; } = [];
-    /// <summary>How runtime DESIGN values mirror authoritative functional controls.</summary>
+    /// <summary>Optional legacy mirrors. Empty means the consuming module populates exported controls.</summary>
     public IReadOnlyList<FunctionalValueBinding> Values { get; init; } = [];
 }
 

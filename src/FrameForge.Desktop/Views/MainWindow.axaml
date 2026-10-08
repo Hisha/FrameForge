@@ -670,12 +670,12 @@
                                     </Grid>
                                     <TextBlock Classes="label" Text="{Binding RuntimeBindingOperationSummary}" TextWrapping="Wrap" />
                                     <Grid ColumnDefinitions="72,*" ColumnSpacing="6" IsVisible="{Binding HasFunctionalExport}">
-                                        <TextBlock Classes="label" Text="XML source" />
+                                        <TextBlock Classes="label" Text="Optional mirror" />
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding FunctionalValueSourceOptions}"
                                                   SelectedItem="{Binding SelectedFunctionalValueSource, Mode=TwoWay}"
                                                   IsEnabled="{Binding CanMapFunctionalValue}"
-                                                  PlaceholderText="Choose functional control" />
+                                                  PlaceholderText="Module Lua may populate directly" />
                                     </Grid>
                                     <TextBlock Classes="label" Text="{Binding FunctionalExportSummary}"
                                                IsVisible="{Binding HasFunctionalExport}" TextWrapping="Wrap" />

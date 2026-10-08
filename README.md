@@ -59,7 +59,8 @@ the separation between authored design states and imported preview states.
 `Open` accepts a WoW 3.3.5a FrameXML file as well as a FrameForge project; the extension picks
 the reader, so there is no import mode to choose.
 
-Imported XML is **read-only source material**. FrameForge never writes XML, so:
+Imported XML is **read-only source material**. FrameForge never writes XML to disk — even the
+layout-only patch applier returns text and writes no files — so:
 
 - the project keeps no path, and `Save` routes through **Save As** as `.fforge.json`;
 - any `.xml` save target is refused, not silently written;
