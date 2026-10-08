@@ -99,6 +99,11 @@ public sealed record EditorMetadata
     public IReadOnlyList<string> DesignOrder { get; init; } = [];
     public IReadOnlyList<DesignState> DesignStates { get; init; } = [];
     public string? ActiveDesignStateId { get; init; }
+    /// <summary>
+    /// Selected design-time runtime simulation. This is editor-only metadata and never changes
+    /// imported XML visibility, geometry, scripts, or layout-patch output.
+    /// </summary>
+    public string? PreviewStateId { get; init; }
     public string Workspace { get; init; } = "design";
 
     public bool IsLocked(string? frameName) => frameName is not null &&

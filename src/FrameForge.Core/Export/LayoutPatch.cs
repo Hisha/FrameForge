@@ -92,6 +92,8 @@ public static class LayoutPatchBuilder
 
         var diagnostics = new List<ExportDiagnostic>();
         var protectedFrames = options?.ProtectedFrames;
+        ReportDuplicateNames(baseline, "baseline", diagnostics);
+        ReportDuplicateNames(edited, "edited project", diagnostics);
         var baselineByName = Index(baseline);
         var editedByName = Index(edited);
 
@@ -141,18 +143,30 @@ public static class LayoutPatchBuilder
                     diagnostics.Add(new(ExportSeverity.Error, "LOCATION_UNKNOWN",
                         "The frame has no location in the baseline document (it is not declared in the source file), " +
                         "so a layout-only patch cannot find it.", before.Name));
+                else if (before.SetAllPoints)
+                    diagnostics.Add(new(ExportSeverity.Error, "SET_ALL_POINTS_GEOMETRY_UNSUPPORTED",
+                        "This frame uses setAllPoints, so explicit size or offset edits would not control its runtime geometry.", before.Name));
+                else if (before.ExtraAnchors.Count > 0)
+                    diagnostics.Add(new(ExportSeverity.Error, "MULTIPLE_ANCHORS_UNSUPPORTED",
+                        "This frame has multiple anchors. FrameForge refuses to guess which constraint should move.", before.Name));
                 else
                     entries.Add(new(before.Name, before.SourceLocation, baselineGeometry, targetGeometry));
             }
 
             if (NonLayoutChanged(before, after))
-                diagnostics.Add(new(ExportSeverity.Warning, "NON_LAYOUT_CHANGE_IGNORED",
-                    "Non-layout changes (visibility, stratum, level, visual, source identity) are not represented " +
-                    "in a layout-only patch.", before.Name));
+                diagnostics.Add(new(ExportSeverity.Error, "NON_LAYOUT_CHANGE_UNSUPPORTED",
+                    "This frame has non-layout changes. Layout-only export will not silently discard them; undo those changes before exporting.", before.Name));
         }
 
         var success = !diagnostics.Any(d => d.Severity == ExportSeverity.Error);
         return new(success, success ? new LayoutPatch([.. entries]) : null, diagnostics);
+    }
+
+    private static void ReportDuplicateNames(Project project, string label, List<ExportDiagnostic> diagnostics)
+    {
+        foreach (var duplicate in project.Frames.GroupBy(frame => frame.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            diagnostics.Add(new(ExportSeverity.Error, "DUPLICATE_FRAME_IDENTITY",
+                $"Frame identity '{duplicate.Key}' is ambiguous in the {label}; layout export cannot choose a target.", duplicate.Key));
     }
 
     private static Dictionary<string, FrameDef> Index(Project project)

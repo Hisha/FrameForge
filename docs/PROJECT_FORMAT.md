@@ -143,6 +143,7 @@ Artwork resolution rules:
 "editor": {
   "workspace": "design",
   "activeDesignState": "standard-hunt",
+  "previewState": "idle",
   "lockedElements": ["CustomPanel"],
   "groups": [
     { "name": "Blizzard Dungeon Finder Frame", "locked": true, "expanded": false,
@@ -181,6 +182,11 @@ preview-state catalog, and neither executes Lua. Older v1 files without `editor`
 earlier groups/locks fields, load with safe defaults, so these additive fields do not require a
 format-version bump.
 
+`previewState` remembers the selected design-time runtime simulation for an imported functional
+layout. It changes only the presentation copy used by Preview/Hybrid; source frame visibility and
+layout-only XML export remain unchanged. Unknown or inapplicable values safely fall back to the
+registry's default state.
+
 `textStyle` is optional DESIGN metadata for a FontString. `baseStyle` names an authentic style
 resolved from the configured build-12340 client's `Fonts.xml` and `FontStyles.xml`; it does not
 embed a font or copy a client definition. The other keys are nullable overrides. Absence inherits
@@ -200,3 +206,36 @@ A project imported from XML carries no path, so `Save` has nothing to overwrite 
 **Save As**. On top of that, any `.xml` save target is refused outright: FrameForge does not write
 XML at all, and silently converting an addon's FrameXML into JSON would be the worst possible
 outcome. `ProjectCodec.CanSaveTo` is the single place that decision lives.
+
+## `functionalExport`
+
+An authored DESIGN project may persist an optional association with authoritative functional
+FrameXML. This is export metadata, not another imported frame tree:
+
+```json
+"functionalExport": {
+  "source": {
+    "type": "wow-framexml",
+    "fileName": "NativeHuntsFrame.xml",
+    "referencePath": "../content/client/Interface/FrameXML/NativeHuntsFrame.xml",
+    "readOnly": true,
+    "sha256": "..."
+  },
+  "hostFrame": "NativeHuntsFrame",
+  "states": [
+    { "state": "idle", "sourceFrame": "NativeHuntsFrameContentPanelIdle", "visible": true },
+    { "state": "tracking", "sourceFrame": "NativeHuntsFrameContentPanelHuntStateHeader",
+      "textEquals": "Hunt Progress" }
+  ],
+  "values": [
+    { "designFrame": "Tracker_Target_Name",
+      "sourceFrame": "NativeHuntsFrameContentPanelIdentityPrey" }
+  ]
+}
+```
+
+`referencePath` is made relative when the project is saved. The hash prevents composing against a
+silently changed runtime document. State probes use an existing source control's visibility and/or
+exact case-insensitive text. Value sources are explicit and type checked: FontString mirrors
+FontString with `GetText`/`SetText`, and StatusBar mirrors StatusBar with `GetValue`/`SetValue`.
+Projects without this optional object retain the v1 behavior and remain valid.

@@ -82,6 +82,18 @@ public sealed partial class FrameEditorViewModel : ObservableObject
     /// <summary>Anchors the engine could not honour, joined for display.</summary>
     public string AnchorNote { get; private set; } = string.Empty;
 
+    /// <summary>The authoritative primary anchor retained from the project/source model.</summary>
+    public string SourceAnchorSummary
+    {
+        get
+        {
+            if (Frame is null)
+                return string.Empty;
+            var target = Frame.RelativeTo ?? Frame.Parent ?? "screen";
+            return $"{Frame.Point} → {Frame.RelativePoint} of {target}; offset ({Number(Frame.OffsetX)}, {Number(Frame.OffsetY)})";
+        }
+    }
+
     /// <summary>
     /// What the source declared visually, one line per fact, read-only.
     /// </summary>
@@ -152,6 +164,7 @@ public sealed partial class FrameEditorViewModel : ObservableObject
             Point = RelativePoint = AnchorPoint.TOPLEFT;
             IsVisible = true;
             SizeReference = SizeReference.SCREEN;
+            OnPropertyChanged(nameof(SourceAnchorSummary));
             return;
         }
 
@@ -170,6 +183,7 @@ public sealed partial class FrameEditorViewModel : ObservableObject
         ValidationMessage = string.Empty;
 
         OnPropertyChanged(nameof(SourceNote));
+        OnPropertyChanged(nameof(SourceAnchorSummary));
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(IsAnonymous));
     }

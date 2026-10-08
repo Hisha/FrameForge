@@ -72,7 +72,16 @@
                 <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <MenuItem Header="WoW 3.3.5a Layout…" Click="OnExportWow335Click" />
+                            <MenuItem Header="Static WoW 3.3.5a Layout Package…" Click="OnExportWow335Click" />
+                            <Separator />
+                            <MenuItem Header="Associate Functional FrameXML…" Click="OnAssociateFunctionalFrameXmlClick" />
+                            <MenuItem Header="Functional WoW 3.3.5a Interface Package…"
+                                      IsEnabled="{Binding CanExportFunctionalDesign}"
+                                      Click="OnExportFunctionalDesignClick" />
+                            <Separator />
+                            <MenuItem Header="Export Layout Changes…"
+                                      IsEnabled="{Binding CanExportLayoutChanges}"
+                                      Click="OnExportLayoutChangesClick" />
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
@@ -136,6 +145,8 @@
                         <TextBlock Text="{Binding Source.Headline}" TextWrapping="Wrap" />
                         <TextBlock Classes="mono" Text="{Binding Source.Detail}" TextWrapping="Wrap"
                                    Opacity="0.8" Margin="0,2,0,0" />
+                        <TextBlock Classes="mono" Text="{Binding PreviewSimulationSummary}" TextWrapping="Wrap"
+                                   Foreground="#E5B567" Margin="0,3,0,0" />
                     </StackPanel>
                     <TextBlock Grid.Column="2" Classes="mono" Margin="12,0,0,0" VerticalAlignment="Top"
                                Text="{Binding Source.SourcePath}" TextTrimming="CharacterEllipsis"
@@ -156,6 +167,15 @@
                                                Text="{Binding Heading}" Opacity="0.85" />
                                     <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
                                 </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+                <Expander IsVisible="{Binding HasLayoutExportDiagnostics}" Header="Layout export diagnostics">
+                    <ItemsControl ItemsSource="{Binding LayoutExportDiagnostics}" Margin="0,6,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -262,7 +282,7 @@
                           ItemsSource="{Binding PreviewStateOptions}"
                           SelectedItem="{Binding SelectedPreviewState, Mode=TwoWay}"
                           DisplayMemberBinding="{Binding Label}"
-                          ToolTip.Tip="Applies design-time values only. Source XML is unchanged." />
+                          ToolTip.Tip="{Binding PreviewStateExplanation}" />
 
                 <TextBlock Classes="label" Text="Design state" VerticalAlignment="Center" IsVisible="{Binding IsDesignWorkspace}" />
                 <ComboBox MinWidth="132" IsVisible="{Binding IsDesignWorkspace}"
@@ -380,10 +400,15 @@
                               PointerPressed="OnFrameTreePointerPressed"
                               ItemsSource="{Binding TreeRoots}"
                               SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
+                        <TreeView.Styles>
+                            <Style Selector="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}" />
+                            </Style>
+                        </TreeView.Styles>
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
                                 <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" MinWidth="180"
-                                      ToolTip.Tip="{Binding OriginLabel}">
+                                      ToolTip.Tip="{Binding IdentitySummary}">
                                     <!-- The kind and the "fills" tag are what distinguish a
                                          FontString from a Texture from a Frame. Importing 51
                                          widgets that all look like identical panels tells the
@@ -502,6 +527,13 @@
                         </Border>
 
                         <StackPanel IsVisible="{Binding ShowsSingleObjectEditors}">
+                        <Border Background="#17232C" BorderBrush="#315268" BorderThickness="1"
+                                CornerRadius="4" Padding="8,6" Margin="0,0,0,8">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="header" Text="SOURCE ANCHOR (AUTHORITATIVE / READ-ONLY)" />
+                                <TextBlock Classes="mono" Text="{Binding SelectedSourceAnchor}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                         <Border Background="#101D25" BorderBrush="#315268" BorderThickness="1"
                                 CornerRadius="4" Padding="8,6" IsVisible="{Binding IsDesignWorkspace}">
                             <StackPanel Spacing="5">
@@ -637,6 +669,16 @@
                                                  PlaceholderText="hunt.targetName" />
                                     </Grid>
                                     <TextBlock Classes="label" Text="{Binding RuntimeBindingOperationSummary}" TextWrapping="Wrap" />
+                                    <Grid ColumnDefinitions="72,*" ColumnSpacing="6" IsVisible="{Binding HasFunctionalExport}">
+                                        <TextBlock Classes="label" Text="XML source" />
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding FunctionalValueSourceOptions}"
+                                                  SelectedItem="{Binding SelectedFunctionalValueSource, Mode=TwoWay}"
+                                                  IsEnabled="{Binding CanMapFunctionalValue}"
+                                                  PlaceholderText="Choose functional control" />
+                                    </Grid>
+                                    <TextBlock Classes="label" Text="{Binding FunctionalExportSummary}"
+                                               IsVisible="{Binding HasFunctionalExport}" TextWrapping="Wrap" />
                                     <TextBlock Classes="validation" Text="{Binding RuntimeBindingValidation}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <CheckBox Content="Locked" IsChecked="{Binding SelectedElementLocked, Mode=TwoWay}" />
@@ -720,12 +762,14 @@
                         <Grid ColumnDefinitions="96,*" IsVisible="{Binding IsInspectWorkspace}">
                             <TextBlock Grid.Column="0" Classes="label" Text="Name" />
                             <TextBox Grid.Column="1" Text="{Binding Editor.Name, Mode=TwoWay}" Margin="4,0,0,4"
+                                     IsEnabled="{Binding CanEditLayoutStructure}"
                                      Tag="name" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Parent" />
                             <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      IsEnabled="{Binding CanEditLayoutStructure}"
                                       ItemsSource="{Binding Editor.FrameOptions}"
                                       SelectedItem="{Binding Editor.Parent, Mode=TwoWay}" />
                         </Grid>
@@ -745,6 +789,7 @@
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Size ref" />
                             <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      IsEnabled="{Binding CanEditLayoutStructure}"
                                       ItemsSource="{Binding Editor.SizeReferenceOptions}"
                                       SelectedItem="{Binding Editor.SizeReference, Mode=TwoWay}" />
                         </Grid>
@@ -752,6 +797,7 @@
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Point" />
                             <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      IsEnabled="{Binding CanEditLayoutStructure}"
                                       ItemsSource="{Binding Editor.AnchorOptions}"
                                       SelectedItem="{Binding Editor.Point, Mode=TwoWay}" />
                         </Grid>
@@ -759,6 +805,7 @@
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Relative to" />
                             <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      IsEnabled="{Binding CanEditLayoutStructure}"
                                       ItemsSource="{Binding Editor.FrameOptions}"
                                       SelectedItem="{Binding Editor.RelativeTo, Mode=TwoWay}" />
                         </Grid>
@@ -766,6 +813,7 @@
                         <Grid ColumnDefinitions="96,*">
                             <TextBlock Grid.Column="0" Classes="label" Text="Relative pt" />
                             <ComboBox Grid.Column="1" Margin="4,0,0,4"
+                                      IsEnabled="{Binding CanEditLayoutStructure}"
                                       ItemsSource="{Binding Editor.AnchorOptions}"
                                       SelectedItem="{Binding Editor.RelativePoint, Mode=TwoWay}" />
                         </Grid>
@@ -782,8 +830,11 @@
                                      Tag="offsetY" KeyDown="OnBufferedEditorKeyDown" LostFocus="OnBufferedEditorLostFocus" />
                         </Grid>
 
-                        <CheckBox Margin="4,4,0,4" Content="Visible" IsChecked="{Binding Editor.IsVisible, Mode=TwoWay}" />
+                        <CheckBox Margin="4,4,0,4" Content="Visible" IsChecked="{Binding Editor.IsVisible, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanEditLayoutStructure}" />
                         <TextBlock Classes="label" Foreground="#E06C6C" Text="{Binding Editor.ValidationMessage}"
+                                   TextWrapping="Wrap" Margin="4,2,0,4" />
+                        <TextBlock Classes="label" Foreground="#E5B567" Text="{Binding SelectedGeometryEditDiagnostic}"
                                    TextWrapping="Wrap" Margin="4,2,0,4" />
                         </StackPanel>
                         </Expander>

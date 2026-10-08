@@ -29,6 +29,13 @@ public sealed record Project
 
     public ProjectSource? Source { get; init; }
 
+    /// <summary>
+    /// Optional functional composition target for a DESIGN-authored project. This is separate
+    /// from <see cref="Source"/>: Source means the project itself was imported from FrameXML,
+    /// while this profile associates an independently authored design with functional FrameXML.
+    /// </summary>
+    public FunctionalExportProfile? FunctionalExport { get; init; }
+
     /// <summary>FrameForge-only groups and locks; never projected into FrameXML semantics.</summary>
     public EditorMetadata Editor { get; init; } = new();
 
@@ -43,6 +50,12 @@ public sealed record Project
     public Project DeepCopy() => this with
     {
         Frames = Frames.Select(f => f with { }).ToArray(),
+        FunctionalExport = FunctionalExport is null ? null : FunctionalExport with
+        {
+            Source = FunctionalExport.Source with { },
+            States = FunctionalExport.States.Select(item => item with { }).ToArray(),
+            Values = FunctionalExport.Values.Select(item => item with { }).ToArray(),
+        },
         Editor = Editor with
         {
             Groups = Editor.Groups.Select(group => group with { Members = [.. group.Members] }).ToArray(),
@@ -71,9 +84,11 @@ public sealed record Project
         return Name == other.Name
                && Screen == other.Screen
                && Equals(Source, other.Source)
+               && FunctionalProfilesEqual(FunctionalExport, other.FunctionalExport)
                && Editor.LockedElements.SequenceEqual(other.Editor.LockedElements)
                && Editor.Workspace == other.Editor.Workspace
                && Editor.ActiveDesignStateId == other.Editor.ActiveDesignStateId
+               && Editor.PreviewStateId == other.Editor.PreviewStateId
                && Editor.DesignOrder.SequenceEqual(other.Editor.DesignOrder)
                && Editor.DesignStates.SequenceEqual(other.Editor.DesignStates)
                && Editor.DesignObjects.Count == other.Editor.DesignObjects.Count
@@ -104,8 +119,16 @@ public sealed record Project
         hash.Add(Name);
         hash.Add(Screen);
         hash.Add(Source);
+        if (FunctionalExport is { } functional)
+        {
+            hash.Add(functional.Source);
+            hash.Add(functional.HostFrameName);
+            foreach (var state in functional.States) hash.Add(state);
+            foreach (var value in functional.Values) hash.Add(value);
+        }
         hash.Add(Editor.Workspace);
         hash.Add(Editor.ActiveDesignStateId);
+        hash.Add(Editor.PreviewStateId);
         foreach (var locked in Editor.LockedElements)
             hash.Add(locked);
         foreach (var ordered in Editor.DesignOrder)
@@ -138,4 +161,11 @@ public sealed record Project
             hash.Add(frame);
         return hash.ToHashCode();
     }
+
+    private static bool FunctionalProfilesEqual(FunctionalExportProfile? left, FunctionalExportProfile? right) =>
+        left is null ? right is null : right is not null
+            && left.Source == right.Source
+            && left.HostFrameName == right.HostFrameName
+            && left.States.SequenceEqual(right.States)
+            && left.Values.SequenceEqual(right.Values);
 }

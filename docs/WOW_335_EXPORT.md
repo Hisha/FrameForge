@@ -1,8 +1,11 @@
 # WoW 3.3.5a export
 
-FrameForge exports DESIGN presentation as a deterministic package for World of Warcraft
-3.3.5a build 12340. It does not generate Lua behavior, execute Lua, modify imported XML, or
-package Blizzard-owned content.
+FrameForge has two deliberately separate WoW 3.3.5a build-12340 exports. **Static Layout
+Package** writes presentation plus an adapter contract. **Functional Interface Package** composes
+the saved design into a verified copy of associated FrameXML while retaining that document's
+frame identities, hierarchy, template inheritance, scripts, Lua file relationship, and load-order
+role. FrameForge never executes or generates Lua, changes the selected source file, or packages
+Blizzard-owned content.
 
 ## Pipeline and output
 
@@ -15,8 +18,33 @@ then written as:
 - `export-report.txt`: deterministic diagnostics and importer self-check result.
 - `assets/`: deduplicated project-owned source artwork required by the package.
 
-Desktop exposes this through **Export → WoW 3.3.5a Layout…**. The same path is available for
+Desktop exposes this through **Export → Static WoW 3.3.5a Layout Package…**. The same path is available for
 automation as `FrameForge --export-wow335 <project.fforge.json> <directory>`.
+
+## Functional source composition
+
+Use **Export → Associate Functional FrameXML…** once on an existing DESIGN project. FrameForge
+stores the source's portable relative path, SHA-256, selected host frame, state probes, and value
+sources in the project; it does not import a second visual design or discard the current one. The
+association is rejected when no unambiguous concrete `setAllPoints` host exists or state probes
+cannot be inferred safely.
+
+For a runtime FontString or StatusBar, enable **Runtime value**, keep its semantic binding key, and
+choose the corresponding existing XML control in **XML source**. Functional export is blocked if
+any required value lacks a source, has the wrong widget type, or refers to a missing control. It is
+also blocked if the source hash changed, a generated identity collides with an existing one, state
+coverage is incomplete, or the design cannot be rebased against its stock-framework foundation.
+
+The output keeps the associated XML file name and inserts one generated design child under the
+selected functional host. Root-level DESIGN geometry is rebased from the saved stock foundation,
+so an existing screen-space design is not emitted as an unrelated `UIParent` layout. A small inline
+bridge mirrors explicitly mapped values and applies authored state visibility from the saved state
+probes. The original source bytes before the final `</Ui>` remain unchanged. The package also
+contains the normal manifests, report, and project-owned artwork. Keep the addon's existing Lua
+files and TOC/XML load-order entries: they remain authoritative and are neither copied nor replaced.
+
+The functional destination must be empty. This prevents export from overwriting either the source
+or an unrelated addon package.
 
 ## Runtime identity and state
 

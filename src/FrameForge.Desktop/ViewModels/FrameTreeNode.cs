@@ -1,4 +1,5 @@
 using System.Globalization;
+using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core.Models;
 
 namespace FrameForge.Desktop.ViewModels;
@@ -16,23 +17,57 @@ public sealed record FrameOption(string? Name)
 /// <summary>A node in the frame tree.</summary>
 /// <param name="Frame">The frame this node shows.</param>
 /// <param name="Children">Direct children, so the tree mirrors the parent relationship.</param>
-public sealed record FrameTreeNode(
-    FrameDef Frame,
-    IReadOnlyList<FrameTreeNode> Children,
-    string OriginLabel,
-    bool IsLocked,
-    string GroupNames,
-    string? DisplayNameOverride = null,
-    bool IsConceptual = false,
-    bool IsExpanded = true,
-    bool IsSelected = false,
-    bool IsPrimarySelection = false)
+public sealed partial class FrameTreeNode : ObservableObject
 {
+    public FrameTreeNode(
+        FrameDef Frame,
+        IReadOnlyList<FrameTreeNode> Children,
+        string OriginLabel,
+        bool IsLocked,
+        string GroupNames,
+        string? DisplayNameOverride = null,
+        bool IsConceptual = false,
+        bool IsExpanded = false,
+        bool IsSelected = false,
+        bool IsPrimarySelection = false)
+    {
+        this.Frame = Frame;
+        this.Children = Children;
+        this.OriginLabel = OriginLabel;
+        this.IsLocked = IsLocked;
+        this.GroupNames = GroupNames;
+        this.DisplayNameOverride = DisplayNameOverride;
+        this.IsConceptual = IsConceptual;
+        _isExpanded = IsExpanded;
+        this.IsSelected = IsSelected;
+        this.IsPrimarySelection = IsPrimarySelection;
+    }
+
+    public FrameDef Frame { get; }
+    public IReadOnlyList<FrameTreeNode> Children { get; }
+    public string OriginLabel { get; }
+    public bool IsLocked { get; }
+    public string GroupNames { get; }
+    public string? DisplayNameOverride { get; }
+    public bool IsConceptual { get; }
+    public bool IsSelected { get; }
+    public bool IsPrimarySelection { get; }
+
+    /// <summary>
+    /// User-owned expansion state. The TreeView writes this through a TwoWay binding before the
+    /// next projection rebuild captures it by source identity.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isExpanded;
+
     /// <summary>Frame name, shown as the tree label.</summary>
     public string Name => Frame.Name;
     public string DisplayName => IsConceptual
         ? $"{(IsLocked ? "🔒" : "🔓")} {DisplayNameOverride ?? Frame.Name}"
         : DisplayNameOverride ?? Frame.Name;
+
+    /// <summary>Unambiguous identity shown as the row tooltip even when DESIGN uses a friendly name.</summary>
+    public string IdentitySummary => $"{KindBadge} · {Name} · {OriginLabel}";
 
     /// <summary>
     /// Marker for a selected row, so a multi-selection is visible in the tree.

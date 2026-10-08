@@ -266,4 +266,27 @@ public class SerializationTests
         Assert.Equal(before.Rects, after.Rects);
         Assert.Equal(before.PaintOrder, after.PaintOrder);
     }
+
+    [Fact]
+    public void Imported_source_hash_and_reference_survive_project_round_trip()
+    {
+        var project = ProjectFactory.Blank() with
+        {
+            Source = new ProjectSource
+            {
+                Type = SourceTypes.WowFrameXml,
+                FileName = "NativeHuntsFrame.xml",
+                ReferencePath = "../FrameXML/NativeHuntsFrame.xml",
+                ReadOnly = true,
+                Sha256 = new string('a', 64),
+            },
+            Editor = new EditorMetadata { PreviewStateId = "standard-hunt" },
+        };
+
+        var reopened = Parsed(ProjectCodec.Serialize(project));
+
+        Assert.Equal(project.Source, reopened.Source);
+        Assert.True(reopened.Source!.IsReadOnlyXml);
+        Assert.Equal("standard-hunt", reopened.Editor.PreviewStateId);
+    }
 }

@@ -117,7 +117,7 @@ public sealed class LayoutPatchTests
     }
 
     [Fact]
-    public void Build_warns_that_non_layout_changes_are_ignored()
+    public void Build_rejects_non_layout_changes_instead_of_silently_ignoring_them()
     {
         var baseline = new Project
         {
@@ -130,12 +130,113 @@ public sealed class LayoutPatchTests
 
         var result = LayoutPatchBuilder.Build(baseline, edited);
 
+        Assert.False(result.Success);
+        Assert.Null(result.Patch);
+        var error = Assert.Single(result.Diagnostics, d => d.Code == "NON_LAYOUT_CHANGE_UNSUPPORTED");
+        Assert.Equal(ExportSeverity.Error, error.Severity);
+        Assert.Equal("A", error.FrameName);
+    }
+
+    [Fact]
+    public void Functional_export_requires_imported_source_identity_and_preserves_unmodified_xml()
+    {
+        var (xml, imported) = LoadFixture();
+        var eligible = imported with
+        {
+            Source = imported.Source! with { ReferencePath = FixturePath },
+        };
+
+        Assert.True(FunctionalLayoutExporter.IsEligible(eligible));
+        Assert.False(FunctionalLayoutExporter.IsEligible(ProjectFactory.Blank()));
+
+        var result = FunctionalLayoutExporter.Prepare(eligible, xml);
+
         Assert.True(result.Success, string.Join(" ", result.Diagnostics.Select(d => d.Message)));
-        Assert.NotNull(result.Patch);
-        Assert.Empty(result.Patch!.Entries);
-        var warning = Assert.Single(result.Diagnostics, d => d.Code == "NON_LAYOUT_CHANGE_IGNORED");
-        Assert.Equal(ExportSeverity.Warning, warning.Severity);
-        Assert.Equal("A", warning.FrameName);
+        Assert.Equal(0, result.ModifiedFrameCount);
+        Assert.Equal(xml, result.PatchedXml);
+    }
+
+    [Fact]
+    public void Preview_metadata_does_not_leak_into_layout_export()
+    {
+        var (xml, imported) = LoadFixture();
+        var edited = imported with
+        {
+            Source = imported.Source! with { ReferencePath = FixturePath },
+            Editor = imported.Editor with { PreviewStateId = "idle" },
+        };
+
+        var result = FunctionalLayoutExporter.Prepare(edited, xml);
+
+        Assert.True(result.Success, string.Join(" ", result.Diagnostics.Select(d => d.Message)));
+        Assert.Equal(0, result.ModifiedFrameCount);
+        Assert.Equal(xml, result.PatchedXml);
+    }
+
+    [Fact]
+    public void Functional_export_rejects_source_hash_mismatch()
+    {
+        var (xml, imported) = LoadFixture();
+        var eligible = imported with
+        {
+            Source = imported.Source! with { ReferencePath = FixturePath },
+        };
+
+        var result = FunctionalLayoutExporter.Prepare(eligible, xml + "<!-- drift -->");
+
+        Assert.False(result.Success);
+        Assert.Null(result.PatchedXml);
+        Assert.Contains(result.Diagnostics, d => d.Code == "SOURCE_HASH_MISMATCH");
+    }
+
+    [Fact]
+    public void Functional_export_rejects_detectable_inline_lua_geometry_control()
+    {
+        const string xml = """
+            <Ui xmlns="http://www.blizzard.com/wow/ui/">
+              <Frame name="A"><Size x="10" y="10"/><Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors><Scripts><OnShow>self:SetPoint("CENTER");</OnShow></Scripts></Frame>
+            </Ui>
+            """;
+        var imported = FrameXmlImporter.Import(xml, "lua.xml").Project!;
+        var eligible = imported with
+        {
+            Source = imported.Source! with { ReferencePath = "lua.xml" },
+            Frames = [imported.Frames[0] with { OffsetX = 12 }],
+        };
+
+        var result = FunctionalLayoutExporter.Prepare(eligible, xml);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Code == "LUA_GEOMETRY_CONFLICT" && d.FrameName == "A");
+    }
+
+    [Fact]
+    public void Build_rejects_ambiguous_identity_and_geometry_on_multiple_anchors()
+    {
+        var located = new SourceLocation(2, 3);
+        var duplicateBaseline = new Project
+        {
+            Frames = [new FrameDef { Name = "A", SourceLocation = located }, new FrameDef { Name = "A", SourceLocation = located }],
+        };
+        var duplicate = LayoutPatchBuilder.Build(duplicateBaseline, duplicateBaseline);
+        Assert.False(duplicate.Success);
+        Assert.Contains(duplicate.Diagnostics, d => d.Code == "DUPLICATE_FRAME_IDENTITY");
+
+        var baseline = new Project
+        {
+            Frames =
+            [
+                new FrameDef
+                {
+                    Name = "B", SourceLocation = located,
+                    ExtraAnchors = [FrameAnchor.Create(AnchorPoint.BOTTOM, null, AnchorPoint.BOTTOM, 0, 0)],
+                },
+            ],
+        };
+        var edited = baseline with { Frames = [baseline.Frames[0] with { OffsetX = 10 }] };
+        var multiple = LayoutPatchBuilder.Build(baseline, edited);
+        Assert.False(multiple.Success);
+        Assert.Contains(multiple.Diagnostics, d => d.Code == "MULTIPLE_ANCHORS_UNSUPPORTED");
     }
 
     [Fact]

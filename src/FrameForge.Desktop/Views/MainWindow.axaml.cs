@@ -657,6 +657,53 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnAssociateFunctionalFrameXmlClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+            return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Associate authoritative functional FrameXML",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("WoW FrameXML") { Patterns = ["*.xml"] }],
+        });
+        if (files.Count > 0 && files[0].Path.LocalPath is { Length: > 0 } path)
+            vm.AssociateFunctionalSource(path);
+    }
+
+    private async void OnExportFunctionalDesignClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { CanExportFunctionalDesign: true } vm)
+            return;
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose an empty directory for the functional WoW package",
+            AllowMultiple = false,
+        });
+        if (folders.Count > 0 && folders[0].Path.LocalPath is { Length: > 0 } destination)
+            vm.ExportFunctionalDesign(destination);
+    }
+
+    private async void OnExportLayoutChangesClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { CanExportLayoutChanges: true } vm)
+            return;
+
+        var sourceName = vm.Project.Source?.FileName ?? "layout.xml";
+        var suggestedName = Path.GetFileNameWithoutExtension(sourceName) + ".layout.xml";
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export Layout Changes",
+            SuggestedFileName = suggestedName,
+            DefaultExtension = "xml",
+            ShowOverwritePrompt = true,
+            FileTypeChoices = [new FilePickerFileType("WoW FrameXML") { Patterns = ["*.xml"] }],
+        });
+
+        if (file?.Path.LocalPath is { Length: > 0 } path)
+            vm.ExportLayoutChanges(path);
+    }
+
     private void OnCanvasSelectionRequested(object? sender, CanvasSelectionEventArgs e)
     {
         ViewModel?.OnCanvasSelectionRequested(e.FrameName, e.Additive);

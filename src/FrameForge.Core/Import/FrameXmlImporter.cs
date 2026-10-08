@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using FrameForge.Core.Models;
@@ -97,7 +99,7 @@ public static class FrameXmlImporter
                 $"The root element is in namespace \"{root.Name.NamespaceName}\", which is not a World of Warcraft FrameXML namespace.");
         }
 
-        var builder = new Builder(settings, fileName);
+        var builder = new Builder(settings, fileName, ComputeSha256(xml));
         builder.Run(root);
 
         if (builder.Elements.Count == 0)
@@ -114,6 +116,10 @@ public static class FrameXmlImporter
             Elements = builder.Elements,
         };
     }
+
+    /// <summary>Computes the stable source identity used by layout-only export.</summary>
+    public static string ComputeSha256(string xml) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml))).ToLowerInvariant();
 
     /// <summary>
     /// Imports a document from disk, READ-ONLY.
@@ -221,7 +227,7 @@ public static class FrameXmlImporter
     /// the chance to become a real frame or a clearly-marked placeholder.
     /// </para>
     /// </remarks>
-    private sealed class Builder(FrameXmlImportOptions options, string fileName)
+    private sealed class Builder(FrameXmlImportOptions options, string fileName, string sourceSha256)
     {
         private readonly List<FrameDef> _frames = [];
         private readonly List<FrameXmlDiagnostic> _diagnostics = [];
@@ -1132,6 +1138,7 @@ public static class FrameXmlImporter
                     Type = SourceTypes.WowFrameXml,
                     FileName = fileName.Length == 0 ? null : fileName,
                     ReadOnly = true,
+                    Sha256 = sourceSha256,
                 },
             };
         }

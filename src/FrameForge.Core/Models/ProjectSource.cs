@@ -14,10 +14,9 @@ public static class SourceTypes
 /// Where a project came from, kept as metadata rather than as a live handle.
 /// </summary>
 /// <remarks>
-/// Imported XML is READ-ONLY source material. FrameForge records the origin so the UI can say
-/// so plainly, but it never opens the XML for writing and never needs it to reopen a saved
-/// project: <see cref="Path"/> is informational and is resolved purely for display. A project
-/// whose original XML has been deleted or moved still opens normally.
+/// Imported XML is READ-ONLY source material. A saved project remains independently openable
+/// when that XML is missing, but layout-only export reopens the source for reading and verifies
+/// <see cref="Sha256"/> before it can produce a patched copy. The source is never opened for writing.
 /// <para>
 /// <see cref="ReferencePath"/> is the portable half of the location. When FrameForge saves a
 /// project it writes the source location RELATIVE to the project file, falling back to just the
@@ -45,6 +44,12 @@ public sealed record ProjectSource
     public string? ReferencePath { get; init; }
 
     public bool ReadOnly { get; init; }
+
+    /// <summary>
+    /// SHA-256 of the exact UTF-8 source text at import time. Layout export requires this value
+    /// and refuses a source whose content has drifted since the project was created.
+    /// </summary>
+    public string? Sha256 { get; init; }
 
     /// <summary>True when this source is an imported, read-only XML file.</summary>
     public bool IsReadOnlyXml =>

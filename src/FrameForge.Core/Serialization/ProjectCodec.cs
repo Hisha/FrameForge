@@ -117,6 +117,10 @@ public static class ProjectCodec
         var source = ParseSource(root);
         var editor = ParseEditor(root, frames, errors);
 
+        // State ids used by the functional profile are editor metadata, so validate the profile
+        // after the editor itself has been decoded.
+        var functionalExport = ParseFunctionalExport(root, frames, editor, errors);
+
         if (errors.Count > 0)
             return ParseResult.Failure(errors);
 
@@ -126,6 +130,7 @@ public static class ProjectCodec
             Screen = screen,
             Frames = frames,
             Source = source,
+            FunctionalExport = functionalExport,
             Editor = editor,
         });
     }
@@ -134,9 +139,9 @@ public static class ProjectCodec
     /// Reads the optional source block.
     /// </summary>
     /// <remarks>
-    /// Source metadata is informational. It is read best-effort and never fatal: a project that
-    /// names an XML file which no longer exists must still open, because the layout in the file
-    /// is self-contained and FrameForge never needs the original to resolve it.
+    /// Source metadata is read best-effort and never fatal: a project that names an XML file
+    /// which no longer exists must still open because its preview is self-contained. Functional
+    /// layout export separately requires a resolvable reference and matching source hash.
     /// </remarks>
     private static ProjectSource? ParseSource(JsonElement root)
     {
@@ -156,6 +161,98 @@ public static class ProjectCodec
             ReferencePath = ReadOptionalString(source, "referencePath"),
             ReadOnly = source.TryGetProperty("readOnly", out var readOnly) &&
                        readOnly.ValueKind == JsonValueKind.True,
+            Sha256 = ReadOptionalString(source, "sha256"),
+        };
+    }
+
+    private static FunctionalExportProfile? ParseFunctionalExport(
+        JsonElement root, IReadOnlyList<FrameDef> frames, EditorMetadata? editor, List<string> errors)
+    {
+        if (editor is null || !root.TryGetProperty("functionalExport", out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("functionalExport must be an object.");
+            return null;
+        }
+
+        if (!value.TryGetProperty("source", out var source) || source.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("functionalExport.source must be an object.");
+            return null;
+        }
+        var fileName = ReadOptionalString(source, "fileName");
+        var referencePath = ReadOptionalString(source, "referencePath");
+        var sha256 = ReadOptionalString(source, "sha256");
+        var host = ReadOptionalString(value, "hostFrame");
+        if (fileName is null || referencePath is null || sha256 is null || host is null)
+        {
+            errors.Add("functionalExport requires source fileName, referencePath, sha256, and hostFrame.");
+            return null;
+        }
+
+        var stateIds = editor.DesignStates.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        var states = new List<FunctionalStateBinding>();
+        if (value.TryGetProperty("states", out var stateArray) && stateArray.ValueKind == JsonValueKind.Array)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var index = 0;
+            foreach (var entry in stateArray.EnumerateArray())
+            {
+                var path = $"functionalExport.states[{index++}]";
+                var id = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "state") : null;
+                var frame = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "sourceFrame") : null;
+                if (id is null || frame is null || !stateIds.Contains(id) || !seen.Add(id))
+                {
+                    errors.Add($"{path} must reference one unique existing design state and a source frame.");
+                    continue;
+                }
+                bool? visible = entry.TryGetProperty("visible", out var visibleValue)
+                    && visibleValue.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? visibleValue.GetBoolean() : null;
+                states.Add(new FunctionalStateBinding
+                {
+                    StateId = id,
+                    SourceFrameName = frame,
+                    TextEquals = ReadOptionalString(entry, "textEquals"),
+                    Visible = visible,
+                });
+            }
+        }
+
+        var designNames = frames.Select(item => item.Name).ToHashSet(StringComparer.Ordinal);
+        var values = new List<FunctionalValueBinding>();
+        if (value.TryGetProperty("values", out var valueArray) && valueArray.ValueKind == JsonValueKind.Array)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var index = 0;
+            foreach (var entry in valueArray.EnumerateArray())
+            {
+                var path = $"functionalExport.values[{index++}]";
+                var designFrame = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "designFrame") : null;
+                var sourceFrame = entry.ValueKind == JsonValueKind.Object ? ReadOptionalString(entry, "sourceFrame") : null;
+                if (designFrame is null || sourceFrame is null || !designNames.Contains(designFrame) || !seen.Add(designFrame))
+                {
+                    errors.Add($"{path} must reference one unique existing design frame and a source frame.");
+                    continue;
+                }
+                values.Add(new FunctionalValueBinding { DesignFrameName = designFrame, SourceFrameName = sourceFrame });
+            }
+        }
+
+        return new FunctionalExportProfile
+        {
+            Source = new ProjectSource
+            {
+                Type = SourceTypes.WowFrameXml,
+                FileName = fileName,
+                ReferencePath = referencePath,
+                ReadOnly = true,
+                Sha256 = sha256,
+            },
+            HostFrameName = host,
+            States = states,
+            Values = values,
         };
     }
 
@@ -262,19 +359,62 @@ public static class ProjectCodec
                     writer.WriteString("referencePath", referencePath);
                 if (source.ReadOnly)
                     writer.WriteBoolean("readOnly", true);
+                if (source.Sha256 is { Length: > 0 } sha256)
+                    writer.WriteString("sha256", sha256);
+                writer.WriteEndObject();
+            }
+
+            if (project.FunctionalExport is { } functional)
+            {
+                writer.WriteStartObject("functionalExport");
+                writer.WriteStartObject("source");
+                writer.WriteString("fileName", functional.Source.FileName);
+                writer.WriteString("referencePath", functional.Source.ReferencePath);
+                writer.WriteString("sha256", functional.Source.Sha256);
+                writer.WriteEndObject();
+                writer.WriteString("hostFrame", functional.HostFrameName);
+                if (functional.States.Count > 0)
+                {
+                    writer.WriteStartArray("states");
+                    foreach (var state in functional.States)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("state", state.StateId);
+                        writer.WriteString("sourceFrame", state.SourceFrameName);
+                        if (state.TextEquals is { Length: > 0 } textEquals) writer.WriteString("textEquals", textEquals);
+                        if (state.Visible is { } visible) writer.WriteBoolean("visible", visible);
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
+                if (functional.Values.Count > 0)
+                {
+                    writer.WriteStartArray("values");
+                    foreach (var binding in functional.Values)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("designFrame", binding.DesignFrameName);
+                        writer.WriteString("sourceFrame", binding.SourceFrameName);
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
                 writer.WriteEndObject();
             }
 
             if (project.Editor.Groups.Count > 0 || project.Editor.LockedElements.Count > 0
                 || project.Editor.DesignObjects.Count > 0 || project.Editor.DesignStates.Count > 0
                 || project.Editor.DesignOrder.Count > 0
-                || project.Editor.ActiveDesignStateId is not null || project.Editor.Workspace != "design")
+                || project.Editor.ActiveDesignStateId is not null || project.Editor.PreviewStateId is not null
+                || project.Editor.Workspace != "design")
             {
                 writer.WriteStartObject("editor");
                 if (project.Editor.Workspace != "design")
                     writer.WriteString("workspace", project.Editor.Workspace);
                 if (project.Editor.ActiveDesignStateId is { Length: > 0 } activeState)
                     writer.WriteString("activeDesignState", activeState);
+                if (project.Editor.PreviewStateId is { Length: > 0 } previewState)
+                    writer.WriteString("previewState", previewState);
                 if (project.Editor.LockedElements.Count > 0)
                 {
                     writer.WriteStartArray("lockedElements");
@@ -757,6 +897,7 @@ public static class ProjectCodec
             DesignObjects = designObjects,
             DesignOrder = ReadStringArray(editor, "designOrder", "editor", names, errors),
             ActiveDesignStateId = activeState,
+            PreviewStateId = ReadOptionalString(editor, "previewState"),
             Workspace = workspace,
         };
     }

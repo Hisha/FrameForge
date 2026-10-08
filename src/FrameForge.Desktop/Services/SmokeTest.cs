@@ -634,15 +634,18 @@ public static class SmokeTest
                 vm.Editor.IsPlaceholder,
                 vm.Editor.SourceNote);
 
-            // Editing an imported frame must work and must not reach back into the XML.
+            // Real single-anchor imported geometry is editable; synthesized stand-ins are not.
             vm.OnCanvasSelectionRequested("LFDParentFrame");
+            Check("an imported stand-in is locked for functional geometry export",
+                !vm.CanEditSelection && vm.SelectedGeometryEditDiagnostic.Contains("stand-in", StringComparison.OrdinalIgnoreCase));
+            vm.OnCanvasSelectionRequested("NativeHuntsFrameContentPanelRecord");
             vm.Editor.Width = "400";
             vm.Editor.CommitBufferedField("width");
-            Check("an imported frame is editable",
-                vm.Project.Find("LFDParentFrame")!.Width == 400);
+            Check("safe imported geometry is editable",
+                vm.Project.Find("NativeHuntsFrameContentPanelRecord")!.Width == 400);
             Check("editing did not touch the source file",
                 Sha256(xmlFixture) == xmlDigestBefore);
-            vm.Editor.Width = "355";
+            vm.Editor.Width = "280";
             vm.Editor.CommitBufferedField("width");
         }
         finally

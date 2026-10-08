@@ -4,6 +4,7 @@ using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core;
 using FrameForge.Core.Examples;
+using FrameForge.Core.Export;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
@@ -75,6 +76,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private bool _runtimeValueRequiredDraft;
     [ObservableProperty] private string _runtimeBindingDraft = string.Empty;
     [ObservableProperty] private string _runtimeBindingValidation = string.Empty;
+    [ObservableProperty] private string? _selectedFunctionalValueSource;
     [ObservableProperty] private string _newObjectName = string.Empty;
     [ObservableProperty] private string _newImageAsset = string.Empty;
     [ObservableProperty] private string _stateNameDraft = string.Empty;
@@ -119,6 +121,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         && SelectedFrame?.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR
         && Project.Editor.DesignObjectFor(SelectedName) is not null;
     public bool CanEditRuntimeBinding => IsRuntimeBindingEligible && !IsSelectionLocked;
+    public bool HasFunctionalExport => Project.FunctionalExport is not null;
+    public bool CanExportFunctionalDesign => Project.FunctionalExport is not null;
+    public string FunctionalExportSummary => Project.FunctionalExport is { } profile
+        ? $"Associated with {profile.Source.DisplayName} · host {profile.HostFrameName} · {profile.States.Count} state probes · {profile.Values.Count} value sources"
+        : "No functional FrameXML associated.";
+    public ObservableCollection<string> FunctionalValueSourceOptions { get; } = [];
+    public bool CanMapFunctionalValue => HasFunctionalExport && RuntimeValueRequiredDraft && IsRuntimeBindingEligible;
     public string RuntimeBindingOperationSummary => SelectedFrame?.Kind == FrameKind.STATUSBAR
         ? "Adapter contract: number → SetValue"
         : "Adapter contract: string → SetText";
@@ -249,6 +258,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// every time the tree tree is rebuilt or refreshed.
     /// </summary>
     private int _selectionSyncDepth;
+
+    /// <summary>
+    /// Expanded ordinary source nodes, keyed by stable imported/project identity rather than by
+    /// disposable TreeView rows. Hidden filtered nodes stay in the set until the user collapses
+    /// them after they become visible again.
+    /// </summary>
+    private readonly HashSet<string> _expandedTreeNames = new(StringComparer.Ordinal);
+    private bool _discardTreeExpansionOnNextRebuild;
 
     /// <summary>Whether the last drag moved the whole selection or only one frame.</summary>
     private bool _lastDragMovedSelection;
@@ -404,6 +421,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string SelectedSourceLocation => SelectedFrame?.SourceLocation?.ToString() ?? "Location unavailable";
     public string SelectedInheritance => SelectedFrame?.Inherits ?? "(none)";
     public string SelectedParentName => SelectedFrame?.Parent ?? "UIParent / screen";
+    public string SelectedSourceAnchor => Editor.SourceAnchorSummary;
     public string SelectedGroupMembership => SelectedFrame is null
         ? string.Empty
         : string.Join(", ", Project.Editor.GroupsFor(SelectedFrame.Name).DefaultIfEmpty("(none)"));
@@ -455,17 +473,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         get => _selectedPreviewState;
         set
         {
-            if (value is null || ReferenceEquals(value, _selectedPreviewState))
+            if (value is null || value.Id == _selectedPreviewState?.Id)
                 return;
             _selectedPreviewState = value;
+            if (Project.Editor.PreviewStateId != value.Id)
+            {
+                Project = Project with { Editor = Project.Editor with { PreviewStateId = value.Id } };
+                IsDirty = true;
+            }
             OnPropertyChanged();
             OnPropertyChanged(nameof(PreviewStateExplanation));
+            OnPropertyChanged(nameof(PreviewSimulationSummary));
             RelaidOut(Project, SelectedName, $"Design-time preview state: {value.Label}. Source XML is unchanged.");
         }
     }
 
     public string PreviewStateExplanation => SelectedPreviewState?.Description
         ?? PreviewStateRegistry.XmlDefaults.Description;
+
+    public string PreviewSimulationSummary => SelectedPreviewState is { IsXmlDefaults: false } state
+        ? $"SIMULATED PREVIEW: {state.Label}. {state.Description} Runtime XML visibility remains unchanged."
+        : "Preview uses literal XML visibility. Runtime Lua is recorded but not executed.";
 
     public string WoWClientPath => _wowClient.ClientPath ?? string.Empty;
     public string WoWClientVersion => _wowClient.Build?.ToString() ?? "Unknown";
@@ -758,6 +786,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     public void CancelRuntimeBinding() => RefreshRuntimeBindingUi(Project, SelectedName);
+
+    partial void OnSelectedFunctionalValueSourceChanged(string? value)
+    {
+        if (_syncingDesignUi || Project.FunctionalExport is not { } profile
+            || SelectedName is not { } name || !RuntimeValueRequiredDraft)
+            return;
+        var normalized = string.IsNullOrWhiteSpace(value) ? null : value;
+        var values = profile.Values.Where(item => item.DesignFrameName != name).ToList();
+        if (normalized is not null)
+            values.Add(new FunctionalValueBinding { DesignFrameName = name, SourceFrameName = normalized });
+        Project = Project with { FunctionalExport = profile with { Values = values } };
+        IsDirty = true;
+        Status = normalized is null
+            ? $"Removed the functional value source for {Project.Editor.DisplayNameFor(SelectedFrame!)}."
+            : $"{Project.Editor.DisplayNameFor(SelectedFrame!)} will mirror {normalized} in functional export.";
+        NotifyFunctionalExportState();
+    }
 
     public bool SetSelectedStatusBarTextureFromFile(string path, bool importExternal = false)
     {
@@ -1097,6 +1142,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private ObservableCollection<FrameXmlDiagnostic> _importDiagnostics = [];
 
+    /// <summary>Diagnostics from the most recent functional layout export attempt.</summary>
+    public ObservableCollection<ExportDiagnostic> LayoutExportDiagnostics { get; } = [];
+
+    public bool HasLayoutExportDiagnostics => LayoutExportDiagnostics.Count > 0;
+
+    /// <summary>True only for an imported FrameXML project with a persisted source identity.</summary>
+    public bool CanExportLayoutChanges => FunctionalLayoutExporter.IsEligible(Project);
+
+    private string? _functionalSourcePath;
+
     /// <summary>
     /// The outcome of the most recent FrameXML import, kept whole rather than reduced to a
     /// sentence.
@@ -1113,7 +1168,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public FrameDef? SelectedFrame => Project.Find(SelectedName);
 
     /// <summary>True when the inspector can be edited.</summary>
-    public bool CanEditSelection => SelectedFrame is not null && !IsSelectionLocked;
+    public bool CanEditSelection => SelectedFrame is { } frame && !IsSelectionLocked && CanEditImportedGeometry(frame);
+
+    /// <summary>Imported functional frames keep identity and anchor relationships read-only.</summary>
+    public bool CanEditLayoutStructure => CanEditSelection && Project.Source?.IsReadOnlyXml != true;
+
+    public string SelectedGeometryEditDiagnostic => SelectedFrame is { } frame && !CanEditImportedGeometry(frame)
+        ? ImportedGeometryDiagnostic(frame)
+        : string.Empty;
 
     /// <summary>The whole selection in click order; the last entry is the primary selection.</summary>
     public IReadOnlyList<string> SelectedNames => _selectedNames;
@@ -1185,13 +1247,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Source = null;
         ImportDiagnostics = [];
         LastImport = null;
+        LayoutExportDiagnostics.Clear();
+        OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+        OnPropertyChanged(nameof(CanExportLayoutChanges));
         _assetSourcePath = ResolveSourcePath(project, path);
+        _functionalSourcePath = ResolveFunctionalSourcePath(project, path);
+        RefreshFunctionalSourceOptions();
+        NotifyFunctionalExportState();
         ConfigureAssets();
         RefreshPreviewStateOptions(project);
         RefreshGroups(project);
         Workspace = project.Editor.Workspace == "inspect" ? WorkspaceExperience.Inspect : WorkspaceExperience.Design;
         foreach (var option in WorkspaceOptions) option.Refresh();
         RefreshDesignStates(project);
+
+        // Expansion belongs to the document currently on screen. Do not let matching generated
+        // identities in a newly opened file inherit navigation state from the previous document.
+        _expandedTreeNames.Clear();
+        _discardTreeExpansionOnNextRebuild = true;
 
         var keep = project.Frames.FirstOrDefault(f => f.Name == SelectedName)?.Name;
         SelectedName = keep;
@@ -1333,8 +1406,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        // The reference path is informational only: it records where the layout came from, and
-        // nothing writes back to it.
+        // The reference path identifies the read-only baseline for layout export. Nothing writes
+        // back to it; export always writes a separately selected destination.
         var imported = result.Project!;
         var project = imported with { Source = imported.Source! with { ReferencePath = path } };
 
@@ -1350,6 +1423,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Status = result.Warnings.Count == 0
             ? result.SummaryText
             : $"{result.SummaryText} {result.WarningSummary}";
+
+        // A validated local client is authoritative for Blizzard definitions and artwork. Resolve
+        // the focused dependency set on import so Preview does not require a second hidden step.
+        if (_wowClient.IsValid && CanResolveStockAssets)
+            ResolveMissingStockAssets();
     }
 
     /// <summary>Writes the project to disk. Returns false when the write was refused or failed.</summary>
@@ -1384,6 +1462,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     Source = Project.Source with { ReferencePath = portableReference.Replace('\\', '/') },
                 };
             }
+            if (Project.FunctionalExport?.Source.ReferencePath is { Length: > 0 } functionalReference)
+            {
+                var source = Project.FunctionalExport.Source;
+                var absolute = _functionalSourcePath ?? ResolveFunctionalSourcePath(Project, ProjectPath);
+                var portableReference = absolute is { Length: > 0 }
+                    ? Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(path))!, absolute)
+                    : functionalReference;
+                projectToSave = projectToSave with
+                {
+                    FunctionalExport = Project.FunctionalExport with
+                    {
+                        Source = source with { ReferencePath = portableReference.Replace('\\', '/') },
+                    },
+                };
+            }
 
             File.WriteAllText(path, ProjectCodec.Serialize(projectToSave));
             ProjectPath = path;
@@ -1398,6 +1491,157 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return false;
         }
     }
+
+    public bool AssociateFunctionalSource(string path)
+    {
+        LayoutExportDiagnostics.Clear();
+        try
+        {
+            var xml = File.ReadAllText(path);
+            var result = FunctionalExportAssociator.Associate(Project, xml, path,
+                string.IsNullOrWhiteSpace(ProjectPath) ? null : ProjectPath);
+            foreach (var diagnostic in result.Diagnostics)
+                LayoutExportDiagnostics.Add(diagnostic);
+            OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+            if (!result.Success || result.Profile is null)
+            {
+                Status = "Functional association blocked: " + DescribeExportDiagnostics(result.Diagnostics);
+                return false;
+            }
+            Project = Project with { FunctionalExport = result.Profile };
+            _functionalSourcePath = Path.GetFullPath(path);
+            IsDirty = true;
+            RefreshFunctionalSourceOptions();
+            RefreshRuntimeBindingUi(Project, SelectedName);
+            NotifyFunctionalExportState();
+            Status = $"Associated {Path.GetFileName(path)} with host {result.Profile.HostFrameName}. Save the project to persist this mapping.";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Status = $"Could not associate functional FrameXML: {ex.Message}";
+            return false;
+        }
+    }
+
+    public bool ExportFunctionalDesign(string destination)
+    {
+        LayoutExportDiagnostics.Clear();
+        OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+        var sourcePath = _functionalSourcePath ?? ResolveFunctionalSourcePath(Project, ProjectPath);
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+            return FailLayoutExport("FUNCTIONAL_SOURCE_MISSING",
+                "The associated functional FrameXML cannot be found. Associate it again before exporting.");
+        try
+        {
+            var result = FunctionalDesignPackageExporter.Export(Project,
+                string.IsNullOrWhiteSpace(ProjectPath) ? null : ProjectPath,
+                File.ReadAllText(sourcePath), destination);
+            foreach (var diagnostic in result.Preparation.Diagnostics)
+                LayoutExportDiagnostics.Add(diagnostic);
+            OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+            if (!result.Success)
+            {
+                Status = "Functional export blocked: " + DescribeExportDiagnostics(result.Preparation.Diagnostics);
+                return false;
+            }
+            Status = $"Exported functional FrameXML with {result.Preparation.DesignObjectCount} design objects to {destination}. Original source and Lua unchanged.";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            return FailLayoutExport("FUNCTIONAL_EXPORT_FAILED", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Exports an updated copy of the authoritative FrameXML. The source is read, verified, and
+    /// patched in memory; it is never opened for writing.
+    /// </summary>
+    public bool ExportLayoutChanges(string destinationPath)
+    {
+        LayoutExportDiagnostics.Clear();
+        OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+
+        if (!CanExportLayoutChanges)
+            return FailLayoutExport("SOURCE_INELIGIBLE",
+                "Export Layout Changes is available only for an imported FrameXML source with preserved identity metadata.");
+
+        var sourcePath = ResolveSourcePath(Project, ProjectPath);
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return FailLayoutExport("SOURCE_PATH_UNRESOLVED",
+                "The source path cannot be resolved. Reopen the XML or save the project beside its source.");
+
+        string sourceFullPath;
+        string destinationFullPath;
+        try
+        {
+            sourceFullPath = Path.GetFullPath(sourcePath);
+            destinationFullPath = Path.GetFullPath(destinationPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return FailLayoutExport("INVALID_DESTINATION", $"The export destination is invalid: {ex.Message}");
+        }
+
+        if (!Path.GetExtension(destinationFullPath).Equals(".xml", StringComparison.OrdinalIgnoreCase))
+            return FailLayoutExport("INVALID_DESTINATION", "Layout changes must be exported to an .xml file.");
+        if (string.Equals(sourceFullPath, destinationFullPath, StringComparison.OrdinalIgnoreCase))
+            return FailLayoutExport("SOURCE_OVERWRITE_REFUSED",
+                "The destination is the imported source file. Choose a different path; the source is never overwritten.");
+        if (!File.Exists(sourceFullPath))
+            return FailLayoutExport("SOURCE_MISSING", $"The source XML no longer exists: {sourceFullPath}");
+
+        try
+        {
+            var sourceXml = File.ReadAllText(sourceFullPath);
+            var result = FunctionalLayoutExporter.Prepare(Project, sourceXml);
+            foreach (var diagnostic in result.Diagnostics)
+                LayoutExportDiagnostics.Add(diagnostic);
+            OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+
+            if (!result.Success || result.PatchedXml is null)
+            {
+                Status = "Layout export blocked: " + DescribeExportDiagnostics(result.Diagnostics);
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(destinationFullPath);
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                return FailLayoutExport("INVALID_DESTINATION", "The selected destination directory does not exist.");
+
+            var temporary = Path.Combine(directory, $".{Path.GetFileName(destinationFullPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(temporary, result.PatchedXml);
+                File.Move(temporary, destinationFullPath, true);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                    File.Delete(temporary);
+            }
+
+            Status = $"Exported {result.ModifiedFrameCount} modified frame(s) to {destinationFullPath}. Source XML unchanged.";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return FailLayoutExport("EXPORT_IO_FAILED", $"Layout export failed safely: {ex.Message}");
+        }
+    }
+
+    private bool FailLayoutExport(string code, string message)
+    {
+        LayoutExportDiagnostics.Add(new ExportDiagnostic(ExportSeverity.Error, code, message));
+        OnPropertyChanged(nameof(HasLayoutExportDiagnostics));
+        Status = $"Layout export blocked: {code}: {message}";
+        return false;
+    }
+
+    private static string DescribeExportDiagnostics(IEnumerable<ExportDiagnostic> diagnostics) =>
+        string.Join(" ", diagnostics.Where(item => item.Severity == ExportSeverity.Error).Take(3)
+            .Select(item => $"{item.Code}: {item.Message}"));
 
     /// <summary>Selects a frame, or clears the selection with null.</summary>
     /// <remarks>
@@ -1559,6 +1803,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{name} is locked. Unlock the element or its group before moving it.";
             return;
         }
+        if (!CanEditImportedGeometry(frame))
+        {
+            Status = ImportedGeometryDiagnostic(frame);
+            return;
+        }
 
         var updated = frame with { OffsetX = frame.OffsetX + modelDx, OffsetY = frame.OffsetY + modelDy };
         ReplaceFrame(name, updated);
@@ -1567,6 +1816,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void DragSelection(double modelDx, double modelDy)
     {
+        if (Project.Source?.IsReadOnlyXml == true && _selectedNames.Select(Project.Find).Any(frame => frame is null || !CanEditImportedGeometry(frame)))
+        {
+            Status = "The selection contains imported geometry that cannot be moved safely (multiple anchors, setAllPoints, or no source identity).";
+            return;
+        }
         var outcome = SelectionArrange.Move(Project, Layout, _selectedNames, modelDx, modelDy);
         if (!outcome.Changed)
         {
@@ -1589,6 +1843,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (_selectedNames.Count == 0)
             return;
+        if (Project.Source?.IsReadOnlyXml == true && _selectedNames.Select(Project.Find).Any(frame => frame is null || !CanEditImportedGeometry(frame)))
+        {
+            Status = "The selection contains imported geometry that cannot be arranged safely.";
+            return;
+        }
 
         var outcome = SelectionArrange.Arrange(Project, Layout, _selectedNames, command);
         if (!outcome.Changed)
@@ -2577,6 +2836,49 @@ public sealed partial class MainWindowViewModel : ObservableObject
             : null;
     }
 
+    private static string? ResolveFunctionalSourcePath(Project project, string? projectPath)
+    {
+        var reference = project.FunctionalExport?.Source.ReferencePath;
+        if (string.IsNullOrWhiteSpace(reference))
+            return null;
+        if (Path.IsPathRooted(reference))
+            return reference;
+        return projectPath is { Length: > 0 }
+            ? Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath)!, reference))
+            : null;
+    }
+
+    private void RefreshFunctionalSourceOptions()
+    {
+        FunctionalValueSourceOptions.Clear();
+        var path = _functionalSourcePath ?? ResolveFunctionalSourcePath(Project, ProjectPath);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+        try
+        {
+            var imported = FrameXmlImporter.ImportFile(path);
+            if (!imported.Ok || imported.Project is null)
+                return;
+            foreach (var name in imported.Project.Frames
+                         .Where(frame => frame.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR)
+                         .Select(frame => frame.Name).OrderBy(name => name, StringComparer.Ordinal))
+                FunctionalValueSourceOptions.Add(name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // The export command reports a missing/unreadable association. Loading a saved visual
+            // design must remain possible even when its optional functional source is offline.
+        }
+    }
+
+    private void NotifyFunctionalExportState()
+    {
+        OnPropertyChanged(nameof(HasFunctionalExport));
+        OnPropertyChanged(nameof(CanExportFunctionalDesign));
+        OnPropertyChanged(nameof(FunctionalExportSummary));
+        OnPropertyChanged(nameof(CanMapFunctionalValue));
+    }
+
     private void ReplaceFrame(string name, FrameDef updated, string? rename = null)
     {
         if (Project.Editor.IsLocked(name))
@@ -2584,6 +2886,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Status = $"{name} is locked. Unlock the element or its group before editing geometry.";
             RelaidOut(Project, name, null);
             return;
+        }
+        var original = Project.Find(name);
+        if (original is not null && Project.Source?.IsReadOnlyXml == true)
+        {
+            if (!CanEditImportedGeometry(original))
+            {
+                Status = ImportedGeometryDiagnostic(original);
+                RelaidOut(Project, name, null);
+                return;
+            }
+            if (rename is not null || !SupportedImportedGeometryOnly(original, updated))
+            {
+                Status = "Functional FrameXML editing is layout-only: frame identity, parent, anchor relationship, visibility, and appearance remain read-only.";
+                RelaidOut(Project, name, null);
+                return;
+            }
         }
         var targetName = rename ?? updated.Name;
 
@@ -2618,6 +2936,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsDirty = true;
         RelaidOut(Project, targetName, null);
     }
+
+    private bool CanEditImportedGeometry(FrameDef frame) =>
+        Project.Source?.IsReadOnlyXml != true ||
+        (frame.SourceLocation is not null && !frame.Placeholder && !frame.SetAllPoints && frame.ExtraAnchors.Count == 0);
+
+    private static string ImportedGeometryDiagnostic(FrameDef frame) => frame switch
+    {
+        { Placeholder: true } => "This is a synthesized stand-in and has no safe source element to patch.",
+        { SourceLocation: null } => "This frame has no unambiguous source location and is locked for functional export.",
+        { SetAllPoints: true } => "This frame uses setAllPoints; explicit size and offsets do not safely control its runtime geometry.",
+        { ExtraAnchors.Count: > 0 } => "This frame has multiple anchors; FrameForge will not guess which constraint should move.",
+        _ => string.Empty,
+    };
+
+    private static bool SupportedImportedGeometryOnly(FrameDef before, FrameDef after) =>
+        before with { Width = after.Width, Height = after.Height, OffsetX = after.OffsetX, OffsetY = after.OffsetY } == after;
 
     private void RelaidOut(Project project, string? selection, string? status)
     {
@@ -2820,11 +3154,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RefreshRuntimeBindingUi(Project project, string? selection)
     {
-        var metadata = project.Editor.DesignObjectFor(selection);
-        RuntimeValueRequiredDraft = metadata?.RuntimeValueRequired == true;
-        RuntimeBindingDraft = metadata?.RuntimeBinding ?? string.Empty;
-        RuntimeBindingValidation = string.Empty;
+        _syncingDesignUi = true;
+        try
+        {
+            var metadata = project.Editor.DesignObjectFor(selection);
+            RuntimeValueRequiredDraft = metadata?.RuntimeValueRequired == true;
+            RuntimeBindingDraft = metadata?.RuntimeBinding ?? string.Empty;
+            RuntimeBindingValidation = string.Empty;
+            SelectedFunctionalValueSource = project.FunctionalExport?.Values
+                .FirstOrDefault(item => item.DesignFrameName == selection)?.SourceFrameName;
+        }
+        finally
+        {
+            _syncingDesignUi = false;
+        }
         OnPropertyChanged(nameof(RuntimeBindingOperationSummary));
+        OnPropertyChanged(nameof(CanMapFunctionalValue));
     }
 
     private static string ColorHex(ColorRgba color) => $"#{Channel(color.A):X2}{Channel(color.R):X2}{Channel(color.G):X2}{Channel(color.B):X2}";
@@ -2923,6 +3268,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void NotifySelectionInspection()
     {
         OnPropertyChanged(nameof(CanEditSelection));
+        OnPropertyChanged(nameof(CanEditLayoutStructure));
+        OnPropertyChanged(nameof(SelectedGeometryEditDiagnostic));
         OnPropertyChanged(nameof(SelectedOrigin));
         OnPropertyChanged(nameof(SelectedElementKind));
         OnPropertyChanged(nameof(SelectedSourceFile));
@@ -2930,6 +3277,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedSourceLocation));
         OnPropertyChanged(nameof(SelectedInheritance));
         OnPropertyChanged(nameof(SelectedParentName));
+        OnPropertyChanged(nameof(SelectedSourceAnchor));
         OnPropertyChanged(nameof(SelectedGroupMembership));
         OnPropertyChanged(nameof(SelectedPreviewProvenance));
         OnPropertyChanged(nameof(IsSelectionLocked));
@@ -2979,9 +3327,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PreviewStateOptions.Clear();
         foreach (var state in _previewStates.StatesFor(project))
             PreviewStateOptions.Add(state);
-        _selectedPreviewState = PreviewStateOptions.FirstOrDefault() ?? PreviewStateRegistry.XmlDefaults;
+        _selectedPreviewState = PreviewStateOptions.FirstOrDefault(state => state.Id == project.Editor.PreviewStateId)
+                                ?? _previewStates.DefaultStateFor(project);
         OnPropertyChanged(nameof(SelectedPreviewState));
         OnPropertyChanged(nameof(PreviewStateExplanation));
+        OnPropertyChanged(nameof(PreviewSimulationSummary));
     }
 
     /// <summary>
@@ -3003,12 +3353,40 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _selectionSyncDepth++;
         try
         {
+            if (_discardTreeExpansionOnNextRebuild)
+                _discardTreeExpansionOnNextRebuild = false;
+            else
+                CaptureTreeExpansion(TreeRoots);
+
+            ExpandSelectedPath(project, SelectedName);
             RebuildTreeCore(project);
         }
         finally
         {
             _selectionSyncDepth--;
         }
+    }
+
+    private void CaptureTreeExpansion(IEnumerable<FrameTreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (!node.IsConceptual)
+            {
+                if (node.IsExpanded)
+                    _expandedTreeNames.Add(node.Name);
+                else
+                    _expandedTreeNames.Remove(node.Name);
+            }
+            CaptureTreeExpansion(node.Children);
+        }
+    }
+
+    /// <summary>Expands only the ancestors needed to reveal the exact selected identity.</summary>
+    private void ExpandSelectedPath(Project project, string? selectedName)
+    {
+        for (var frame = project.Find(selectedName); frame?.Parent is { } parent; frame = project.Find(parent))
+            _expandedTreeNames.Add(parent);
     }
 
     private void RebuildTreeCore(Project project)
@@ -3082,9 +3460,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var origin = _elementOrigins.GetValueOrDefault(frame.Name, ElementOrigin.ProjectSource);
         return new FrameTreeNode(frame, children, origin.Label(), project.Editor.IsLocked(frame.Name),
             string.Join(", ", project.Editor.GroupsFor(frame.Name)),
-            Workspace == WorkspaceExperience.Design ? project.Editor.DisplayNameFor(frame) : frame.Name,
+            Workspace == WorkspaceExperience.Design ? DesignTreeDisplayName(project, frame) : frame.Name,
+            IsExpanded: _expandedTreeNames.Contains(frame.Name),
             IsSelected: _selectedNames.Contains(frame.Name, StringComparer.Ordinal),
             IsPrimarySelection: frame.Name == SelectedName);
+    }
+
+    /// <summary>
+    /// Gives an imported panel the useful name of its direct background artwork while keeping the
+    /// artwork itself distinct. This prevents an anonymous texture from masquerading as the owning
+    /// source frame in DESIGN (for example, Record versus Hunt Panel Record).
+    /// </summary>
+    private static string DesignTreeDisplayName(Project project, FrameDef frame)
+    {
+        var display = project.Editor.DisplayNameFor(frame);
+        if (frame.Kind == FrameKind.FRAME && FindRepresentativeArtwork(project, frame) is { } artwork)
+            return project.Editor.DisplayNameFor(artwork);
+
+        if (frame.Kind == FrameKind.TEXTURE && frame.Anonymous && frame.Parent is { } parentName
+            && project.Find(parentName) is { Kind: FrameKind.FRAME } parent
+            && ReferenceEquals(FindRepresentativeArtwork(project, parent), frame))
+            return $"{display} Artwork";
+
+        return display;
+    }
+
+    private static FrameDef? FindRepresentativeArtwork(Project project, FrameDef frame)
+    {
+        var frameDisplay = project.Editor.DisplayNameFor(frame);
+        return FrameHierarchy.Children(project, frame.Name)
+            .FirstOrDefault(child => child.Kind == FrameKind.TEXTURE && child.Anonymous
+                && child.Visual?.Texture?.File is { Length: > 0 }
+                && project.Editor.DisplayNameFor(child).EndsWith(frameDisplay, StringComparison.OrdinalIgnoreCase));
     }
 
     private IReadOnlyList<FrameTreeNode> BuildChildren(Project project, string parent,

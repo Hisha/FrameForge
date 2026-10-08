@@ -236,6 +236,12 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
         var changed = false;
         var frames = declaredProject.Frames.Select(frame =>
         {
+            if (frame.Placeholder && ResolveExternalFrame(frame.Name) is { } external
+                && (frame.Width != external.Width || frame.Height != external.Height))
+            {
+                changed = true;
+                return frame with { Width = external.Width, Height = external.Height };
+            }
             if (frame.Kind == FrameKind.BUTTON && frame.Inherits is { } template
                 && ResolveButton(template) is { } button)
             {
@@ -250,11 +256,14 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
             if (frame.Kind == FrameKind.FONTSTRING && frame.Visual?.Text is { HasLiteralText: true } text
                 && ResolveFont(text.FontTemplate) is { } font && (frame.Width <= 0 || frame.Height <= 0))
             {
+                var lines = text.Text!.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
+                var measuredWidth = lines.Max(line => MeasureText(font, line));
+                var measuredHeight = font.Size * Math.Max(1, lines.Length);
                 changed = true;
                 return frame with
                 {
-                    Width = frame.Width > 0 ? frame.Width : Math.Ceiling(MeasureText(font, text.Text!)),
-                    Height = frame.Height > 0 ? frame.Height : Math.Ceiling(font.Size),
+                    Width = frame.Width > 0 ? frame.Width : Math.Ceiling(measuredWidth),
+                    Height = frame.Height > 0 ? frame.Height : Math.Ceiling(measuredHeight),
                 };
             }
             return frame;
@@ -328,6 +337,14 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
         }
         if (!_definitions.TryGetValue(name, out var element) || element.Name.LocalName != "Font")
         {
+            if (FallbackFont(name) is { } fallback)
+            {
+                AddOnce(StockDefinitionStatus.PartiallyResolved, "approximated-stock-font",
+                    $"Stock font '{name}' is unavailable; preview uses fallback metrics and the host font. Configure a build-12340 client for authoritative definitions.",
+                    name, "FrameForge fallback metrics");
+                chain.Remove(name);
+                return _fonts[name] = fallback;
+            }
             AddOnce(StockDefinitionStatus.Unresolved, "unresolved-stock-font",
                 $"Stock font style '{name}' is not available in the managed definition cache.", name);
             chain.Remove(name);
@@ -373,6 +390,31 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
             fontReference?.Equals(@"Fonts\FRIZQT__.TTF", StringComparison.OrdinalIgnoreCase) == true ? _fontPath : null,
             _fontRegistered ? "Friz Quadrata TT" : null, size, color, justifyH, justifyV, outline,
             shadowX, shadowY, shadowColor, provenance);
+    }
+
+    /// <summary>
+    /// Conservative metrics for the small stock style set used by imported Native Hunts text.
+    /// These keep labels selectable when client definitions are unavailable and are diagnosed as
+    /// approximations; cached build-12340 definitions always take precedence.
+    /// </summary>
+    private StockFontStyle? FallbackFont(string name)
+    {
+        var (size, color) = name switch
+        {
+            "GameFontNormalSmall" => (10d, new ColorRgba(1, 0.82, 0)),
+            "GameFontHighlightSmall" => (10d, ColorRgba.White),
+            "GameFontNormal" => (12d, new ColorRgba(1, 0.82, 0)),
+            "GameFontHighlight" => (12d, ColorRgba.White),
+            "GameFontNormalLarge" => (16d, new ColorRgba(1, 0.82, 0)),
+            "GameFontHighlightLarge" => (16d, ColorRgba.White),
+            _ => (0d, ColorRgba.White),
+        };
+        if (size <= 0)
+            return null;
+        return new StockFontStyle(name, @"Fonts\FRIZQT__.TTF", _fontPath,
+            _fontRegistered ? "Friz Quadrata TT" : null, size, color, "CENTER", "MIDDLE", null,
+            1, -1, new ColorRgba(0, 0, 0),
+            [new StockPropertyProvenance("approximate font metrics", name, "FrameForge fallback metrics")]);
     }
 
     private void LoadXml(string resource)

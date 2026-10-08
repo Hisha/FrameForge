@@ -135,6 +135,49 @@ public sealed class StockTemplateResolverTests : IDisposable
     }
 
     [Fact]
+    public void External_parent_uses_cached_stock_geometry_only_in_effective_project()
+    {
+        using var resolver = new StockTemplateResolver(_provider);
+        var placeholder = new FrameDef
+        {
+            Name = StockTemplateResolver.LfdParentFrame,
+            Width = 355,
+            Height = 500,
+            Placeholder = true,
+        };
+        var declared = new Project { Frames = [placeholder] };
+
+        var effective = resolver.ApplyEffectiveGeometry(declared);
+
+        Assert.Equal((355d, 500d), (declared.Frames[0].Width, declared.Frames[0].Height));
+        Assert.Equal((355d, 440d), (effective.Frames[0].Width, effective.Frames[0].Height));
+        Assert.True(effective.Frames[0].Placeholder);
+        Assert.Single(effective.Frames);
+    }
+
+    [Fact]
+    public void Known_stock_font_uses_diagnosed_fallback_metrics_without_client_definitions()
+    {
+        File.Delete(Path.Combine(_temp, "Interface", "FrameXML", "Fonts.xml"));
+        File.Delete(Path.Combine(_temp, "Interface", "FrameXML", "FontStyles.xml"));
+        using var resolver = new StockTemplateResolver(_provider);
+        var declared = new FrameDef
+        {
+            Name = "Label", Kind = FrameKind.FONTSTRING,
+            Visual = new FrameVisual { Text = new TextVisual("Hunt\nRecord", FontTemplate: "GameFontNormalLarge") },
+        };
+
+        var style = resolver.ResolveFont("GameFontNormalLarge");
+        var effective = resolver.ApplyEffectiveGeometry(new Project { Frames = [declared] }).Frames[0];
+
+        Assert.NotNull(style);
+        Assert.Equal(16, style!.Size);
+        Assert.True(effective.Width > 0);
+        Assert.Equal(32, effective.Height);
+        Assert.Contains(resolver.Diagnostics, item => item.Code == "approximated-stock-font");
+    }
+
+    [Fact]
     public void Index_reload_invalidates_cached_styles_and_increments_generation()
     {
         using var resolver = new StockTemplateResolver(_provider);

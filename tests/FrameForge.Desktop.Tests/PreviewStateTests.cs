@@ -33,6 +33,8 @@ public sealed class PreviewStateTests
         var unknown = _registry.Resolve(new Project(), "standard-hunt");
         Assert.True(unknown.State.IsXmlDefaults);
         Assert.Contains(unknown.Diagnostics, item => item.Code == "unknown-preview-state");
+        Assert.Equal("idle", _registry.DefaultStateFor(_native).Id);
+        Assert.True(_registry.DefaultStateFor(new Project()).IsXmlDefaults);
     }
 
     [Fact]
@@ -129,11 +131,15 @@ public sealed class PreviewStateTests
     }
 
     [Fact]
-    public void Preview_and_hybrid_use_the_same_effective_state_and_debug_remains_resolved()
+    public void Preview_and_hybrid_use_the_same_effective_state_and_selection_persists()
     {
         var settings = Path.Combine(Path.GetTempPath(), $"frameforge-preview-{Guid.NewGuid():N}.json");
         var vm = new MainWindowViewModel(settings, stockTemplates: new PassThroughStockTemplates());
         vm.Load(_native, null, "test");
+        Assert.Equal("idle", vm.SelectedPreviewState!.Id);
+        Assert.False(vm.Project.Find("NativeHuntsFrame")!.Visible);
+        Assert.True(vm.PresentationProject.Find("NativeHuntsFrame")!.Visible);
+        Assert.True(vm.PresentationProject.Find("NativeHuntsFrameContentPanelRecord")!.Visible);
         vm.SelectedPreviewState = vm.PreviewStateOptions.Single(state => state.Id == "standard-hunt");
         vm.SetViewMode(CanvasViewMode.PREVIEW);
         var preview = ProjectCodec.Serialize(vm.PresentationProject);
@@ -142,7 +148,14 @@ public sealed class PreviewStateTests
         vm.SetViewMode(CanvasViewMode.DEBUG);
         Assert.Equal(_native.Frames.Count, vm.Layout.Frames.Count);
         Assert.NotEmpty(vm.Layout.Rects);
-        Assert.False(vm.IsDirty);
+        Assert.True(vm.IsDirty);
+        Assert.Equal("standard-hunt", vm.Project.Editor.PreviewStateId);
+
+        var reopened = ProjectCodec.Parse(ProjectCodec.Serialize(vm.Project)).Project!;
+        var reopenedVm = new MainWindowViewModel(settings, stockTemplates: new PassThroughStockTemplates());
+        reopenedVm.Load(reopened, "preview.fforge.json", "reopened");
+        Assert.Equal("standard-hunt", reopenedVm.SelectedPreviewState!.Id);
+        Assert.False(reopenedVm.Project.Find("NativeHuntsFrame")!.Visible);
     }
 
     [Fact]

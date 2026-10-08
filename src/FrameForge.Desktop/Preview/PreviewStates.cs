@@ -64,6 +64,7 @@ public sealed record PreviewOverrideSet(
 public interface IPreviewStateRegistry
 {
     IReadOnlyList<PreviewStateDefinition> StatesFor(Project project);
+    PreviewStateDefinition DefaultStateFor(Project project);
     PreviewOverrideSet Resolve(Project project, string? stateId);
     Project Apply(Project source, PreviewOverrideSet overrides);
 }
@@ -83,6 +84,15 @@ public sealed class PreviewStateRegistry : IPreviewStateRegistry
         NativeHuntsPreviewStates.IsApplicable(project)
             ? [XmlDefaults, .. NativeHuntsPreviewStates.Definitions]
             : [XmlDefaults];
+
+    /// <summary>
+    /// Functional imports open in one representative, explicitly simulated state. Other projects
+    /// remain literal XML by default. The state is presentation-only and never mutates source data.
+    /// </summary>
+    public PreviewStateDefinition DefaultStateFor(Project project) =>
+        NativeHuntsPreviewStates.IsApplicable(project)
+            ? NativeHuntsPreviewStates.Definitions.First(state => state.Id == "idle")
+            : XmlDefaults;
 
     public PreviewOverrideSet Resolve(Project project, string? stateId)
     {
