@@ -12,8 +12,9 @@ namespace FrameForge.Core.Import;
 /// <para>
 /// The importer is deliberately READ-ONLY and lives in Core, not in the editor: it turns a
 /// document into a <see cref="Project"/> plus an explicit account of what it could not carry
-/// across. It never writes XML. Export and rewriting are a later milestone, and until they
-/// exist, no code path in FrameForge can modify the source file.
+/// across. It never writes XML. The only XML mutation path in FrameForge is the layout-only
+/// <see cref="FrameForge.Core.Export.LayoutPatchApplier"/>, which returns patched text and
+/// never writes to the file on disk.
 /// </para>
 /// <para>
 /// WoW semantics it reproduces, because they are load-bearing for real FrameXML:
@@ -118,9 +119,10 @@ public static class FrameXmlImporter
     /// Imports a document from disk, READ-ONLY.
     /// </summary>
     /// <remarks>
-    /// The path is recorded as informational source metadata only. FrameForge has no XML writer
-    /// at all, so importing cannot modify the source; the test suite pins that guarantee against
-    /// a copy of the real Native Hunts document.
+    /// The path is recorded as informational source metadata only. FrameForge's only XML
+    /// mutation path, <see cref="FrameForge.Core.Export.LayoutPatchApplier"/>, returns text and
+    /// writes no files, so importing cannot modify the source; the test suite pins that
+    /// guarantee against a copy of the real Native Hunts document.
     /// </remarks>
     public static FrameXmlImportResult ImportFile(string path, FrameXmlImportOptions? options = null)
     {

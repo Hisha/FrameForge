@@ -423,9 +423,9 @@ public static class ProjectCodec
     /// Blocks a write that would land on the imported FrameXML source.
     /// </summary>
     /// <remarks>
-    /// FrameForge has no XML writer and never edits a FrameXML file, but "we have no way to do
-    /// it" is a weaker guarantee than "the save path is refused", and a future format could
-    /// change that. The guard is on the path only: it cannot tell one XML file from another, so
+    /// FrameForge never edits a FrameXML file on disk — even the layout-only patch applier only
+    /// returns text — but "we have no way to do it" is a weaker guarantee than "the save path is
+    /// refused", and a future format could change that. The guard is on the path only: it cannot tell one XML file from another, so
     /// it refuses any <c>.xml</c> target and points the user at the project extension instead.
     /// </remarks>
     public static bool CanSaveTo(string path) => !IsXmlPath(path);

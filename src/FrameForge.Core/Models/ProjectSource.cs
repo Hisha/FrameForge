@@ -32,8 +32,9 @@ public static class SourceTypes
 /// Null when the reference is only informational.
 /// </param>
 /// <param name="ReadOnly">
-/// True when the source must not be modified. FrameForge never writes XML back, but the flag
-/// keeps the intent explicit and survives a save/load round trip.
+/// True when the source must not be modified. FrameForge never writes XML back to the source —
+/// even the layout-only patch applier only returns text — but the flag keeps the intent explicit
+/// and survives a save/load round trip.
 /// </param>
 public sealed record ProjectSource
 {
