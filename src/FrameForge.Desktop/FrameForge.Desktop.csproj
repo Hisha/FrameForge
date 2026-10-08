@@ -20,6 +20,10 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <!-- Link the single derived PNG into the assembly so the window icon is independent
+         of the current directory and of the installed file layout. -->
+    <AvaloniaResource Include="..\..\assets\branding\frameforge-icon.png"
+                      Link="Assets/Branding/frameforge-icon.png" />
   </ItemGroup>
 
   <ItemGroup>

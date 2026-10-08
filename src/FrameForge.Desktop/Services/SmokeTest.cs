@@ -108,6 +108,8 @@ public static class SmokeTest
                 failures++;
         }
 
+        Check("window has packaged application icon", window.Icon is not null);
+
         // 1. The example loads and resolves to the golden geometry.
         vm.LoadNativeHuntsExample();
         var layout = vm.Layout;

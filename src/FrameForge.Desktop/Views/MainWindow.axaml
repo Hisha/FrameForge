@@ -11,6 +11,7 @@
     x:Class="FrameForge.Desktop.Views.MainWindow"
     x:DataType="vm:MainWindowViewModel"
     Title="{Binding WindowTitle}"
+    Icon="/Assets/Branding/frameforge-icon.png"
     Width="1440"
     Height="880"
     MinWidth="1000"

@@ -201,6 +201,20 @@ pwsh scripts/publish-win.ps1 -Installer
 
 Produces `dist/FrameForge-0.1.0-win-x64.zip` and `dist/FrameForge-Setup-0.1.0.exe` when installer is built.
 
+### Application icon assets
+
+The root-level `icon.png` is the authoritative artwork. Do not edit the derived files by hand.
+Regenerate `assets/branding/frameforge-icon.png` and `frameforge-icon.ico` on Windows with:
+
+```powershell
+pwsh scripts/generate-icons.ps1
+```
+
+The deterministic conversion fits the complete source into a transparent square without
+cropping or distortion. It creates a 512×512 PNG for Avalonia and Linux, plus a 32-bit ICO with
+16, 24, 32, 48, 64, 128, and 256 pixel frames. The script refuses to upscale a source smaller
+than the derived PNG.
+
 ## Release Process
 
 Create and push a tag to trigger GitHub release:
