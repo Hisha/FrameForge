@@ -1,11 +1,13 @@
 using System.Text.RegularExpressions;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Core.Semantics.V2;
 
 /// <summary>Validates the schema-v2 semantic graph without mutating or repairing it.</summary>
 public static partial class UiDocumentValidator
 {
-    public static IReadOnlyList<UiDiagnostic> Validate(UiDocument document)
+    public static IReadOnlyList<UiDiagnostic> Validate(UiDocument document,
+        BlizzardTemplateRegistry? registry = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -75,6 +77,7 @@ public static partial class UiDocumentValidator
             ValidateChildren(node.Id, node.Children, node.CanOwnChildren);
             ValidateAnchors(node);
             ValidateProperties(node);
+            ValidateTemplate(node);
         }
 
         ValidateOwnershipCycles();
@@ -256,6 +259,69 @@ public static partial class UiDocumentValidator
             if (properties.StatusBar is { } partialStatus &&
                 (partialStatus.Minimum is null) != (partialStatus.Maximum is null))
                 Add("FFV2-PROP-018", "StatusBar minimum and maximum must be authored together.", "authoredProperties.statusBar", node.Id);
+        }
+
+        void ValidateTemplate(UiNode node)
+        {
+            if (node.BlizzardTemplate is null)
+                return;
+            if (string.IsNullOrWhiteSpace(node.BlizzardTemplate))
+            {
+                Add("FFV2-TEMPLATE-001", "A Blizzard template identity cannot be empty.",
+                    "blizzardTemplate", node.Id);
+                return;
+            }
+            if (node.Kind != UiNodeKind.Button)
+            {
+                Add("FFV2-TEMPLATE-002",
+                    $"Template '{node.BlizzardTemplate}' is a Button template and is incompatible with {node.Kind}.",
+                    "blizzardTemplate", node.Id);
+                return;
+            }
+            if (registry is null)
+            {
+                Add("FFV2-TEMPLATE-003",
+                    $"Template '{node.BlizzardTemplate}' requires an explicit build-12340 registry snapshot.",
+                    "blizzardTemplate", node.Id);
+                return;
+            }
+
+            var template = registry.Resolve(node.BlizzardTemplate);
+            if (template is null)
+            {
+                Add("FFV2-TEMPLATE-001",
+                    $"Template '{node.BlizzardTemplate}' is unknown to this registry snapshot.",
+                    "blizzardTemplate", node.Id);
+                return;
+            }
+            if (!string.Equals(template.Definition.NativeType, "Button", StringComparison.Ordinal))
+            {
+                Add("FFV2-TEMPLATE-002",
+                    $"Template '{node.BlizzardTemplate}' has native type '{template.Definition.NativeType}', which is incompatible with Button.",
+                    "blizzardTemplate", node.Id);
+                return;
+            }
+            foreach (var templateDiagnostic in template.Diagnostics
+                         .Where(item => item.Severity == BlizzardTemplateDiagnosticSeverity.Error))
+            {
+                Add("FFV2-TEMPLATE-004",
+                    $"Template '{node.BlizzardTemplate}' is unresolved: {templateDiagnostic.Code}: {templateDiagnostic.Message}",
+                    "blizzardTemplate", node.Id);
+            }
+            foreach (var dependency in template.AssetDependencies.Where(item => !item.IsResolved))
+            {
+                Add("FFV2-TEMPLATE-005",
+                    $"Template '{node.BlizzardTemplate}' requires unresolved asset '{dependency.LogicalPath}': {dependency.Diagnostic ?? "no diagnostic supplied"}.",
+                    "blizzardTemplate", node.Id);
+            }
+
+            var effective = UiTemplateEffectiveProperties.Resolve(node, registry);
+            if (effective.Values.Frame?.Width is null || effective.Values.Frame.Height is null)
+            {
+                Add("FFV2-TEMPLATE-006",
+                    $"Template '{node.BlizzardTemplate}' and the authored overrides do not provide both required dimensions.",
+                    "authoredProperties.frame", node.Id);
+            }
         }
 
         void ValidateOwnershipCycles()

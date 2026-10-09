@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FrameForge.Core.Models;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Core.Semantics.V2;
 
@@ -196,6 +197,9 @@ public sealed record FontStringProperties
 public sealed record ButtonProperties
 {
     public bool? Enabled { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Text { get; init; }
 }
 
 public sealed record StatusBarProperties
@@ -221,9 +225,28 @@ public sealed record AuthoredProperties
 /// A future template resolver may produce this separate view. It is deliberately not stored
 /// in <see cref="UiDocument"/>, so inherited values can never overwrite authored state.
 /// </summary>
+public enum EffectivePropertyOrigin
+{
+    Authored,
+    TemplateDeclared,
+    TemplateInherited,
+    Unresolved,
+}
+
 public sealed record EffectiveNodeProperties(
     AuthoredProperties Values,
-    IReadOnlyDictionary<string, string> Provenance);
+    string? TemplateIdentity,
+    BlizzardButtonProperties? TemplateValues,
+    IReadOnlyDictionary<string, EffectivePropertyOrigin> Provenance,
+    IReadOnlyList<BlizzardAssetDependency> UnresolvedDependencies,
+    IReadOnlyList<BlizzardKnownPreviewBehavior> PreviewBehaviors,
+    IReadOnlyList<BlizzardTemplateDiagnostic> Diagnostics)
+{
+    [JsonIgnore]
+    public bool IsResolved => Diagnostics.All(item =>
+        item.Severity != BlizzardTemplateDiagnosticSeverity.Error) &&
+        UnresolvedDependencies.Count == 0;
+}
 
 public sealed record NodeEditorMetadata
 {
@@ -242,6 +265,10 @@ public sealed record UiNode
     public IReadOnlyList<SemanticId> Children { get; init; } = [];
     public IReadOnlyList<UiAnchor> Anchors { get; init; } = [];
     public required AuthoredProperties AuthoredProperties { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BlizzardTemplate { get; init; }
+
     public NodeEditorMetadata? Editor { get; init; }
 
     [JsonIgnore]

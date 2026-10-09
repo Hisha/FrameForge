@@ -1,6 +1,6 @@
 # FrameForge Project Schema v2 semantic model
 
-Status: Milestone 3 native FrameXML export foundation
+Status: Milestone 4.1C Blizzard template semantic/export integration
 Target: World of Warcraft 3.3.5a, build 12340  
 Namespace: `FrameForge.Core.Semantics.V2`
 
@@ -11,9 +11,10 @@ WoW-compatible semantic graph connected to the existing Avalonia hierarchy, canv
 property inspector. The model exists beside schema v1; no v1 project is migrated or interpreted as
 v2.
 
-Milestone 3 adds deterministic native FrameXML export and a generic manifest directly from this
-model. It does not implement XML import, XML round-trip editing, template resolution, module runtime
-integration, EPF/MPQ generation, or addon support. Existing FrameForge v1 projects continue to use
+Milestone 4.1C adds optional verified Blizzard template references, transient effective-property
+resolution, and deterministic native template export directly from this model. It does not implement
+XML import, XML round-trip editing, template rendering, module runtime integration, EPF/MPQ
+generation, or addon support. Existing FrameForge v1 projects continue to use
 their original model, codec, editor path, and exporters. The complete export contract is documented
 in [FRAMEFORGE_V2_EXPORT.md](FRAMEFORGE_V2_EXPORT.md).
 
@@ -98,6 +99,8 @@ Every node has:
 - An `OwnerReference` naming either the composition root or a local node by identity.
 - Ordered children and ordered anchors.
 - An `AuthoredProperties` block appropriate to its kind.
+- An optional native Blizzard template identity. The build-12340 registry currently accepts it only
+  for compatible Button nodes.
 - Optional editor-only metadata.
 
 Ownership is deliberately reciprocal. A child names its owner, and the owner lists that child's
@@ -133,7 +136,7 @@ blocks rather than one untyped bag:
 - Region: width, height, draw layer, sublevel, and tint.
 - Texture: texture reference.
 - Font string: font reference and literal text.
-- Button: enabled state.
+- Button: enabled state and optional authored text.
 - Status bar: range, value, and texture reference.
 
 Frame strata and frame level are valid only for frames. Region draw layer and sublevel are valid
@@ -141,9 +144,15 @@ only for regions. Texture, font-string, button, and status-bar blocks are valid 
 matching node kinds. Dimensions, color components, frame levels, and status-bar ranges are checked
 for contradictions.
 
-`EffectiveNodeProperties` is a separate, non-persisted result type with property provenance. A
-future template resolver can produce it, but inherited/effective values can never overwrite the
-authored project facts or be flattened into `UiDocument`.
+`EffectiveNodeProperties` is a separate, non-persisted result type with authored,
+template-declared, template-inherited, and unresolved provenance. It exposes resolved template
+values, unresolved asset dependencies, and audited preview behaviors. Template dimensions fill
+missing effective dimensions without creating authored width/height values; inherited/effective
+values never overwrite project facts or become flattened into `UiDocument`.
+
+`UiDocumentEditor` remains the only mutation path. Registry-aware operations assign, change, clear,
+or explicitly remove eligible dimension overrides atomically. Changing templates preserves existing
+authored overrides unless clearing was explicitly requested.
 
 Milestone 2 adds width and height to `RegionProperties`. WoW textures and font strings share layout
 geometry even though they are not frames; keeping those dimensions in the region block enables
@@ -165,6 +174,8 @@ It detects:
   undeclared external globals.
 - Invalid root sizing definitions and undeclared module hosts.
 - Frame/region property mismatches and kind-specific property mismatches.
+- Unknown or incompatible templates, missing registry snapshots, unresolved template definitions or
+  assets, and missing dimensions after template-aware effective resolution.
 - Non-positive/non-finite dimensions, invalid tint components, negative frame levels, and
   contradictory status-bar ranges or values.
 
@@ -176,7 +187,9 @@ host-bound restrictions without changing the semantic distinction.
 `UiDocumentCodec` reads and writes deterministic, indented JSON with a trailing newline. The format
 marker is `frameforge-ui-document` and the version is `2`. Internal identities are canonical GUID
 strings. Array order carries document, ownership, and anchor order. External references, editor
-metadata, and persisted diagnostics round trip.
+metadata, persisted diagnostics, optional template identities, and button text round trip. Absent
+template identities and button text are omitted so existing v2 JSON documents retain their previous
+representation.
 
 The codec rejects invalid JSON, missing required members, unknown members, integer enum values,
 wrong format markers, and unsupported schema versions with a path-bearing error. In particular, a
@@ -288,3 +301,5 @@ embedded into the test assembly for byte-for-byte drift detection.
   editing is deferred.
 - Native visual FrameXML, a manifest, and supported project-owned artwork can be generated. Lua,
   EPF, MPQ, TOC, module behavior, and existing-XML editing remain outside this milestone.
+- Template selection UI and template visual rendering remain deferred to Milestone 4.1D. The only
+  recognized runtime behavior is the audited character-tab resize marker; no Lua is executed.

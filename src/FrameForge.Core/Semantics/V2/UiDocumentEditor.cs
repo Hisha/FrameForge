@@ -1,5 +1,6 @@
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Core.Semantics.V2;
 
@@ -19,6 +20,10 @@ public sealed record SemanticEditResult
 /// </summary>
 public sealed class UiDocumentEditor
 {
+    private readonly BlizzardTemplateRegistry? _templates;
+
+    public UiDocumentEditor(BlizzardTemplateRegistry? templates = null) => _templates = templates;
+
     public SemanticEditResult CreateControl(UiDocument document, UiNodeKind kind, OwnerReference owner,
         string displayLabel, string? runtimeName = null)
     {
@@ -176,6 +181,49 @@ public sealed class UiDocumentEditor
     public SemanticEditResult UpdateProperties(UiDocument document, SemanticId id, AuthoredProperties properties) =>
         UpdateNode(document, id, node => node with { AuthoredProperties = properties });
 
+    public SemanticEditResult AssignBlizzardTemplate(UiDocument document, SemanticId id,
+        string templateIdentity, bool clearEligibleOverrides = false)
+    {
+        if (_templates is null)
+            return Failure(document, "FFV2-EDIT-TEMPLATE-REGISTRY",
+                "Assigning a Blizzard template requires an explicit registry snapshot.", id);
+        if (string.IsNullOrWhiteSpace(templateIdentity) || _templates.Resolve(templateIdentity) is not { } template)
+            return Failure(document, "FFV2-EDIT-TEMPLATE-UNKNOWN",
+                $"Template '{templateIdentity}' is not verified by this registry snapshot.", id);
+        if (!template.IsResolved)
+            return Failure(document, "FFV2-EDIT-TEMPLATE-UNRESOLVED",
+                $"Template '{templateIdentity}' has unresolved definitions or dependencies.", id);
+
+        return UpdateNode(document, id, node =>
+        {
+            if (node.Kind != UiNodeKind.Button)
+                return node with { BlizzardTemplate = templateIdentity };
+            var properties = node.AuthoredProperties;
+            if (clearEligibleOverrides && properties.Frame is { } frame)
+                properties = properties with { Frame = frame with { Width = null, Height = null } };
+            return node with { BlizzardTemplate = templateIdentity, AuthoredProperties = properties };
+        });
+    }
+
+    public SemanticEditResult ClearBlizzardTemplate(UiDocument document, SemanticId id) =>
+        UpdateNode(document, id, node => node with { BlizzardTemplate = null });
+
+    public SemanticEditResult ClearTemplateEligibleOverrides(UiDocument document, SemanticId id)
+    {
+        var node = document.Nodes.FirstOrDefault(item => item.Id == id);
+        if (node is null)
+            return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (node.BlizzardTemplate is null)
+            return Failure(document, "FFV2-EDIT-TEMPLATE-NONE",
+                "Template-derived overrides can be cleared only from a templated node.", id);
+        return UpdateNode(document, id, item => item with
+        {
+            AuthoredProperties = item.AuthoredProperties.Frame is { } frame
+                ? item.AuthoredProperties with { Frame = frame with { Width = null, Height = null } }
+                : item.AuthoredProperties,
+        });
+    }
+
     private static AuthoredProperties DefaultProperties(UiNodeKind kind) => kind switch
     {
         UiNodeKind.Frame => new() { Frame = new FrameProperties { Width = 120, Height = 64, Visible = true } },
@@ -210,9 +258,9 @@ public sealed class UiDocumentEditor
         return Complete(document, candidate, id);
     }
 
-    private static SemanticEditResult Complete(UiDocument original, UiDocument candidate, SemanticId affected)
+    private SemanticEditResult Complete(UiDocument original, UiDocument candidate, SemanticId affected)
     {
-        var diagnostics = UiDocumentValidator.Validate(candidate);
+        var diagnostics = UiDocumentValidator.Validate(candidate, _templates);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
             return new SemanticEditResult { Document = original, Diagnostics = diagnostics, AffectedId = affected };
         return new SemanticEditResult

@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using FrameForge.Core.Semantics.V2;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Core.Export;
 
@@ -76,10 +77,11 @@ public static partial class V2FrameXmlExporter
     public const int ManifestVersion = 1;
     private const string GeneratedPrefix = "FF2_";
 
-    public static V2FrameXmlExportPlan Build(UiDocument document, string? projectFilePath)
+    public static V2FrameXmlExportPlan Build(UiDocument document, string? projectFilePath,
+        BlizzardTemplateRegistry? registry = null)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var diagnostics = UiDocumentValidator.Validate(document)
+        var diagnostics = UiDocumentValidator.Validate(document, registry)
             .Select(item => new V2FrameXmlDiagnostic(item.Severity, item.Code, item.Message, item.NodeId, item.PropertyPath))
             .ToList();
         diagnostics.AddRange(document.Diagnostics.Select(item => new V2FrameXmlDiagnostic(
@@ -93,7 +95,7 @@ public static partial class V2FrameXmlExporter
         ValidateExportProperties(document, diagnostics);
         var assets = BuildAssets(document, projectFilePath, names, diagnostics, out var texturePaths,
             out var assetDependencies);
-        var dependencies = BuildExternalDependencies(document, root, names, assetDependencies, diagnostics);
+        var dependencies = BuildExternalDependencies(document, root, names, assetDependencies, registry, diagnostics);
         var controls = document.Nodes.Select(node => new V2ExportedControl(
                 node.Id,
                 names.GetValueOrDefault(node.Id, string.Empty),
@@ -130,9 +132,10 @@ public static partial class V2FrameXmlExporter
     public static V2FrameXmlExportResult Export(
         UiDocument document,
         string? projectFilePath,
-        string destinationDirectory)
+        string destinationDirectory,
+        BlizzardTemplateRegistry? registry = null)
     {
-        var plan = Build(document, projectFilePath);
+        var plan = Build(document, projectFilePath, registry);
         if (!plan.IsValid)
             return new(false, plan, []);
 
@@ -426,6 +429,7 @@ public static partial class V2FrameXmlExporter
         CompositionRoot root,
         IReadOnlyDictionary<SemanticId, string> names,
         IReadOnlyList<V2ExternalDependency> assetDependencies,
+        BlizzardTemplateRegistry? registry,
         List<V2FrameXmlDiagnostic> diagnostics)
     {
         var consumers = document.Nodes.SelectMany(node => node.Anchors
@@ -453,6 +457,18 @@ public static partial class V2FrameXmlExporter
             fontConsumers.Add(names[node.Id]);
         }
 
+        var authoredTemplates = document.Nodes
+            .Where(node => !string.IsNullOrWhiteSpace(node.BlizzardTemplate))
+            .Select(node => (Node: node, Template: registry?.Resolve(node.BlizzardTemplate)))
+            .Where(item => item.Template is not null)
+            .ToArray();
+        var nativeTemplateDependencies = authoredTemplates.Select(item => new V2ExternalDependency(
+            "blizzardTemplate", item.Node.BlizzardTemplate!, item.Template!.Definition.Source.LogicalPath,
+            [names[item.Node.Id]]));
+        var nativeTemplateAssets = authoredTemplates.SelectMany(item => item.Template!.AssetDependencies
+            .Select(asset => new V2ExternalDependency("blizzardAsset", asset.LogicalPath,
+                "Installed build-12340 client", [names[item.Node.Id]])));
+
         var references = document.ExternalReferences.Select(reference => new V2ExternalDependency(
                 string.Equals(reference.GlobalName, root.ExternalHostName, StringComparison.Ordinal)
                     ? "moduleHost"
@@ -466,6 +482,13 @@ public static partial class V2FrameXmlExporter
             .Concat(templateDependencies.Select(item => new V2ExternalDependency(
                 "blizzardTemplate", item.Key, "Blizzard FrameXML font objects",
                 item.Value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())))
+            .Concat(nativeTemplateDependencies)
+            .Concat(nativeTemplateAssets)
+            .GroupBy(item => (item.Kind, item.Identity))
+            .Select(group => new V2ExternalDependency(group.Key.Kind, group.Key.Identity,
+                group.Select(item => item.ExpectedSource).FirstOrDefault(item => item is not null),
+                group.SelectMany(item => item.Consumers).Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal).ToArray()))
             .OrderBy(item => item.Kind, StringComparer.Ordinal)
             .ThenBy(item => item.Identity, StringComparer.Ordinal)
             .ToArray();
@@ -569,6 +592,10 @@ public static partial class V2FrameXmlExporter
             _ => throw new InvalidOperationException($"'{node.Kind}' is not a frame type."),
         });
         writer.WriteAttributeString("name", names[node.Id]);
+        if (!string.IsNullOrWhiteSpace(node.BlizzardTemplate))
+            writer.WriteAttributeString("inherits", node.BlizzardTemplate);
+        if (node.Kind == UiNodeKind.Button && node.AuthoredProperties.Button?.Text is { } text)
+            writer.WriteAttributeString("text", text);
         var properties = node.AuthoredProperties.Frame;
         if (properties?.Strata is { } strata)
             writer.WriteAttributeString("frameStrata", Upper(strata));

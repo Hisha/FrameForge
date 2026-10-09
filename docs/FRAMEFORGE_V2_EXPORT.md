@@ -1,6 +1,6 @@
 # FrameForge v2 native FrameXML export
 
-Status: Milestone 3 export foundation  
+Status: Milestone 4.1C Blizzard template export integration
 Target: World of Warcraft 3.3.5a, build 12340  
 Implementation: `FrameForge.Core.Export.V2FrameXmlExporter`
 
@@ -17,8 +17,9 @@ export contains:
 It does not emit Lua, an addon TOC, EPF data, or an MPQ. The AzerothCore module creates the host
 frame and owns behavior. `mod-content-manager` owns packaging and distribution.
 
-`V2FrameXmlExporter.Build(document, projectFilePath)` is a pure planning operation except for
-reading referenced artwork. `Export(document, projectFilePath, destinationDirectory)` stages the
+`V2FrameXmlExporter.Build(document, projectFilePath, registry)` is a pure planning operation except
+for reading referenced artwork. The registry is optional only for documents without template
+references. `Export(document, projectFilePath, destinationDirectory, registry)` stages the
 complete package and publishes only a valid plan. Errors return an empty XML/manifest plan and no
 destination is created. Re-export can replace files declared by a prior v2 manifest; it refuses to
 overwrite unrelated conflicting files.
@@ -47,6 +48,17 @@ Typed anchor targets serialize without coordinate conversion:
 
 There is no `UIParent` fallback. It can appear only as an explicitly declared external global.
 Width and height are emitted together. Multiple anchors retain authored order.
+
+## Blizzard templates
+
+A templated node emits its authored native identity as `inherits="TemplateName"`. The exporter
+requires an explicit immutable build-12340 registry snapshot whenever any node references a
+template. Unknown identities, incompatible widget kinds, unresolved inheritance, missing assets,
+or missing effective dimensions fail closed before XML is published.
+
+Only authored overrides are emitted. Template-derived dimensions and inherited child regions are
+not copied into generated XML. Authored Button text uses the native `text` attribute. The manifest
+records the template identity, its source XML, and required Blizzard artwork/font dependencies.
 
 ## Runtime identities
 
@@ -99,8 +111,8 @@ include invalid/colliding identities, partial width/height pairs, disabled butto
 runtime call), status values without an authored range, invalid font-object names, missing or unsafe
 artwork, malformed/unsupported artwork formats, and output-file ownership conflicts.
 
-This foundation does not resolve template inheritance, verify that an arbitrary declared external
-global exists at runtime, execute Lua, synthesize button behavior, convert PNG, generate gameplay
+This foundation does not visually render templates, verify that an arbitrary declared external
+global exists at runtime, execute Lua, synthesize general button behavior, convert PNG, generate gameplay
 state logic, or validate against a redistributable copy of Blizzard's `UI.xsd`. Its structural
 regressions are based on the installed build-12340 FrameXML cache and native conventions documented
 in `FRAMEFORGE_ARCHITECTURE_RESEARCH.md`.
