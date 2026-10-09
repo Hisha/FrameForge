@@ -242,6 +242,10 @@ public static partial class UiDocumentValidator
             if (properties.Region?.Tint is { } tint &&
                 !new[] { tint.Red, tint.Green, tint.Blue, tint.Alpha }.All(value => double.IsFinite(value) && value is >= 0 and <= 1))
                 Add("FFV2-PROP-011", "Region tint components must be finite values from 0 through 1.", "authoredProperties.region.tint", node.Id);
+            if (properties.Region is { } region &&
+                (region.Width is not null && !IsPositiveFinite(region.Width.Value) ||
+                 region.Height is not null && !IsPositiveFinite(region.Height.Value)))
+                Add("FFV2-PROP-019", "Authored region dimensions must be finite and greater than zero.", "authoredProperties.region", node.Id);
             if (properties.StatusBar is { Minimum: not null, Maximum: not null } status)
             {
                 if (!double.IsFinite(status.Minimum.Value) || !double.IsFinite(status.Maximum.Value) || status.Minimum.Value >= status.Maximum.Value)

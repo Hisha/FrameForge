@@ -12,6 +12,7 @@ using Avalonia.VisualTree;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Export;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Semantics.V2;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.ViewModels;
 
@@ -100,9 +101,20 @@ public partial class MainWindow : Window
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();
 
+    private void OnNewV2Click(object? sender, RoutedEventArgs e) => ViewModel?.NewV2Project();
+
     private void OnNewLfdClick(object? sender, RoutedEventArgs e) => ViewModel?.NewDungeonFinderProject();
 
     private void OnAddFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddFrame();
+    private void OnAddV2FrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.Frame);
+    private void OnAddV2TextureClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.Texture);
+    private void OnAddV2FontStringClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.FontString);
+    private void OnAddV2ButtonClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.Button);
+    private void OnAddV2StatusBarClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.StatusBar);
+    private void OnApplyV2InspectorClick(object? sender, RoutedEventArgs e) => ViewModel?.ApplyV2Inspector();
+    private void OnMoveV2EarlierClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(-1);
+    private void OnMoveV2LaterClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(1);
+    private void OnDeleteV2Click(object? sender, RoutedEventArgs e) => ViewModel?.DeleteV2Selection();
     private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
     private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
     private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();

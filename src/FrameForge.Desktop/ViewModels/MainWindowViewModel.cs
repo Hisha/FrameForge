@@ -9,6 +9,7 @@ using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Semantics.V2;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Inspection;
@@ -52,10 +53,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDesignWorkspace))]
     [NotifyPropertyChangedFor(nameof(IsInspectWorkspace))]
+    [NotifyPropertyChangedFor(nameof(ShowV1DesignTools))]
+    [NotifyPropertyChangedFor(nameof(ShowV2DesignTools))]
+    [NotifyPropertyChangedFor(nameof(ShowV1InspectTools))]
     private WorkspaceExperience _workspace = WorkspaceExperience.Design;
 
     public bool IsDesignWorkspace => Workspace == WorkspaceExperience.Design;
     public bool IsInspectWorkspace => Workspace == WorkspaceExperience.Inspect;
+    public bool ShowV1DesignTools => IsV1Project && IsDesignWorkspace;
+    public bool ShowV2DesignTools => IsV2Project && IsDesignWorkspace;
+    public bool ShowV1InspectTools => IsV1Project && IsInspectWorkspace;
     public IReadOnlyList<WorkspaceOption> WorkspaceOptions { get; private set; } = [];
 
     [ObservableProperty] private string _designNameDraft = string.Empty;
@@ -121,8 +128,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         && SelectedFrame?.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR
         && Project.Editor.DesignObjectFor(SelectedName) is not null;
     public bool CanEditRuntimeBinding => IsRuntimeBindingEligible && !IsSelectionLocked;
-    public bool HasFunctionalExport => Project.FunctionalExport is not null;
-    public bool CanExportFunctionalDesign => Project.FunctionalExport is not null;
+    public bool HasFunctionalExport => IsV1Project && Project.FunctionalExport is not null;
+    public bool CanExportFunctionalDesign => IsV1Project && Project.FunctionalExport is not null;
     public string FunctionalExportSummary => Project.FunctionalExport is { } profile
         ? $"Associated with {profile.Source.DisplayName} · host {profile.HostFrameName} · {profile.States.Count} optional state probes · {profile.Values.Count} optional value mirrors"
         : "No functional FrameXML associated.";
@@ -1091,7 +1098,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>True when the Native Hunts example is loaded, used to label the status hint.</summary>
     public string ProjectDescription =>
-        Project.Frames.Count == 0
+        IsV2Project
+            ? $"Schema v2 · {_v2Document!.Nodes.Count} controls · explicit composition root"
+            : Project.Frames.Count == 0
             ? "Empty project."
             : $"{Project.Frames.Count} frames on a {Number(Project.Screen.Width)} x {Number(Project.Screen.Height)} screen.";
 
@@ -1148,7 +1157,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public bool HasLayoutExportDiagnostics => LayoutExportDiagnostics.Count > 0;
 
     /// <summary>True only for an imported FrameXML project with a persisted source identity.</summary>
-    public bool CanExportLayoutChanges => FunctionalLayoutExporter.IsEligible(Project);
+    public bool CanExportLayoutChanges => IsV1Project && FunctionalLayoutExporter.IsEligible(Project);
 
     private string? _functionalSourcePath;
 
@@ -1236,6 +1245,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void Load(Project project, string? path, string status)
     {
+        if (!_loadingV2)
+            SetV2Document(null);
         Project = project;
         ProjectPath = path ?? string.Empty;
         IsDirty = false;
@@ -1367,7 +1378,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            var result = ProjectCodec.Parse(File.ReadAllText(path));
+            var text = File.ReadAllText(path);
+            if (UiDocumentCodec.HasV2FormatMarker(text))
+            {
+                var v2Result = UiDocumentCodec.Parse(text);
+                if (!v2Result.Ok)
+                {
+                    Status = $"Could not open {FileName(path)}: {v2Result.ErrorText}";
+                    return;
+                }
+                var openDiagnostics = UiDocumentValidator.Validate(v2Result.Document!);
+                if (openDiagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+                {
+                    Status = $"Could not open {FileName(path)}: " +
+                             string.Join(" ", openDiagnostics.Take(3).Select(item => $"{item.Code}: {item.Message}"));
+                    return;
+                }
+                LoadV2(v2Result.Document!, path, $"Opened schema-v2 project {FileName(path)}.");
+                return;
+            }
+
+            var result = ProjectCodec.Parse(text);
             if (!result.Ok)
             {
                 RelaidOut(Project, SelectedName, $"Could not open {FileName(path)}: {result.ErrorText}");
@@ -1433,6 +1464,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Writes the project to disk. Returns false when the write was refused or failed.</summary>
     public bool SaveToFile(string path)
     {
+        if (IsV2Project)
+            return SaveV2ToFile(path);
         if (!ProjectCodec.CanSaveTo(path))
         {
             Status =
@@ -1788,6 +1821,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void DragFrame(string name, double modelDx, double modelDy)
     {
+        if (IsV2Project)
+        {
+            if (_v2Document is null || UiDocumentProjection.IdFromProjectionName(name) is not { } id ||
+                !_v2Document.Nodes.Any(node => node.Id == id))
+                return;
+            ApplyV2Result(_v2Editor.MoveBy(_v2Document, id, modelDx, modelDy), $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}.");
+            return;
+        }
         _lastDragMovedSelection = _selectedNames.Count > 1 && _selectedNames.Contains(name, StringComparer.Ordinal);
         if (_lastDragMovedSelection)
         {
@@ -1841,6 +1882,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void ArrangeSelection(SelectionArrangeCommand command)
     {
+        if (IsV2Project)
+        {
+            Status = "Multi-control alignment is not implemented for schema v2 in Milestone 2; drag or edit offsets explicitly.";
+            return;
+        }
         if (_selectedNames.Count == 0)
             return;
         if (Project.Source?.IsReadOnlyXml == true && _selectedNames.Select(Project.Find).Any(frame => frame is null || !CanEditImportedGeometry(frame)))
@@ -1867,6 +1913,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (!IsDirty)
             return;
 
+        if (IsV2Project)
+        {
+            Status = $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}; authored anchor offsets remain typed and parent-relative.";
+            return;
+        }
+
         // The gesture decides the wording, not the selection: dragging one frame while four are
         // selected still moved one frame, and saying "4 objects" would misreport the edit.
         if (_lastDragMovedSelection)
@@ -1878,6 +1930,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Adds a frame under the current selection and selects it.</summary>
     public void AddFrame()
     {
+        if (IsV2Project)
+        {
+            AddV2Control(UiNodeKind.Frame);
+            return;
+        }
         var parent = SelectedName;
         var name = UniqueName(parent is null ? "Frame" : $"{parent}Child");
         var frame = new FrameDef
@@ -2204,6 +2261,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (Workspace == workspace)
             return;
         Workspace = workspace;
+        if (IsV2Project)
+        {
+            foreach (var option in WorkspaceOptions) option.Refresh();
+            RebuildTree(Project);
+            NotifySelectionInspection();
+            Status = workspace == WorkspaceExperience.Design
+                ? "DESIGN: schema-v2 semantic authoring."
+                : "INSPECT: schema-v2 ownership, diagnostics, and typed anchors.";
+            return;
+        }
         Project = Project with { Editor = Project.Editor with { Workspace = workspace == WorkspaceExperience.Design ? "design" : "inspect" } };
         IsDirty = true;
         foreach (var option in WorkspaceOptions) option.Refresh();
@@ -2430,6 +2497,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void DeleteFrame()
     {
+        if (IsV2Project)
+        {
+            DeleteV2Selection();
+            return;
+        }
         if (SelectedName is not { } name || Project.Find(name) is not { } removed)
             return;
         if (Project.Editor.IsLocked(name))

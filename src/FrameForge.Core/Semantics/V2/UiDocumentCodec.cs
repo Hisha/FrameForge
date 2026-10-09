@@ -32,6 +32,22 @@ public static class UiDocumentCodec
         return JsonSerializer.Serialize(envelope, Options) + "\n";
     }
 
+    public static bool HasV2FormatMarker(string text)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(text);
+            return json.RootElement.ValueKind == JsonValueKind.Object &&
+                   json.RootElement.TryGetProperty("format", out var format) &&
+                   format.ValueKind == JsonValueKind.String &&
+                   format.GetString() == UiDocument.FormatId;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public static UiDocumentParseResult Parse(string text)
     {
         if (string.IsNullOrWhiteSpace(text))

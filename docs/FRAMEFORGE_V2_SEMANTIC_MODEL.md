@@ -1,19 +1,58 @@
 # FrameForge Project Schema v2 semantic model
 
-Status: Milestone 1 semantic foundation  
+Status: Milestone 2 semantic editor integration
 Target: World of Warcraft 3.3.5a, build 12340  
 Namespace: `FrameForge.Core.Semantics.V2`
 
 ## Scope
 
 Schema v2 is the authoring model for new module-owned interfaces. It gives FrameForge a
-WoW-compatible semantic graph without connecting that graph to the Avalonia editor or generating
-FrameXML yet. The model exists beside schema v1; no v1 project is migrated or interpreted as v2.
+WoW-compatible semantic graph connected to the existing Avalonia hierarchy, canvas, and a bounded
+property inspector. The model exists beside schema v1; no v1 project is migrated or interpreted as
+v2.
 
 This milestone does not implement XML import, XML round-trip editing, template resolution,
 FrameXML export, artwork packaging, module runtime integration, EPF/MPQ generation, or addon
-support. Existing FrameForge code continues to use the v1 types until the editor is connected in a
-later milestone.
+support. Existing FrameForge v1 projects continue to use their original model, codec, editor path,
+and exporters.
+
+## Milestone 2 editor workflow
+
+The New menu contains **FrameForge 2.0 Semantic Project**. It creates the build-12340 profile, one
+1024 × 768 fill-host composition root, an explicit `ModuleUiHost` external contract, and an empty
+child list. The composition root opens selected in the existing designer; the user does not create
+it manually and cannot delete it.
+
+The left hierarchy is the semantic ownership tree. Its v2 palette adds `Frame`, `Texture`,
+`FontString`, `Button`, and `StatusBar`. A control is created under the selected frame-like
+container, or under the composition root when the root or a region is selected. Every new control
+receives one typed `Parent` anchor. It is never authored against the screen or `UIParent`.
+
+The existing `LayoutResolver`, render pipeline, hit testing, selection, zoom, and drag handling are
+reused through `UiDocumentProjection`. The projection creates a synthetic visual rectangle for the
+composition root and maps stable semantic IDs to transient v1 `FrameDef` names. It is a one-way
+rendering adapter only: it is never saved and never becomes project authority. An explicit external
+anchor remains identifiable in the v2 inspector and projects as unresolved geometry because the
+editor has no runtime bounds for an external global.
+
+Canvas dragging calls the centralized semantic editor and changes the authored anchor offsets.
+Width and height edits change the appropriate frame or region property block. The inspector exposes
+display/runtime identity, owner, typed anchor target and points, offsets, frame visibility, region
+tint, texture reference, font/text reference, button enabled state, and status-bar range/value/
+texture. Unsupported Blizzard properties are identified as outside the current editor instead of
+being silently synthesized.
+
+Changing the Owner picker invokes a tested reparent operation with visual-position preservation.
+For a parent-relative anchor, the editor resolves the current absolute node and new-owner rectangles,
+then recomputes the authored offset from the selected anchor points. It never substitutes
+`UIParent`. Earlier/Later buttons reorder the selected identity within its owner's ordered children.
+Delete removes the selected owned subtree atomically and rejects the operation if a surviving node
+has a local anchor into that subtree.
+
+Open inspects the JSON format marker and routes schema v1 and schema v2 to separate codecs. Save and
+Save As validate the semantic graph before writing v2 JSON. Opening validates immediately and shows
+diagnostics in the v2 inspector. Invalid edit candidates are rejected with the original document
+unchanged.
 
 ## Document structure
 
@@ -90,7 +129,7 @@ self-targets, undeclared/invalid external globals, and unresolved targets are va
 blocks rather than one untyped bag:
 
 - Frame: width, height, frame strata, frame level, and visibility.
-- Region: draw layer, sublevel, and tint.
+- Region: width, height, draw layer, sublevel, and tint.
 - Texture: texture reference.
 - Font string: font reference and literal text.
 - Button: enabled state.
@@ -104,6 +143,10 @@ for contradictions.
 `EffectiveNodeProperties` is a separate, non-persisted result type with property provenance. A
 future template resolver can produce it, but inherited/effective values can never overwrite the
 authored project facts or be flattened into `UiDocument`.
+
+Milestone 2 adds width and height to `RegionProperties`. WoW textures and font strings share layout
+geometry even though they are not frames; keeping those dimensions in the region block enables
+canvas resize/property editing without misclassifying regions as frames.
 
 ## Validation
 
@@ -206,9 +249,11 @@ targets that owner.
 
 ## Relationship to v1 and future module integration
 
-Schema v1 (`Project`, `FrameDef`, and `ProjectCodec`) is untouched and remains the implementation
-used by the current editor, loaders, and exporters. Schema v2 has a separate namespace, format ID,
-factory, validator, and codec. There is no shared persistence authority and no migration layer.
+Schema v1 (`Project`, `FrameDef`, and `ProjectCodec`) remains operational for existing files,
+FrameXML import, and existing exporters. Schema v2 has a separate namespace, format ID, factory,
+validator, codec, and centralized `UiDocumentEditor`. There is no shared persistence authority and
+no migration layer. The desktop selects the correct path from the explicit format marker rather
+than attempting conversion.
 
 The root contract, immutable IDs, typed external references, and explicit ownership establish what
 a future generic AzerothCore module integration can rely on: one host boundary, deterministic
@@ -216,3 +261,17 @@ control identities, locally provable hierarchy, and no accidental global positio
 will continue to own gameplay behavior, Lua controllers, server communication, and runtime state;
 FrameForge will own visual structure and eventually deterministic FrameXML. Content Manager will
 remain responsible for EPF/MPQ packaging and distribution.
+
+## Current limitations
+
+- The property inspector intentionally covers only the Milestone 2 subset described above.
+- External-global anchors are semantic and persistent but cannot be positioned on the canvas
+  without runtime/external geometry.
+- Multi-anchor controls are displayed by the projection, but canvas dragging is rejected unless
+  exactly one anchor is authored.
+- Multi-control align/distribute is still a v1 editing operation and is disabled for v2 rather than
+  mutating the projection.
+- Deleting a container deletes its owned subtree; there is no implicit reparent/repair operation.
+- Root host names and design dimensions are established by New and persisted, but root-contract UI
+  editing is deferred.
+- No FrameXML, Lua, manifest, EPF, MPQ, or module artifact is generated.

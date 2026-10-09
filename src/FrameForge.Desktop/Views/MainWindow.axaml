@@ -59,6 +59,8 @@
                 <Button Content="New" ToolTip.Tip="Start a blank project or a client-resolved Blizzard framework">
                     <Button.Flyout>
                         <MenuFlyout>
+                            <MenuItem Header="FrameForge 2.0 Semantic Project" Click="OnNewV2Click" />
+                            <Separator />
                             <MenuItem Header="Blank FrameForge Project" Click="OnNewClick" />
                             <MenuItem Header="Blizzard UI  ›  Dungeon Finder / LFD" Click="OnNewLfdClick" />
                         </MenuFlyout>
@@ -69,7 +71,8 @@
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
                 <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
 
-                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
+                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts"
+                        IsEnabled="{Binding IsV1Project}">
                     <Button.Flyout>
                         <MenuFlyout>
                             <MenuItem Header="Static WoW 3.3.5a Layout Package…" Click="OnExportWow335Click" />
@@ -88,7 +91,19 @@
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
-                <Button Content="Add Frame" Click="OnAddFrameClick" />
+                <Button Content="Add Frame" Click="OnAddFrameClick" IsVisible="{Binding IsV1Project}" />
+                <Button Content="Add v2 Control" IsVisible="{Binding IsV2Project}"
+                        ToolTip.Tip="Create a parent-anchored control under the selected valid container or composition root">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuItem Header="Frame" Click="OnAddV2FrameClick" />
+                            <MenuItem Header="Texture" Click="OnAddV2TextureClick" />
+                            <MenuItem Header="FontString" Click="OnAddV2FontStringClick" />
+                            <MenuItem Header="Button" Click="OnAddV2ButtonClick" />
+                            <MenuItem Header="StatusBar" Click="OnAddV2StatusBarClick" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button Content="Delete Frame" Click="OnDeleteFrameClick" />
                 <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
 
@@ -284,8 +299,8 @@
                           DisplayMemberBinding="{Binding Label}"
                           ToolTip.Tip="{Binding PreviewStateExplanation}" />
 
-                <TextBlock Classes="label" Text="Design state" VerticalAlignment="Center" IsVisible="{Binding IsDesignWorkspace}" />
-                <ComboBox MinWidth="132" IsVisible="{Binding IsDesignWorkspace}"
+                <TextBlock Classes="label" Text="Design state" VerticalAlignment="Center" IsVisible="{Binding ShowV1DesignTools}" />
+                <ComboBox MinWidth="132" IsVisible="{Binding ShowV1DesignTools}"
                           ItemsSource="{Binding DesignStateOptions}"
                           SelectedItem="{Binding ActiveDesignState, Mode=TwoWay}"
                           DisplayMemberBinding="{Binding Name}"
@@ -338,7 +353,7 @@
 
                         <TextBlock Classes="mono" Text="{Binding TreeFilterSummary}" Opacity="0.7" IsVisible="{Binding IsInspectWorkspace}" />
 
-                        <Expander Header="Add object" IsVisible="{Binding IsDesignWorkspace}" IsExpanded="True">
+                        <Expander Header="Add object" IsVisible="{Binding ShowV1DesignTools}" IsExpanded="True">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
                                 <TextBox Text="{Binding NewObjectName, Mode=TwoWay}" PlaceholderText="Object name" />
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5">
@@ -355,7 +370,17 @@
                             </StackPanel>
                         </Expander>
 
-                        <Expander Header="Design states" IsVisible="{Binding IsDesignWorkspace}">
+                        <Expander Header="Add v2 semantic control" IsVisible="{Binding ShowV2DesignTools}" IsExpanded="True">
+                            <WrapPanel Margin="0,6,0,0">
+                                <Button Content="Frame" Click="OnAddV2FrameClick" Margin="0,0,4,4" />
+                                <Button Content="Texture" Click="OnAddV2TextureClick" Margin="0,0,4,4" />
+                                <Button Content="FontString" Click="OnAddV2FontStringClick" Margin="0,0,4,4" />
+                                <Button Content="Button" Click="OnAddV2ButtonClick" Margin="0,0,4,4" />
+                                <Button Content="StatusBar" Click="OnAddV2StatusBarClick" Margin="0,0,4,4" />
+                            </WrapPanel>
+                        </Expander>
+
+                        <Expander Header="Design states" IsVisible="{Binding ShowV1DesignTools}">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
                                 <ComboBox ItemsSource="{Binding AuthoredStateOptions}"
                                           SelectedItem="{Binding SelectedAuthoredState, Mode=TwoWay}"
@@ -369,7 +394,7 @@
                             </StackPanel>
                         </Expander>
 
-                        <Expander Header="Editor groups" Margin="0,4,0,0" IsVisible="{Binding IsInspectWorkspace}">
+                        <Expander Header="Editor groups" Margin="0,4,0,0" IsVisible="{Binding ShowV1InspectTools}">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
                                 <ComboBox ItemsSource="{Binding Groups}"
                                           SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
@@ -451,7 +476,118 @@
             <!-- Inspector -->
             <Border Grid.Column="2" Classes="panel" BorderThickness="1,0,0,0" Padding="12">
                 <ScrollViewer>
-                    <StackPanel Spacing="6" IsVisible="{Binding Editor.HasSelection}">
+                    <StackPanel Spacing="8">
+                    <StackPanel Spacing="7" IsVisible="{Binding IsV2Project}">
+                        <TextBlock Classes="header" Text="FRAMEFORGE 2.0 · SEMANTIC INSPECTOR" />
+                        <TextBlock Classes="mono" Text="{Binding V2ProjectSummary}" TextWrapping="Wrap" />
+                        <TextBlock Classes="mono" Text="{Binding V2RootSummary}" TextWrapping="Wrap" />
+                        <Border Background="#14231A" BorderBrush="#315B40" BorderThickness="1" CornerRadius="4" Padding="7,5">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="mono" Text="{Binding V2DiagnosticsSummary}" />
+                                <ItemsControl ItemsSource="{Binding V2Diagnostics}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Classes="mono" Foreground="#E5796B" TextWrapping="Wrap"
+                                                       Text="{Binding Message}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <Border IsVisible="{Binding IsV2RootSelected}" Background="#17212A" BorderBrush="#315268"
+                                BorderThickness="1" CornerRadius="4" Padding="8,6">
+                            <TextBlock Text="The required composition root is selected. Add a control to create it under this root; the root itself cannot be deleted."
+                                       TextWrapping="Wrap" />
+                        </Border>
+
+                        <StackPanel IsVisible="{Binding HasV2NodeSelection}" Spacing="5">
+                            <TextBlock Classes="header" Text="IDENTITY · OWNERSHIP" Margin="0,4,0,2" />
+                            <TextBlock Classes="mono" Text="{Binding V2SelectedKind, StringFormat='Kind: {0}'}" />
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Display label" />
+                                <TextBox Grid.Column="1" Text="{Binding V2DisplayLabelDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Runtime name" />
+                                <TextBox Grid.Column="1" Text="{Binding V2RuntimeNameDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Owner" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding V2OwnerOptions}"
+                                          SelectedItem="{Binding V2OwnerDraft, Mode=TwoWay}" />
+                            </Grid>
+
+                            <TextBlock Classes="header" Text="GEOMETRY · TYPED ANCHOR" Margin="0,8,0,2" />
+                            <Grid ColumnDefinitions="92,*,8,92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Width" />
+                                <TextBox Grid.Column="1" Text="{Binding V2WidthDraft, Mode=TwoWay}" />
+                                <TextBlock Grid.Column="3" Classes="label" Text="Height" />
+                                <TextBox Grid.Column="4" Text="{Binding V2HeightDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*,8,92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Offset X" />
+                                <TextBox Grid.Column="1" Text="{Binding V2OffsetXDraft, Mode=TwoWay}" />
+                                <TextBlock Grid.Column="3" Classes="label" Text="Offset Y" />
+                                <TextBox Grid.Column="4" Text="{Binding V2OffsetYDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Anchor target" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding V2AnchorTargetOptions}"
+                                          SelectedItem="{Binding V2AnchorTargetDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Point" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding V2AnchorPoints}"
+                                          SelectedItem="{Binding V2PointDraft, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="92,*">
+                                <TextBlock Grid.Column="0" Classes="label" Text="Relative point" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding V2AnchorPoints}"
+                                          SelectedItem="{Binding V2RelativePointDraft, Mode=TwoWay}" />
+                            </Grid>
+
+                            <TextBlock Classes="header" Text="SUPPORTED APPEARANCE" Margin="0,8,0,2" />
+                            <CheckBox IsVisible="{Binding V2IsFrameNode}" Content="Visible"
+                                      IsChecked="{Binding V2VisibleDraft, Mode=TwoWay}" />
+                            <StackPanel IsVisible="{Binding V2IsRegionNode}" Spacing="3">
+                                <TextBlock Classes="label" Text="Tint · R,G,B[,A]" />
+                                <TextBox Text="{Binding V2TintDraft, Mode=TwoWay}" />
+                            </StackPanel>
+                            <StackPanel IsVisible="{Binding V2IsTexture}" Spacing="3">
+                                <TextBlock Classes="label" Text="Texture reference" />
+                                <TextBox Text="{Binding V2TextureDraft, Mode=TwoWay}" />
+                            </StackPanel>
+                            <StackPanel IsVisible="{Binding V2IsFontString}" Spacing="3">
+                                <TextBlock Classes="label" Text="Text" />
+                                <TextBox Text="{Binding V2TextDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Text="Font reference" />
+                                <TextBox Text="{Binding V2FontDraft, Mode=TwoWay}" />
+                            </StackPanel>
+                            <CheckBox IsVisible="{Binding V2IsButton}" Content="Enabled"
+                                      IsChecked="{Binding V2ButtonEnabledDraft, Mode=TwoWay}" />
+                            <StackPanel IsVisible="{Binding V2IsStatusBar}" Spacing="3">
+                                <Grid ColumnDefinitions="*,6,*,6,*">
+                                    <TextBox Grid.Column="0" PlaceholderText="Minimum" Text="{Binding V2StatusMinimumDraft, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="2" PlaceholderText="Maximum" Text="{Binding V2StatusMaximumDraft, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="4" PlaceholderText="Value" Text="{Binding V2StatusValueDraft, Mode=TwoWay}" />
+                                </Grid>
+                                <TextBox PlaceholderText="Status texture reference" Text="{Binding V2StatusTextureDraft, Mode=TwoWay}" />
+                            </StackPanel>
+
+                            <TextBlock Classes="label" Foreground="#E5796B" Text="{Binding V2InspectorValidation}"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Classes="label" Text="{Binding V2UnsupportedPropertiesNote}" TextWrapping="Wrap" />
+                            <WrapPanel Margin="0,5,0,0">
+                                <Button Content="Apply" Click="OnApplyV2InspectorClick" Margin="0,0,5,5" />
+                                <Button Content="Earlier" Click="OnMoveV2EarlierClick" Margin="0,0,5,5" />
+                                <Button Content="Later" Click="OnMoveV2LaterClick" Margin="0,0,5,5" />
+                                <Button Content="Delete" Click="OnDeleteV2Click" Margin="0,0,5,5" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Spacing="6" IsVisible="{Binding IsV1Project}">
                         <TextBlock Classes="header" Text="DESIGN PROPERTIES" IsVisible="{Binding IsDesignWorkspace}" />
                         <TextBlock Classes="header" Text="INSPECTOR" IsVisible="{Binding IsInspectWorkspace}" />
 
@@ -931,6 +1067,7 @@
                         </StackPanel>
 
                         <TextBlock Classes="label" Margin="0,8,0,0" Text="WoW model units, +Y up" />
+                    </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </Border>

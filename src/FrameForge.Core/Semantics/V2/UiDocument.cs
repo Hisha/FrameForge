@@ -175,6 +175,8 @@ public sealed record FrameProperties
 
 public sealed record RegionProperties
 {
+    public double? Width { get; init; }
+    public double? Height { get; init; }
     public RegionDrawLayer? DrawLayer { get; init; }
     public int? Sublevel { get; init; }
     public UiColor? Tint { get; init; }
