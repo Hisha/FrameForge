@@ -1,6 +1,6 @@
 # FrameForge Project Schema v2 semantic model
 
-Status: Milestone 2 semantic editor integration
+Status: Milestone 3 native FrameXML export foundation
 Target: World of Warcraft 3.3.5a, build 12340  
 Namespace: `FrameForge.Core.Semantics.V2`
 
@@ -11,10 +11,11 @@ WoW-compatible semantic graph connected to the existing Avalonia hierarchy, canv
 property inspector. The model exists beside schema v1; no v1 project is migrated or interpreted as
 v2.
 
-This milestone does not implement XML import, XML round-trip editing, template resolution,
-FrameXML export, artwork packaging, module runtime integration, EPF/MPQ generation, or addon
-support. Existing FrameForge v1 projects continue to use their original model, codec, editor path,
-and exporters.
+Milestone 3 adds deterministic native FrameXML export and a generic manifest directly from this
+model. It does not implement XML import, XML round-trip editing, template resolution, module runtime
+integration, EPF/MPQ generation, or addon support. Existing FrameForge v1 projects continue to use
+their original model, codec, editor path, and exporters. The complete export contract is documented
+in [FRAMEFORGE_V2_EXPORT.md](FRAMEFORGE_V2_EXPORT.md).
 
 ## Milestone 2 editor workflow
 
@@ -259,8 +260,19 @@ The root contract, immutable IDs, typed external references, and explicit owners
 a future generic AzerothCore module integration can rely on: one host boundary, deterministic
 control identities, locally provable hierarchy, and no accidental global positioning. The module
 will continue to own gameplay behavior, Lua controllers, server communication, and runtime state;
-FrameForge will own visual structure and eventually deterministic FrameXML. Content Manager will
+FrameForge owns visual structure and deterministic FrameXML. Content Manager will
 remain responsible for EPF/MPQ packaging and distribution.
+
+## Milestone 3 export
+
+`V2FrameXmlExporter` consumes `UiDocument` directly and preserves the ownership tree, typed anchor
+targets, frame/region distinction, and ordered anchors. It emits one module-hosted composition root,
+native nested frames and regions, deterministic runtime names, explicit dependency and artwork
+inventories, and SHA-256 output records. Invalid graphs and unsupported material properties fail
+before output is published. There is no projection through schema v1 and no implicit `UIParent`.
+
+The generic golden project and its generated XML live in `examples/frameforge-v2-golden.*` and are
+embedded into the test assembly for byte-for-byte drift detection.
 
 ## Current limitations
 
@@ -274,4 +286,5 @@ remain responsible for EPF/MPQ packaging and distribution.
 - Deleting a container deletes its owned subtree; there is no implicit reparent/repair operation.
 - Root host names and design dimensions are established by New and persisted, but root-contract UI
   editing is deferred.
-- No FrameXML, Lua, manifest, EPF, MPQ, or module artifact is generated.
+- Native visual FrameXML, a manifest, and supported project-owned artwork can be generated. Lua,
+  EPF, MPQ, TOC, module behavior, and existing-XML editing remain outside this milestone.

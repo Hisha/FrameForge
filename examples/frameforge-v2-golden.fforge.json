@@ -1,0 +1,235 @@
+{
+  "format": "frameforge-ui-document",
+  "version": 2,
+  "target": {
+    "product": "wow-3.3.5a",
+    "build": 12340
+  },
+  "documentId": "10000000-0000-0000-0000-000000000099",
+  "compositionRoots": [
+    {
+      "id": "10000000-0000-0000-0000-000000000001",
+      "runtimeName": "GoldenDesignRoot",
+      "externalHostName": "GoldenModuleHost",
+      "designWidth": 800,
+      "designHeight": 600,
+      "sizing": {
+        "kind": "fillHost",
+        "width": null,
+        "height": null,
+        "anchor": null
+      },
+      "children": [
+        "10000000-0000-0000-0000-000000000002",
+        "10000000-0000-0000-0000-000000000003",
+        "10000000-0000-0000-0000-000000000004",
+        "10000000-0000-0000-0000-000000000005"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "10000000-0000-0000-0000-000000000002",
+      "kind": "texture",
+      "runtimeName": "GoldenBackground",
+      "displayLabel": "Background",
+      "owner": {
+        "kind": "compositionRoot",
+        "id": "10000000-0000-0000-0000-000000000001"
+      },
+      "children": [],
+      "anchors": [
+        {
+          "point": "topleft",
+          "target": {
+            "kind": "compositionRoot",
+            "nodeId": null,
+            "globalName": null,
+            "unresolvedText": null,
+            "diagnostic": null
+          },
+          "relativePoint": "topleft",
+          "offsetX": 0,
+          "offsetY": 0
+        },
+        {
+          "point": "bottomright",
+          "target": {
+            "kind": "compositionRoot",
+            "nodeId": null,
+            "globalName": null,
+            "unresolvedText": null,
+            "diagnostic": null
+          },
+          "relativePoint": "bottomright",
+          "offsetX": 0,
+          "offsetY": 0
+        }
+      ],
+      "authoredProperties": {
+        "frame": null,
+        "region": {
+          "width": null,
+          "height": null,
+          "drawLayer": "background",
+          "sublevel": null,
+          "tint": {
+            "red": 0.08,
+            "green": 0.1,
+            "blue": 0.14,
+            "alpha": 1
+          }
+        },
+        "texture": {
+          "textureReference": "Interface\\Buttons\\WHITE8X8"
+        },
+        "fontString": null,
+        "button": null,
+        "statusBar": null
+      },
+      "editor": null
+    },
+    {
+      "id": "10000000-0000-0000-0000-000000000003",
+      "kind": "fontString",
+      "runtimeName": "GoldenHeader",
+      "displayLabel": "Header",
+      "owner": {
+        "kind": "compositionRoot",
+        "id": "10000000-0000-0000-0000-000000000001"
+      },
+      "children": [],
+      "anchors": [
+        {
+          "point": "top",
+          "target": {
+            "kind": "parent",
+            "nodeId": null,
+            "globalName": null,
+            "unresolvedText": null,
+            "diagnostic": null
+          },
+          "relativePoint": "top",
+          "offsetX": 0,
+          "offsetY": -24
+        }
+      ],
+      "authoredProperties": {
+        "frame": null,
+        "region": {
+          "width": 300,
+          "height": 24,
+          "drawLayer": "overlay",
+          "sublevel": 2,
+          "tint": null
+        },
+        "texture": null,
+        "fontString": {
+          "fontReference": "GameFontNormalLarge",
+          "text": "FrameForge Export"
+        },
+        "button": null,
+        "statusBar": null
+      },
+      "editor": null
+    },
+    {
+      "id": "10000000-0000-0000-0000-000000000004",
+      "kind": "button",
+      "runtimeName": "GoldenButton",
+      "displayLabel": "Action",
+      "owner": {
+        "kind": "compositionRoot",
+        "id": "10000000-0000-0000-0000-000000000001"
+      },
+      "children": [],
+      "anchors": [
+        {
+          "point": "top",
+          "target": {
+            "kind": "localNode",
+            "nodeId": "10000000-0000-0000-0000-000000000003",
+            "globalName": null,
+            "unresolvedText": null,
+            "diagnostic": null
+          },
+          "relativePoint": "bottom",
+          "offsetX": 0,
+          "offsetY": -16
+        }
+      ],
+      "authoredProperties": {
+        "frame": {
+          "width": 160,
+          "height": 32,
+          "strata": "medium",
+          "level": 2,
+          "visible": true
+        },
+        "region": null,
+        "texture": null,
+        "fontString": null,
+        "button": {
+          "enabled": true
+        },
+        "statusBar": null
+      },
+      "editor": null
+    },
+    {
+      "id": "10000000-0000-0000-0000-000000000005",
+      "kind": "statusBar",
+      "runtimeName": "GoldenProgress",
+      "displayLabel": "Progress",
+      "owner": {
+        "kind": "compositionRoot",
+        "id": "10000000-0000-0000-0000-000000000001"
+      },
+      "children": [],
+      "anchors": [
+        {
+          "point": "top",
+          "target": {
+            "kind": "parent",
+            "nodeId": null,
+            "globalName": null,
+            "unresolvedText": null,
+            "diagnostic": null
+          },
+          "relativePoint": "top",
+          "offsetX": 0,
+          "offsetY": -110
+        }
+      ],
+      "authoredProperties": {
+        "frame": {
+          "width": 240,
+          "height": 18,
+          "strata": null,
+          "level": 1,
+          "visible": null
+        },
+        "region": null,
+        "texture": null,
+        "fontString": null,
+        "button": null,
+        "statusBar": {
+          "minimum": 0,
+          "maximum": 100,
+          "value": 35,
+          "textureReference": "Interface\\TargetingFrame\\UI-StatusBar"
+        }
+      },
+      "editor": null
+    }
+  ],
+  "externalReferences": [
+    {
+      "globalName": "GoldenModuleHost",
+      "expectedSource": "AzerothCore module",
+      "description": "Module-owned visual host"
+    }
+  ],
+  "editor": null,
+  "diagnostics": []
+}

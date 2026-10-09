@@ -38,6 +38,10 @@
     -->
     <EmbeddedResource Include="Fixtures\NativeHuntsFrame.xml"
                       LogicalName="FrameForge.Core.Tests.fixtures.NativeHuntsFrame.xml" />
+    <EmbeddedResource Include="..\..\examples\frameforge-v2-golden.fforge.json"
+                      LogicalName="FrameForge.Core.Tests.examples.frameforge-v2-golden.fforge.json" />
+    <EmbeddedResource Include="..\..\examples\frameforge-v2-golden.Design.xml"
+                      LogicalName="FrameForge.Core.Tests.examples.frameforge-v2-golden.Design.xml" />
   </ItemGroup>
 
 
