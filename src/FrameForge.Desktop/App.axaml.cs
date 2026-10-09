@@ -22,7 +22,9 @@ public partial class App : Application
             // The smoke self-check drives this same window, so there is only ever one window
             // implementation to keep working.
             var window = new MainWindow();
-            window.DataContext = new MainWindowViewModel();
+            var viewModel = new MainWindowViewModel();
+            viewModel.NewV2Project();
+            window.DataContext = viewModel;
             EditorWindow = window;
             desktop.MainWindow = window;
 

@@ -56,7 +56,10 @@ public static class UiDocumentProjection
             {
                 Workspace = "design",
                 DesignObjects = displayObjects,
-                DesignOrder = [.. orderedNodes.Select(node => node.Id.Value)],
+                // The composition root is a design object too. Keeping it first prevents the
+                // editor metadata normalizer from appending it after its descendants, which
+                // would paint and hit-test the root above child regions.
+                DesignOrder = [root.Id.Value, .. orderedNodes.Select(node => node.Id.Value)],
             },
         };
     }
@@ -112,12 +115,17 @@ public static class UiDocumentProjection
             Text = node.Kind switch
             {
                 UiNodeKind.FontString => new TextVisual(node.AuthoredProperties.FontString?.Text,
-                    FontTemplate: node.AuthoredProperties.FontString?.FontReference),
+                    node.AuthoredProperties.FontString?.JustifyH,
+                    node.AuthoredProperties.FontString?.JustifyV,
+                    node.AuthoredProperties.FontString?.FontReference,
+                    node.AuthoredProperties.FontString?.FontSize,
+                    tint is null ? null : new ColorRgba(tint.Red, tint.Green, tint.Blue, tint.Alpha)),
                 UiNodeKind.Button => new TextVisual(node.AuthoredProperties.Button?.Text),
                 _ => null,
             },
             StatusBar = node.Kind == UiNodeKind.StatusBar
-                ? new StatusBarVisual(status?.Minimum, status?.Maximum, status?.Value, status?.TextureReference)
+                ? new StatusBarVisual(status?.Minimum, status?.Maximum, status?.Value, status?.TextureReference,
+                    ToColor(status?.FillColor), ToColor(status?.BackgroundColor))
                 : null,
         };
 
@@ -156,6 +164,10 @@ public static class UiDocumentProjection
             Visual = visual.IsEmpty ? null : visual,
         };
     }
+
+    private static ColorRgba? ToColor(UiColor? color) => color is null
+        ? null
+        : new ColorRgba(color.Red, color.Green, color.Blue, color.Alpha);
 
     private static (double Width, double Height) Dimensions(UiNode node, EffectiveNodeProperties effective)
     {

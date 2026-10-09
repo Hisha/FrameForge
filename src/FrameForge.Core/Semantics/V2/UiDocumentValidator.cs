@@ -249,6 +249,14 @@ public static partial class UiDocumentValidator
                 (region.Width is not null && !IsPositiveFinite(region.Width.Value) ||
                  region.Height is not null && !IsPositiveFinite(region.Height.Value)))
                 Add("FFV2-PROP-019", "Authored region dimensions must be finite and greater than zero.", "authoredProperties.region", node.Id);
+            if (properties.FontString is { FontSize: not null } font && !IsPositiveFinite(font.FontSize.Value))
+                Add("FFV2-PROP-020", "FontString font size must be finite and greater than zero.", "authoredProperties.fontString.fontSize", node.Id);
+            if (properties.FontString?.JustifyH is { } justifyH &&
+                !new[] { "LEFT", "CENTER", "RIGHT" }.Contains(justifyH, StringComparer.OrdinalIgnoreCase))
+                Add("FFV2-PROP-021", "FontString horizontal justification must be LEFT, CENTER, or RIGHT.", "authoredProperties.fontString.justifyH", node.Id);
+            if (properties.FontString?.JustifyV is { } justifyV &&
+                !new[] { "TOP", "MIDDLE", "BOTTOM" }.Contains(justifyV, StringComparer.OrdinalIgnoreCase))
+                Add("FFV2-PROP-022", "FontString vertical justification must be TOP, MIDDLE, or BOTTOM.", "authoredProperties.fontString.justifyV", node.Id);
             if (properties.StatusBar is { Minimum: not null, Maximum: not null } status)
             {
                 if (!double.IsFinite(status.Minimum.Value) || !double.IsFinite(status.Maximum.Value) || status.Minimum.Value >= status.Maximum.Value)
@@ -259,6 +267,10 @@ public static partial class UiDocumentValidator
             if (properties.StatusBar is { } partialStatus &&
                 (partialStatus.Minimum is null) != (partialStatus.Maximum is null))
                 Add("FFV2-PROP-018", "StatusBar minimum and maximum must be authored together.", "authoredProperties.statusBar", node.Id);
+            if (properties.StatusBar?.FillColor is { } fillColor && !IsValidColor(fillColor))
+                Add("FFV2-PROP-023", "StatusBar fill color components must be finite values from 0 through 1.", "authoredProperties.statusBar.fillColor", node.Id);
+            if (properties.StatusBar?.BackgroundColor is { } backgroundColor && !IsValidColor(backgroundColor))
+                Add("FFV2-PROP-024", "StatusBar background color components must be finite values from 0 through 1.", "authoredProperties.statusBar.backgroundColor", node.Id);
         }
 
         void ValidateTemplate(UiNode node)
@@ -354,6 +366,10 @@ public static partial class UiDocumentValidator
     }
 
     private static bool IsPositiveFinite(double value) => value > 0 && double.IsFinite(value);
+
+    private static bool IsValidColor(UiColor color) =>
+        new[] { color.Red, color.Green, color.Blue, color.Alpha }
+            .All(value => double.IsFinite(value) && value is >= 0 and <= 1);
 
     private static bool IsGlobalName(string value) =>
         !string.IsNullOrWhiteSpace(value) && GlobalNamePattern().IsMatch(value);

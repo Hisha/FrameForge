@@ -208,6 +208,51 @@ public sealed class V2FrameXmlExportTests
     }
 
     [Fact]
+    public void FontAndStatusBarAppearanceExportAsNativeFrameXml()
+    {
+        var document = GoldenDocument();
+        var nodes = document.Nodes.ToArray();
+        var fontIndex = Array.FindIndex(nodes, node => node.Kind == UiNodeKind.FontString);
+        var statusIndex = Array.FindIndex(nodes, node => node.Kind == UiNodeKind.StatusBar);
+        nodes[fontIndex] = nodes[fontIndex] with
+        {
+            AuthoredProperties = nodes[fontIndex].AuthoredProperties with
+            {
+                Region = nodes[fontIndex].AuthoredProperties.Region! with { Tint = new UiColor(1, 1, 1, 1) },
+                FontString = nodes[fontIndex].AuthoredProperties.FontString! with
+                {
+                    FontSize = 14, JustifyH = "CENTER", JustifyV = "MIDDLE",
+                },
+            },
+        };
+        nodes[statusIndex] = nodes[statusIndex] with
+        {
+            AuthoredProperties = nodes[statusIndex].AuthoredProperties with
+            {
+                StatusBar = nodes[statusIndex].AuthoredProperties.StatusBar! with
+                {
+                    FillColor = new UiColor(0, 1, 0, 1),
+                    BackgroundColor = new UiColor(0.1, 0.1, 0.1, 1),
+                },
+            },
+        };
+
+        var plan = V2FrameXmlExporter.Build(document with { Nodes = nodes }, null);
+
+        Assert.True(plan.IsValid, Diagnostics(plan));
+        var xml = XDocument.Parse(plan.Xml);
+        var font = xml.Descendants(Ui + "FontString").Single();
+        Assert.Equal("CENTER", (string?)font.Attribute("justifyH"));
+        Assert.Equal("MIDDLE", (string?)font.Attribute("justifyV"));
+        Assert.Equal("14", (string?)font.Element(Ui + "FontHeight")?.Element(Ui + "AbsValue")?.Attribute("val"));
+        var status = xml.Descendants(Ui + "StatusBar").Single();
+        Assert.Equal("0", (string?)status.Element(Ui + "BarColor")?.Attribute("r"));
+        var background = status.Descendants(Ui + "Texture").Single(item => (string?)item.Attribute("name") == "$parentBackground");
+        Assert.Equal("true", (string?)background.Attribute("setAllPoints"));
+        Assert.Equal("0.1", (string?)background.Element(Ui + "Color")?.Attribute("r"));
+    }
+
+    [Fact]
     public void ProjectArtworkIsHashedCopiedAndListedInManifest()
     {
         var directory = NewTempDirectory();

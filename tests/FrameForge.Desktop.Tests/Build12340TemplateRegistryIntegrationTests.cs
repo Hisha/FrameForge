@@ -1,5 +1,14 @@
+using Avalonia.Controls;
+using Avalonia.Headless;
+using FrameForge.Core.Geometry;
+using FrameForge.Core.Models;
+using FrameForge.Core.Semantics.V2;
 using FrameForge.Core.Templates;
+using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
+using FrameForge.Desktop.Controls;
+using FrameForge.Desktop.Preview;
+using FrameForge.Desktop.Rendering;
 using FrameForge.Desktop.Templates;
 using Xunit;
 
@@ -66,5 +75,77 @@ public sealed class Build12340TemplateRegistryIntegrationTests
         Assert.All(registry.Templates.Values.SelectMany(item => item.AssetDependencies),
             dependency => Assert.True(dependency.IsResolved,
                 $"{dependency.LogicalPath}: {dependency.Diagnostic}"));
+
+        using var textures = new TextureAssetResolver();
+        textures.Configure(null, []);
+        textures.ConfigureWowAssetSource(provider, validation);
+        foreach (var state in new[] { BlizzardButtonState.Normal, BlizzardButtonState.Pushed })
+        {
+            var texture = panel.EffectiveProperties.StateTextures[state];
+            var resolved = textures.Resolve(texture.File);
+            Assert.True(resolved.CanRender,
+                $"{state} '{texture.File}': {resolved.Status}: {resolved.Diagnostic.Message}");
+        }
+
+        var document = UiDocumentFactory.Create("RenderRoot", "ModuleUiHost", 640, 480);
+        var root = Assert.Single(document.CompositionRoots);
+        var editor = new UiDocumentEditor(registry);
+        var created = editor.CreateControl(document, UiNodeKind.Button, OwnerReference.Root(root.Id),
+            "Template Button", "TemplateButton");
+        Assert.True(created.Success, created.ErrorText);
+        var buttonId = Assert.IsType<SemanticId>(created.AffectedId);
+        var assigned = editor.AssignBlizzardTemplate(created.Document, buttonId, "UIPanelButtonTemplate");
+        Assert.True(assigned.Success, assigned.ErrorText);
+        var button = assigned.Document.Nodes.Single(item => item.Id == buttonId);
+        var withText = editor.UpdateProperties(assigned.Document, buttonId, button.AuthoredProperties with
+        {
+            Button = button.AuthoredProperties.Button! with { Text = "Okay" },
+        });
+        Assert.True(withText.Success, withText.ErrorText);
+
+        var project = UiDocumentProjection.ToProject(withText.Document, registry);
+        var projectedButton = Assert.IsType<FrameDef>(project.Find(buttonId.Value));
+        Assert.Equal("UIPanelButtonTemplate", projectedButton.Inherits);
+        Assert.Equal("Okay", projectedButton.Visual?.Text?.Text);
+
+        using var fonts = new StockTemplateResolver(provider);
+        Assert.NotNull(fonts.ResolveFont(panel.EffectiveProperties.NormalFont));
+        using var session = HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
+        foreach (var state in new[] { PreviewButtonState.Normal, PreviewButtonState.Pushed })
+        {
+            var trace = RenderTemplateButton(session, project, textures, fonts, registry, state);
+            Assert.True(trace.VisualContentExecuted);
+            Assert.Equal(1, trace.VisualAttemptsByKind.GetValueOrDefault(FrameKind.BUTTON));
+            Assert.Empty(trace.VisualDiagnostics);
+        }
     }
+
+    private static CanvasRenderTrace RenderTemplateButton(HeadlessUnitTestSession session, Project project,
+        ITextureAssetResolver textures, IStockTemplateResolver fonts, BlizzardTemplateRegistry registry,
+        PreviewButtonState state) => session.Dispatch(() =>
+    {
+        var canvas = new LayoutCanvas
+        {
+            Project = project,
+            Layout = LayoutResolver.Resolve(project),
+            AssetResolver = textures,
+            StockTemplates = fonts,
+            V2Templates = registry,
+            V2ButtonState = state,
+            Mode = CanvasViewMode.PREVIEW,
+        };
+        var window = new Window { Content = canvas, Width = 640, Height = 480, ShowActivated = false };
+        try
+        {
+            window.Show();
+            window.CaptureRenderedFrame();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            window.CaptureRenderedFrame();
+            return Assert.IsType<CanvasRenderTrace>(canvas.LastRenderTrace);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }, CancellationToken.None).GetAwaiter().GetResult();
 }

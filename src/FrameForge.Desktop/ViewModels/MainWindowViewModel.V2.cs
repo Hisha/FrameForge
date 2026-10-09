@@ -72,8 +72,9 @@ public sealed partial class MainWindowViewModel
     public string V2DimensionSummary => DimensionSummary();
     public string V2TemplateProvenanceSummary => TemplateProvenanceSummary();
     public string V2PreviewStateDiagnostic => PreviewStateDiagnostic();
+    public string V2SelectedAssetDiagnostic => SelectedAssetDiagnostic();
     public string V2UnsupportedPropertiesNote =>
-        "Only Milestone 2 geometry, ownership, anchor, identity, and basic appearance are editable. Other Blizzard properties remain unsupported and unchanged.";
+        "Unsupported Blizzard semantics remain unchanged and are diagnosed explicitly; the editor does not invent runtime behavior.";
 
     public ObservableCollection<UiDiagnostic> V2Diagnostics { get; } = [];
     public ObservableCollection<V2OwnerOption> V2OwnerOptions { get; } = [];
@@ -81,6 +82,8 @@ public sealed partial class MainWindowViewModel
     public ObservableCollection<V2TemplateOption> V2TemplateOptions { get; } = [];
     public ObservableCollection<string> V2TemplateDiagnostics { get; } = [];
     public IReadOnlyList<AnchorPoint> V2AnchorPoints { get; } = AnchorPoints.All;
+    public IReadOnlyList<string> V2HorizontalJustifications { get; } = ["LEFT", "CENTER", "RIGHT"];
+    public IReadOnlyList<string> V2VerticalJustifications { get; } = ["TOP", "MIDDLE", "BOTTOM"];
     public IReadOnlyList<V2PreviewStateOption> V2PreviewStates { get; } =
     [
         new(PreviewButtonState.Normal, "Normal"),
@@ -99,11 +102,16 @@ public sealed partial class MainWindowViewModel
     [ObservableProperty] private string _v2TextureDraft = string.Empty;
     [ObservableProperty] private string _v2TextDraft = string.Empty;
     [ObservableProperty] private string _v2FontDraft = string.Empty;
+    [ObservableProperty] private string _v2FontSizeDraft = string.Empty;
+    [ObservableProperty] private string _v2JustifyHDraft = "LEFT";
+    [ObservableProperty] private string _v2JustifyVDraft = "MIDDLE";
     [ObservableProperty] private string _v2TintDraft = string.Empty;
     [ObservableProperty] private string _v2StatusMinimumDraft = string.Empty;
     [ObservableProperty] private string _v2StatusMaximumDraft = string.Empty;
     [ObservableProperty] private string _v2StatusValueDraft = string.Empty;
     [ObservableProperty] private string _v2StatusTextureDraft = string.Empty;
+    [ObservableProperty] private string _v2StatusFillColorDraft = string.Empty;
+    [ObservableProperty] private string _v2StatusBackgroundColorDraft = string.Empty;
     [ObservableProperty] private bool _v2VisibleDraft = true;
     [ObservableProperty] private bool _v2ButtonEnabledDraft = true;
     [ObservableProperty] private V2TemplateOption? _v2TemplateDraft;
@@ -242,8 +250,16 @@ public sealed partial class MainWindowViewModel
         if (!TryOptionalDouble(V2StatusMinimumDraft, "Status minimum", out var minimum) ||
             !TryOptionalDouble(V2StatusMaximumDraft, "Status maximum", out var maximum) ||
             !TryOptionalDouble(V2StatusValueDraft, "Status value", out var statusValue) ||
-            !TryTint(V2TintDraft, out var tint))
+            !TryOptionalDouble(V2FontSizeDraft, "Font size", out var fontSize) ||
+            !TryTint(V2TintDraft, out var tint) ||
+            !TryTint(V2StatusFillColorDraft, out var statusFillColor) ||
+            !TryTint(V2StatusBackgroundColorDraft, out var statusBackgroundColor))
             return;
+        if (fontSize is <= 0)
+        {
+            V2InspectorValidation = "Font size must be positive when authored.";
+            return;
+        }
 
         var working = _v2Document;
         var editor = V2Editor;
@@ -268,7 +284,14 @@ public sealed partial class MainWindowViewModel
             UiNodeKind.Texture => properties with { Texture = properties.Texture! with { TextureReference = EmptyToNull(V2TextureDraft) } },
             UiNodeKind.FontString => properties with
             {
-                FontString = properties.FontString! with { Text = V2TextDraft, FontReference = EmptyToNull(V2FontDraft) },
+                FontString = properties.FontString! with
+                {
+                    Text = V2TextDraft,
+                    FontReference = EmptyToNull(V2FontDraft),
+                    FontSize = fontSize,
+                    JustifyH = V2JustifyHDraft,
+                    JustifyV = V2JustifyVDraft,
+                },
             },
             UiNodeKind.Button => properties with
             {
@@ -282,6 +305,8 @@ public sealed partial class MainWindowViewModel
                     Maximum = maximum,
                     Value = statusValue,
                     TextureReference = EmptyToNull(V2StatusTextureDraft),
+                    FillColor = statusFillColor,
+                    BackgroundColor = statusBackgroundColor,
                 },
             },
             _ => properties,
@@ -435,6 +460,9 @@ public sealed partial class MainWindowViewModel
                 ? selected.AuthoredProperties.Button?.Text ?? string.Empty
                 : selected.AuthoredProperties.FontString?.Text ?? string.Empty;
             V2FontDraft = selected.AuthoredProperties.FontString?.FontReference ?? string.Empty;
+            V2FontSizeDraft = FormatOptional(selected.AuthoredProperties.FontString?.FontSize);
+            V2JustifyHDraft = selected.AuthoredProperties.FontString?.JustifyH ?? "LEFT";
+            V2JustifyVDraft = selected.AuthoredProperties.FontString?.JustifyV ?? "MIDDLE";
             V2TintDraft = selected.AuthoredProperties.Region?.Tint is { } tint
                 ? string.Join(",", FormatNumber(tint.Red), FormatNumber(tint.Green), FormatNumber(tint.Blue), FormatNumber(tint.Alpha))
                 : string.Empty;
@@ -447,6 +475,8 @@ public sealed partial class MainWindowViewModel
             V2StatusMaximumDraft = FormatOptional(selected.AuthoredProperties.StatusBar?.Maximum);
             V2StatusValueDraft = FormatOptional(selected.AuthoredProperties.StatusBar?.Value);
             V2StatusTextureDraft = selected.AuthoredProperties.StatusBar?.TextureReference ?? string.Empty;
+            V2StatusFillColorDraft = FormatColor(selected.AuthoredProperties.StatusBar?.FillColor);
+            V2StatusBackgroundColorDraft = FormatColor(selected.AuthoredProperties.StatusBar?.BackgroundColor);
             V2InspectorValidation = string.Empty;
         }
         finally
@@ -472,6 +502,7 @@ public sealed partial class MainWindowViewModel
         OnPropertyChanged(nameof(V2DimensionSummary));
         OnPropertyChanged(nameof(V2TemplateProvenanceSummary));
         OnPropertyChanged(nameof(V2PreviewStateDiagnostic));
+        OnPropertyChanged(nameof(V2SelectedAssetDiagnostic));
     }
 
     partial void OnSelectedNameChanged(string? value) => RefreshV2Inspector();
@@ -597,6 +628,21 @@ public sealed partial class MainWindowViewModel
         };
     }
 
+    private string SelectedAssetDiagnostic()
+    {
+        var reference = SelectedV2Node?.Kind switch
+        {
+            UiNodeKind.Texture => SelectedV2Node.AuthoredProperties.Texture?.TextureReference,
+            UiNodeKind.StatusBar => SelectedV2Node.AuthoredProperties.StatusBar?.TextureReference,
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(reference)) return string.Empty;
+        var resolved = Assets.Resolve(reference);
+        return resolved.CanRender
+            ? $"Asset resolved: {reference} ({resolved.Width} × {resolved.Height})"
+            : $"Asset {resolved.Status}: {resolved.Diagnostic.Message}";
+    }
+
     private bool TryRequiredDouble(string text, string field, out double value)
     {
         if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value))
@@ -644,6 +690,9 @@ public sealed partial class MainWindowViewModel
     private static string? EmptyToNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string FormatNumber(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
     private static string FormatOptional(double? value) => value is null ? string.Empty : FormatNumber(value.Value);
+    private static string FormatColor(UiColor? color) => color is null
+        ? string.Empty
+        : string.Join(",", FormatNumber(color.Red), FormatNumber(color.Green), FormatNumber(color.Blue), FormatNumber(color.Alpha));
 }
 
 internal static class SemanticIdListExtensions

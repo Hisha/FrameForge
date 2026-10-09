@@ -111,6 +111,7 @@ public sealed class CanvasRenderDiagnostics
 {
     private readonly Dictionary<FrameKind, int> _visibilityAccepted = [];
     private readonly Dictionary<FrameKind, int> _visualAttempts = [];
+    private readonly List<string> _visualDiagnostics = [];
 
     public bool VisualContentExecuted { get; set; }
 
@@ -123,6 +124,9 @@ public sealed class CanvasRenderDiagnostics
         Increment(_visualAttempts, kind);
         VisualPaintOperations += paintOperations;
     }
+
+    public void ReportVisualDiagnostic(string frameName, string message) =>
+        _visualDiagnostics.Add($"{frameName}: {message}");
 
     public CanvasRenderTrace Snapshot(
         CanvasRenderContext context,
@@ -141,7 +145,8 @@ public sealed class CanvasRenderDiagnostics
         activeLayers,
         VisualContentExecuted,
         new Dictionary<FrameKind, int>(_visualAttempts),
-        VisualPaintOperations);
+        VisualPaintOperations,
+        _visualDiagnostics.ToArray());
 
     private static void Increment(IDictionary<FrameKind, int> counts, FrameKind kind)
     {
@@ -166,7 +171,8 @@ public sealed record CanvasRenderTrace(
     IReadOnlyList<string> ActiveLayers,
     bool VisualContentExecuted,
     IReadOnlyDictionary<FrameKind, int> VisualAttemptsByKind,
-    int VisualPaintOperations);
+    int VisualPaintOperations,
+    IReadOnlyList<string> VisualDiagnostics);
 
 /// <summary>
 /// One independently drawable band of the canvas.

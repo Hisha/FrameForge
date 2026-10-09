@@ -192,6 +192,12 @@ public sealed record FontStringProperties
 {
     public string? FontReference { get; init; }
     public string? Text { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? FontSize { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JustifyH { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JustifyV { get; init; }
 }
 
 public sealed record ButtonProperties
@@ -208,6 +214,10 @@ public sealed record StatusBarProperties
     public double? Maximum { get; init; }
     public double? Value { get; init; }
     public string? TextureReference { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UiColor? FillColor { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UiColor? BackgroundColor { get; init; }
 }
 
 /// <summary>Only values directly authored in the v2 project.</summary>

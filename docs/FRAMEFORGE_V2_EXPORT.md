@@ -111,11 +111,18 @@ include invalid/colliding identities, partial width/height pairs, disabled butto
 runtime call), status values without an authored range, invalid font-object names, missing or unsafe
 artwork, malformed/unsupported artwork formats, and output-file ownership conflicts.
 
-This foundation does not visually render templates, verify that an arbitrary declared external
-global exists at runtime, execute Lua, synthesize general button behavior, convert PNG, generate gameplay
+This exporter does not copy template-derived artwork into generated XML, verify that an arbitrary
+declared external global exists at runtime, execute Lua, synthesize general button behavior, convert PNG, generate gameplay
 state logic, or validate against a redistributable copy of Blizzard's `UI.xsd`. Its structural
 regressions are based on the installed build-12340 FrameXML cache and native conventions documented
 in `FRAMEFORGE_ARCHITECTURE_RESEARCH.md`.
+
+Supported authored appearance now includes FontString `justifyH`, `justifyV`, `FontHeight`, and
+region `Color`; StatusBar `BarColor`; and a generated, parent-sized background Texture with the
+authored background color. The generated texture uses the symbolic name `$parentBackground` and is
+nested in the StatusBar's native `BACKGROUND` layer. These are deterministic static FrameXML
+properties. The exporter still rejects requests that require runtime Lua instead of approximating
+them.
 
 ## Manual WoW 3.3.5a validation
 

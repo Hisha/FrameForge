@@ -289,7 +289,16 @@ embedded into the test assembly for byte-for-byte drift detection.
 
 ## Current limitations
 
-- The property inspector intentionally covers only the Milestone 2 subset described above.
+- A normal desktop launch creates a schema-v2 document. Schema v1 remains available only when an
+  existing legacy project or FrameXML source is opened; its controls are hidden during v2 work.
+- `FontStringProperties` owns optional font size and horizontal/vertical justification. Text color
+  and Texture tint/opacity remain the region tint, so authored versus inherited values stay
+  separate.
+- `StatusBarProperties` owns its authored range, default value, native bar texture, fill color, and
+  background color. The background is visual structure, not runtime value logic.
+- Projection paint order must begin with the composition root followed by ownership preorder. This
+  keeps descendants above their owners for both drawing and canvas hit-testing; moving an owner
+  changes descendant absolute geometry without rewriting child anchors.
 - External-global anchors are semantic and persistent but cannot be positioned on the canvas
   without runtime/external geometry.
 - Multi-anchor controls are displayed by the projection, but canvas dragging is rejected unless
@@ -301,5 +310,6 @@ embedded into the test assembly for byte-for-byte drift detection.
   editing is deferred.
 - Native visual FrameXML, a manifest, and supported project-owned artwork can be generated. Lua,
   EPF, MPQ, TOC, module behavior, and existing-XML editing remain outside this milestone.
-- Template selection UI and template visual rendering remain deferred to Milestone 4.1D. The only
-  recognized runtime behavior is the audited character-tab resize marker; no Lua is executed.
+- Template selection and build-12340 rendering cover only `UIPanelButtonTemplate`,
+  `GameMenuButtonTemplate`, and `CharacterFrameTabButtonTemplate`. The only recognized runtime
+  behavior is the audited character-tab resize marker; no Lua is executed.

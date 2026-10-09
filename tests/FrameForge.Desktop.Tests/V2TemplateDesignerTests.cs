@@ -84,7 +84,7 @@ public sealed class V2TemplateDesignerTests : IDisposable
             new PassThroughStockTemplates(), v2TemplateLoader: loader);
     }
 
-    private static BlizzardTemplateRegistry Registry() => BlizzardTemplateParser.Parse(
+    internal static BlizzardTemplateRegistry Registry() => BlizzardTemplateParser.Parse(
     [
         new BlizzardTemplateXmlSource("Interface\\FrameXML\\Synthetic.xml", """
             <Ui>
@@ -105,7 +105,7 @@ public sealed class V2TemplateDesignerTests : IDisposable
 
     public void Dispose() => Directory.Delete(_directory, true);
 
-    private sealed class FakeLoader(BlizzardTemplateRegistry registry) : IBuild12340TemplateRegistryLoader
+    internal sealed class FakeLoader(BlizzardTemplateRegistry registry) : IBuild12340TemplateRegistryLoader
     {
         public int LoadCount { get; private set; }
         public BlizzardTemplateRegistry Load(WowClientValidation client)
@@ -116,7 +116,7 @@ public sealed class V2TemplateDesignerTests : IDisposable
         }
     }
 
-    private sealed class ValidProvider(string cacheRoot) : IWoWClientAssetProvider
+    internal sealed class ValidProvider(string cacheRoot) : IWoWClientAssetProvider
     {
         public string CacheRoot => cacheRoot;
         public WowClientValidation ValidateClient(string? clientPath) => new(WowClientValidationStatus.Valid,
@@ -127,7 +127,7 @@ public sealed class V2TemplateDesignerTests : IDisposable
         public void ClearCache() { }
     }
 
-    private sealed class PassThroughStockTemplates : IStockTemplateResolver
+    internal sealed class PassThroughStockTemplates : IStockTemplateResolver
     {
         public int Generation => 1;
         public IReadOnlyList<StockDefinitionDiagnostic> Diagnostics => [];

@@ -56,22 +56,15 @@
         <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
         <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="New" ToolTip.Tip="Start a blank project or a client-resolved Blizzard framework">
-                    <Button.Flyout>
-                        <MenuFlyout>
-                            <MenuItem Header="FrameForge 2.0 Semantic Project" Click="OnNewV2Click" />
-                            <Separator />
-                            <MenuItem Header="Blank FrameForge Project" Click="OnNewClick" />
-                            <MenuItem Header="Blizzard UI  ›  Dungeon Finder / LFD" Click="OnNewLfdClick" />
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
+                <Button Content="New" Click="OnNewV2Click" ToolTip.Tip="Start a blank FrameForge 2.0 project" />
                 <Button Content="Open" Click="OnOpenClick"
                         ToolTip.Tip="Open a .fforge.json project or a WoW FrameXML file" />
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
                 <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
 
-                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
+                <Button Content="Export" Click="OnExportWow335Click" IsVisible="{Binding IsV2Project}"
+                        ToolTip.Tip="Export a native WoW 3.3.5a layout package" />
+                <Button Content="Export" IsVisible="{Binding IsV1Project}" ToolTip.Tip="Export presentation and runtime contracts">
                     <Button.Flyout>
                         <MenuFlyout>
                             <MenuItem Header="Static WoW 3.3.5a Layout Package…" Click="OnExportWow335Click" />
@@ -91,19 +84,7 @@
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
 
                 <Button Content="Add Frame" Click="OnAddFrameClick" IsVisible="{Binding IsV1Project}" />
-                <Button Content="Add v2 Control" IsVisible="{Binding IsV2Project}"
-                        ToolTip.Tip="Create a parent-anchored control under the selected valid container or composition root">
-                    <Button.Flyout>
-                        <MenuFlyout>
-                            <MenuItem Header="Frame" Click="OnAddV2FrameClick" />
-                            <MenuItem Header="Texture" Click="OnAddV2TextureClick" />
-                            <MenuItem Header="FontString" Click="OnAddV2FontStringClick" />
-                            <MenuItem Header="Button" Click="OnAddV2ButtonClick" />
-                            <MenuItem Header="StatusBar" Click="OnAddV2StatusBarClick" />
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
-                <Button Content="Delete Frame" Click="OnDeleteFrameClick" />
+                <Button Content="Delete Frame" Click="OnDeleteFrameClick" IsVisible="{Binding IsV1Project}" />
                 <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
@@ -202,7 +183,7 @@
           these govern how the canvas draws rather than what the document contains: switching mode
           or a category is a change of view, never an edit, so nothing here marks the project dirty.
         -->
-        <Border Grid.Row="2" Background="#0B1116" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,6">
+        <Border x:Name="LegacyViewControls" Grid.Row="2" IsVisible="{Binding IsV1Project}" Background="#0B1116" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,6">
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <ItemsControl ItemsSource="{Binding WorkspaceOptions}" VerticalAlignment="Center">
                     <ItemsControl.ItemsPanel>
@@ -369,7 +350,7 @@
                             </StackPanel>
                         </Expander>
 
-                        <Expander Header="Add v2 semantic control" IsVisible="{Binding ShowV2DesignTools}" IsExpanded="True">
+                        <Expander x:Name="V2ControlPalette" Header="Add Control" IsVisible="{Binding ShowV2DesignTools}" IsExpanded="True">
                             <WrapPanel Margin="0,6,0,0">
                                 <Button Content="Frame" Click="OnAddV2FrameClick" Margin="0,0,4,4" />
                                 <Button Content="Texture" Click="OnAddV2TextureClick" Margin="0,0,4,4" />
@@ -476,29 +457,10 @@
             <Border Grid.Column="2" Classes="panel" BorderThickness="1,0,0,0" Padding="12">
                 <ScrollViewer>
                     <StackPanel Spacing="8">
-                    <StackPanel Spacing="7" IsVisible="{Binding IsV2Project}">
+                    <StackPanel x:Name="V2Inspector" Spacing="7" IsVisible="{Binding IsV2Project}">
                         <TextBlock Classes="header" Text="FRAMEFORGE 2.0 · SEMANTIC INSPECTOR" />
                         <TextBlock Classes="mono" Text="{Binding V2ProjectSummary}" TextWrapping="Wrap" />
                         <TextBlock Classes="mono" Text="{Binding V2RootSummary}" TextWrapping="Wrap" />
-                        <TextBlock Classes="mono" Text="{Binding V2TemplateRegistryStatus}" TextWrapping="Wrap" />
-                        <ItemsControl ItemsSource="{Binding V2TemplateDiagnostics}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate><TextBlock Classes="mono" Foreground="#E5B567" Text="{Binding}" TextWrapping="Wrap" /></DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <Border Background="#14231A" BorderBrush="#315B40" BorderThickness="1" CornerRadius="4" Padding="7,5">
-                            <StackPanel Spacing="3">
-                                <TextBlock Classes="mono" Text="{Binding V2DiagnosticsSummary}" />
-                                <ItemsControl ItemsSource="{Binding V2Diagnostics}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Classes="mono" Foreground="#E5796B" TextWrapping="Wrap"
-                                                       Text="{Binding Message}" />
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-                        </Border>
 
                         <Border IsVisible="{Binding IsV2RootSelected}" Background="#17212A" BorderBrush="#315268"
                                 BorderThickness="1" CornerRadius="4" Padding="8,6">
@@ -563,12 +525,20 @@
                             <StackPanel IsVisible="{Binding V2IsTexture}" Spacing="3">
                                 <TextBlock Classes="label" Text="Texture reference" />
                                 <TextBox Text="{Binding V2TextureDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Foreground="#E5B567" Text="{Binding V2SelectedAssetDiagnostic}" TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel IsVisible="{Binding V2IsFontString}" Spacing="3">
                                 <TextBlock Classes="label" Text="Text" />
                                 <TextBox Text="{Binding V2TextDraft, Mode=TwoWay}" />
                                 <TextBlock Classes="label" Text="Font reference" />
                                 <TextBox Text="{Binding V2FontDraft, Mode=TwoWay}" />
+                                <Grid ColumnDefinitions="*,6,*,6,*">
+                                    <TextBox Grid.Column="0" PlaceholderText="Font size" Text="{Binding V2FontSizeDraft, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="2" ItemsSource="{Binding V2HorizontalJustifications}"
+                                              SelectedItem="{Binding V2JustifyHDraft, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="4" ItemsSource="{Binding V2VerticalJustifications}"
+                                              SelectedItem="{Binding V2JustifyVDraft, Mode=TwoWay}" />
+                                </Grid>
                             </StackPanel>
                             <StackPanel IsVisible="{Binding V2IsButton}" Spacing="4">
                                 <TextBlock Classes="header" Text="BLIZZARD TEMPLATE" Margin="0,6,0,1" />
@@ -593,11 +563,13 @@
                                     <TextBox Grid.Column="4" PlaceholderText="Value" Text="{Binding V2StatusValueDraft, Mode=TwoWay}" />
                                 </Grid>
                                 <TextBox PlaceholderText="Status texture reference" Text="{Binding V2StatusTextureDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Foreground="#E5B567" Text="{Binding V2SelectedAssetDiagnostic}" TextWrapping="Wrap" />
+                                <TextBox PlaceholderText="Fill color R,G,B[,A]" Text="{Binding V2StatusFillColorDraft, Mode=TwoWay}" />
+                                <TextBox PlaceholderText="Background color R,G,B[,A]" Text="{Binding V2StatusBackgroundColorDraft, Mode=TwoWay}" />
                             </StackPanel>
 
                             <TextBlock Classes="label" Foreground="#E5796B" Text="{Binding V2InspectorValidation}"
                                        TextWrapping="Wrap" />
-                            <TextBlock Classes="label" Text="{Binding V2UnsupportedPropertiesNote}" TextWrapping="Wrap" />
                             <WrapPanel Margin="0,5,0,0">
                                 <Button Content="Apply" Click="OnApplyV2InspectorClick" Margin="0,0,5,5" />
                                 <Button Content="Earlier" Click="OnMoveV2EarlierClick" Margin="0,0,5,5" />
@@ -605,6 +577,28 @@
                                 <Button Content="Delete" Click="OnDeleteV2Click" Margin="0,0,5,5" />
                             </WrapPanel>
                         </StackPanel>
+
+                        <Expander Header="Advanced · templates and diagnostics" IsExpanded="False">
+                            <StackPanel Spacing="5" Margin="0,6,0,0">
+                                <TextBlock Classes="mono" Text="{Binding V2TemplateRegistryStatus}" TextWrapping="Wrap" />
+                                <ItemsControl ItemsSource="{Binding V2TemplateDiagnostics}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate><TextBlock Classes="mono" Foreground="#E5B567" Text="{Binding}" TextWrapping="Wrap" /></DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Border Background="#14231A" BorderBrush="#315B40" BorderThickness="1" CornerRadius="4" Padding="7,5">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Classes="mono" Text="{Binding V2DiagnosticsSummary}" />
+                                        <ItemsControl ItemsSource="{Binding V2Diagnostics}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate><TextBlock Classes="mono" Foreground="#E5796B" TextWrapping="Wrap" Text="{Binding Message}" /></DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Classes="label" Text="{Binding V2UnsupportedPropertiesNote}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
 
                     <StackPanel Spacing="6" IsVisible="{Binding IsV1Project}">

@@ -109,6 +109,13 @@ public static class SmokeTest
         }
 
         Check("window has packaged application icon", window.Icon is not null);
+        Check("normal launch opens a schema-v2 project", vm.IsV2Project && !vm.IsV1Project);
+        Check("normal launch hides legacy view controls",
+            window.FindControl<Border>("LegacyViewControls")?.IsVisible == false);
+        Check("normal launch shows the v2 control palette",
+            window.FindControl<Expander>("V2ControlPalette")?.IsVisible == true);
+        Check("normal launch shows the v2 inspector",
+            window.FindControl<StackPanel>("V2Inspector")?.IsVisible == true);
 
         // 1. The example loads and resolves to the golden geometry.
         vm.LoadNativeHuntsExample();

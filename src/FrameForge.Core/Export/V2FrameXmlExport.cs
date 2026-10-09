@@ -544,13 +544,25 @@ public static partial class V2FrameXmlExporter
         CompositionRoot root,
         IReadOnlyDictionary<SemanticId, UiNode> byId,
         IReadOnlyDictionary<SemanticId, string> names,
-        IReadOnlyDictionary<SemanticId, string> texturePaths)
+        IReadOnlyDictionary<SemanticId, string> texturePaths,
+        UiColor? generatedBackground = null)
     {
         var nodes = children.Select(id => byId[id]).ToArray();
         var regions = nodes.Where(node => node.IsRegion).ToArray();
-        if (regions.Length > 0)
+        if (regions.Length > 0 || generatedBackground is not null)
         {
             writer.WriteStartElement("Layers");
+            if (generatedBackground is { } background)
+            {
+                writer.WriteStartElement("Layer");
+                writer.WriteAttributeString("level", "BACKGROUND");
+                writer.WriteStartElement("Texture");
+                writer.WriteAttributeString("name", "$parentBackground");
+                writer.WriteAttributeString("setAllPoints", "true");
+                WriteColor(writer, background);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+            }
             foreach (var group in regions.GroupBy(node => (
                          Layer: node.AuthoredProperties.Region?.DrawLayer ?? RegionDrawLayer.Artwork,
                          Sublevel: node.AuthoredProperties.Region?.Sublevel ?? 0)))
@@ -619,7 +631,14 @@ public static partial class V2FrameXmlExporter
             writer.WriteAttributeString("file", texture);
             writer.WriteEndElement();
         }
-        WriteOwnedContents(writer, node.Children, root, byId, names, texturePaths);
+        if (node.Kind == UiNodeKind.StatusBar && node.AuthoredProperties.StatusBar?.FillColor is { } fillColor)
+        {
+            writer.WriteStartElement("BarColor");
+            WriteColorAttributes(writer, fillColor);
+            writer.WriteEndElement();
+        }
+        WriteOwnedContents(writer, node.Children, root, byId, names, texturePaths,
+            node.Kind == UiNodeKind.StatusBar ? node.AuthoredProperties.StatusBar?.BackgroundColor : null);
         writer.WriteEndElement();
     }
 
@@ -640,19 +659,39 @@ public static partial class V2FrameXmlExporter
                 writer.WriteAttributeString("inherits", font.FontReference);
             if (font.Text is not null)
                 writer.WriteAttributeString("text", font.Text);
+            if (!string.IsNullOrWhiteSpace(font.JustifyH))
+                writer.WriteAttributeString("justifyH", font.JustifyH.ToUpperInvariant());
+            if (!string.IsNullOrWhiteSpace(font.JustifyV))
+                writer.WriteAttributeString("justifyV", font.JustifyV.ToUpperInvariant());
         }
         var region = node.AuthoredProperties.Region;
         WriteGeometry(writer, node, root, names, region?.Width, region?.Height);
         if (region?.Tint is { } tint)
+            WriteColor(writer, tint);
+        if (node.AuthoredProperties.FontString?.FontSize is { } fontSize)
         {
-            writer.WriteStartElement("Color");
-            writer.WriteAttributeString("r", Number(tint.Red));
-            writer.WriteAttributeString("g", Number(tint.Green));
-            writer.WriteAttributeString("b", Number(tint.Blue));
-            writer.WriteAttributeString("a", Number(tint.Alpha));
+            writer.WriteStartElement("FontHeight");
+            writer.WriteStartElement("AbsValue");
+            writer.WriteAttributeString("val", Number(fontSize));
+            writer.WriteEndElement();
             writer.WriteEndElement();
         }
         writer.WriteEndElement();
+    }
+
+    private static void WriteColor(XmlWriter writer, UiColor color)
+    {
+        writer.WriteStartElement("Color");
+        WriteColorAttributes(writer, color);
+        writer.WriteEndElement();
+    }
+
+    private static void WriteColorAttributes(XmlWriter writer, UiColor color)
+    {
+        writer.WriteAttributeString("r", Number(color.Red));
+        writer.WriteAttributeString("g", Number(color.Green));
+        writer.WriteAttributeString("b", Number(color.Blue));
+        writer.WriteAttributeString("a", Number(color.Alpha));
     }
 
     private static void WriteGeometry(XmlWriter writer, UiNode node, CompositionRoot root,

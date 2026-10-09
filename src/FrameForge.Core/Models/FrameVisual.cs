@@ -88,7 +88,13 @@ public sealed record TextureVisual(
 /// The <c>inherits</c> font template, e.g. <c>GameFontHighlightSmall</c>. Unresolved: FrameForge
 /// records the reference and does not emulate Blizzard's font atlas.
 /// </param>
-public sealed record TextVisual(string? Text, string? JustifyH = null, string? JustifyV = null, string? FontTemplate = null)
+public sealed record TextVisual(
+    string? Text,
+    string? JustifyH = null,
+    string? JustifyV = null,
+    string? FontTemplate = null,
+    double? FontSize = null,
+    ColorRgba? Color = null)
 {
     /// <summary>True when the source wrote a literal string, so its text is knowable now.</summary>
     public bool HasLiteralText => !string.IsNullOrEmpty(Text);
@@ -118,7 +124,8 @@ public sealed record StatusBarVisual(
     double? MaxValue = null,
     double? DefaultValue = null,
     string? BarTexture = null,
-    ColorRgba? BarColor = null)
+    ColorRgba? BarColor = null,
+    ColorRgba? BackgroundColor = null)
 {
     /// <summary>
     /// Fill fraction at the authored default value, in 0..1, or null when the range does not

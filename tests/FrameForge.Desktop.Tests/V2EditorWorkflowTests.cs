@@ -1,8 +1,11 @@
 using FrameForge.Core.Models;
+using FrameForge.Core.Geometry;
 using FrameForge.Core.Semantics.V2;
+using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Templates;
 using FrameForge.Desktop.ViewModels;
+using System.Xml.Linq;
 using Xunit;
 
 namespace FrameForge.Desktop.Tests;
@@ -121,6 +124,116 @@ public sealed class V2EditorWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task FrameStatusBarFontStringButtonWorkflowPreservesChildEditingAndRoundTripsDeterministically()
+    {
+        var path = Path.Combine(_directory, "acceptance.fforge.json");
+        var vm = TemplateViewModel();
+        vm.NewV2Project();
+        await vm.V2TemplateRegistryLoadingTask;
+
+        vm.AddV2Control(UiNodeKind.Frame);
+        var frameId = vm.SelectedV2Node!.Id;
+        vm.V2WidthDraft = "500";
+        vm.V2HeightDraft = "300";
+        vm.ApplyV2Inspector();
+
+        vm.AddV2Control(UiNodeKind.StatusBar);
+        var statusId = vm.SelectedV2Node!.Id;
+        vm.V2WidthDraft = "250";
+        vm.V2HeightDraft = "24";
+        vm.V2StatusMinimumDraft = "0";
+        vm.V2StatusMaximumDraft = "100";
+        vm.V2StatusValueDraft = "65";
+        vm.V2StatusFillColorDraft = "0,1,0,1";
+        vm.V2StatusBackgroundColorDraft = "0.1,0.1,0.1,1";
+        vm.ApplyV2Inspector();
+
+        vm.AddV2Control(UiNodeKind.FontString);
+        var textId = vm.SelectedV2Node!.Id;
+        vm.V2TextDraft = "65 / 100";
+        vm.V2FontSizeDraft = "14";
+        vm.V2TintDraft = "1,1,1,1";
+        vm.V2JustifyHDraft = "CENTER";
+        vm.V2JustifyVDraft = "MIDDLE";
+        vm.ApplyV2Inspector();
+
+        var originalChildRect = vm.Layout.Frames[textId.Value].Rect!.Value;
+        var viewport = Viewport.Identity;
+        var origin = new CanvasOrigin(0, 0);
+        var canvasPoint = viewport.ModelToCanvas(
+            new ModelPoint((originalChildRect.Left + originalChildRect.Right) / 2,
+                (originalChildRect.Top + originalChildRect.Bottom) / 2), origin);
+        var hitCandidates = HitTester.CandidatesAt(vm.Project, vm.Layout, viewport, origin,
+            VisibilityFilter.ALL, canvasPoint.X, canvasPoint.Y);
+        Assert.True(hitCandidates[0] == textId.Value,
+            $"Expected FontString first. Candidates: {string.Join(", ", hitCandidates)}; " +
+            $"frame={frameId.Value}, status={statusId.Value}, text={textId.Value}");
+        Assert.Contains(statusId.Value, hitCandidates);
+
+        var originalChildOffset = vm.SelectedV2Node!.Anchors[0];
+        vm.DragFrame(textId.Value, 13, -7);
+        var independentlyMoved = vm.Layout.Frames[textId.Value].Rect!.Value;
+        Assert.Equal(originalChildRect.Left + 13, independentlyMoved.Left);
+        Assert.Equal(originalChildRect.Top - 7, independentlyMoved.Top);
+        Assert.Equal(OwnerReference.Node(statusId), vm.SelectedV2Node!.Owner);
+        Assert.NotEqual(originalChildOffset.OffsetX, vm.SelectedV2Node.Anchors[0].OffsetX);
+
+        var childAnchorBeforeParentMove = vm.SelectedV2Node.Anchors[0];
+        vm.Select(statusId.Value);
+        var statusBefore = vm.Layout.Frames[statusId.Value].Rect!.Value;
+        var childBefore = vm.Layout.Frames[textId.Value].Rect!.Value;
+        vm.DragFrame(statusId.Value, 20, 11);
+        var statusAfter = vm.Layout.Frames[statusId.Value].Rect!.Value;
+        var childAfter = vm.Layout.Frames[textId.Value].Rect!.Value;
+        Assert.Equal(statusBefore.Left + 20, statusAfter.Left);
+        Assert.Equal(statusBefore.Top + 11, statusAfter.Top);
+        Assert.Equal(childBefore.Left + 20, childAfter.Left);
+        Assert.Equal(childBefore.Top + 11, childAfter.Top);
+        Assert.Equal(childAnchorBeforeParentMove,
+            vm.V2Document!.Nodes.Single(node => node.Id == textId).Anchors[0]);
+
+        vm.Select(frameId.Value);
+        vm.AddV2Control(UiNodeKind.Button);
+        var buttonId = vm.SelectedV2Node!.Id;
+        vm.V2TemplateDraft = vm.V2TemplateOptions.Single(option => option.Identity == "UIPanelButtonTemplate");
+        vm.V2TextDraft = "Test";
+        vm.ApplyV2Inspector();
+        Assert.Equal("UIPanelButtonTemplate", vm.SelectedV2Node!.BlizzardTemplate);
+        Assert.Equal("Test", vm.SelectedV2Node.AuthoredProperties.Button!.Text);
+
+        Assert.True(vm.SaveV2ToFile(path), vm.Status);
+        var first = vm.ExportV2(Path.Combine(_directory, "export-one"));
+        Assert.NotNull(first);
+        Assert.True(first.Success, first.Summary);
+        XNamespace ui = "http://www.blizzard.com/wow/ui/";
+        var exportedStatus = XDocument.Parse(first.Plan.Xml).Descendants(ui + "StatusBar").Single();
+        Assert.Single(exportedStatus.Descendants(ui + "FontString"));
+        Assert.Equal("65 / 100", (string?)exportedStatus.Descendants(ui + "FontString").Single().Attribute("text"));
+
+        var reopened = TemplateViewModel();
+        reopened.NewV2Project();
+        await reopened.V2TemplateRegistryLoadingTask;
+        reopened.OpenFromFile(path);
+        var second = reopened.ExportV2(Path.Combine(_directory, "export-two"));
+        Assert.NotNull(second);
+        Assert.True(second.Success, second.Summary);
+        Assert.Equal(first.Plan.Xml, second.Plan.Xml);
+        Assert.Equal(first.Plan.Manifest, second.Plan.Manifest);
+
+        var status = reopened.V2Document!.Nodes.Single(node => node.Id == statusId);
+        var text = reopened.V2Document.Nodes.Single(node => node.Id == textId);
+        Assert.Equal(65, status.AuthoredProperties.StatusBar!.Value);
+        Assert.Equal(new UiColor(0, 1, 0, 1), status.AuthoredProperties.StatusBar.FillColor);
+        Assert.Equal("65 / 100", text.AuthoredProperties.FontString!.Text);
+        Assert.Equal(14, text.AuthoredProperties.FontString.FontSize);
+        Assert.Equal(OwnerReference.Node(statusId), text.Owner);
+        Assert.Equal(OwnerReference.Node(frameId), status.Owner);
+        var button = reopened.V2Document.Nodes.Single(node => node.Id == buttonId);
+        Assert.Equal("UIPanelButtonTemplate", button.BlizzardTemplate);
+        Assert.Equal("Test", button.AuthoredProperties.Button!.Text);
+    }
+
+    [Fact]
     public void InvalidInspectorEditIsRejectedWithoutChangingDocument()
     {
         var vm = ViewModel();
@@ -155,6 +268,16 @@ public sealed class V2EditorWorkflowTests : IDisposable
     private MainWindowViewModel ViewModel() => new(
         Path.Combine(_directory, $"settings-{Guid.NewGuid():N}.json"),
         stockTemplates: new PassThroughStockTemplates());
+
+    private MainWindowViewModel TemplateViewModel()
+    {
+        var settings = Path.Combine(_directory, $"settings-template-{Guid.NewGuid():N}.json");
+        new AssetSettingsStore(settings).SaveConfiguration(new FrameForgeLocalSettings([], "synthetic-client"));
+        return new MainWindowViewModel(settings,
+            new V2TemplateDesignerTests.ValidProvider(_directory),
+            new V2TemplateDesignerTests.PassThroughStockTemplates(),
+            v2TemplateLoader: new V2TemplateDesignerTests.FakeLoader(V2TemplateDesignerTests.Registry()));
+    }
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 

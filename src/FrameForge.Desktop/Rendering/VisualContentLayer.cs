@@ -161,11 +161,16 @@ public sealed class VisualContentLayer : ICanvasLayer
                 ? DesignTextStyleResolver.Resolve(frame.Model!, design, stock)
                 : null;
             if (effective?.Style is { } style)
-                DrawStyledText(context, canvas, rect, text.Text!, style.JustifyH, text.JustifyVertical, style,
-                    canvas.PreviewOverrides?.Find(frame.Name)?.TextColor);
+            {
+                if (text.FontSize is { } fontSize)
+                    style = style with { Size = fontSize };
+                DrawStyledText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical, style,
+                    canvas.PreviewOverrides?.Find(frame.Name)?.TextColor ?? text.Color);
+            }
             else
                 DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
-                    Color.Parse("#E8F1F5"));
+                    text.Color is { } color ? ToColor(color) : Color.Parse("#E8F1F5"),
+                    (text.FontSize ?? 11) * canvas.Viewport.Zoom);
             return;
         }
 
@@ -187,12 +192,16 @@ public sealed class VisualContentLayer : ICanvasLayer
         var v2Template = canvas.V2Templates?.Resolve(frame.Model?.Inherits);
         if (v2Template is not null)
         {
-            var drewTemplate = DrawV2Button(context, canvas, rect, v2Template, canvas.V2ButtonState);
-            if (!drewTemplate)
+            var templateRender = DrawV2Button(context, canvas, rect, v2Template, canvas.V2ButtonState);
+            if (!templateRender.Rendered)
             {
+                canvas.Diagnostics.ReportVisualDiagnostic(frame.Name,
+                    templateRender.Diagnostic ?? "Template state could not be rendered.");
                 context.FillRectangle(new SolidColorBrush(Color.Parse("#6B4A32")) { Opacity = 0.20 }, rect);
                 context.DrawRectangle(null, new Pen(Brushes.Orange, 1), rect);
-                DrawTag(context, rect, "unsupported/unresolved template state", Color.Parse("#E5796B"));
+                DrawTag(context, rect,
+                    templateRender.UnsupportedState ? "unsupported template state" : "unresolved template asset",
+                    Color.Parse("#E5796B"));
             }
             if (text is { HasLiteralText: true })
             {
@@ -233,25 +242,42 @@ public sealed class VisualContentLayer : ICanvasLayer
         }
     }
 
-    private static bool DrawV2Button(DrawingContext context, CanvasRenderContext canvas, Rect rect,
+    private static BlizzardButtonRenderResult DrawV2Button(DrawingContext context, CanvasRenderContext canvas, Rect rect,
         BlizzardResolvedTemplate template, PreviewButtonState state)
     {
         var values = template.EffectiveProperties;
-        if (values.VisualRegions.Count > 0)
+        // UIPanelButtonTemplate contributes a ButtonText visual region but paints its background
+        // through native state textures. Only templates with texture regions use the three-slice
+        // path (currently CharacterFrameTabButtonTemplate).
+        var textureRegions = values.VisualRegions
+            .Where(item => item.Kind == BlizzardVisualRegionKind.Texture)
+            .ToArray();
+        if (textureRegions.Length > 0)
         {
             var visualState = state is PreviewButtonState.Disabled or PreviewButtonState.Selected
                 ? BlizzardButtonState.Disabled
                 : BlizzardButtonState.Normal;
-            var regions = values.VisualRegions.Where(item => item.Kind == BlizzardVisualRegionKind.Texture &&
-                                                              item.State == visualState).ToArray();
-            if (regions.Length != 3 || !DrawV2Slices(context, canvas, rect, regions)) return false;
+            var regions = textureRegions.Where(item => item.State == visualState).ToArray();
+            if (regions.Length != 3)
+                return BlizzardButtonRenderResult.Unsupported(
+                    $"Template '{template.Definition.Name}' has no three-slice {state} visual.");
+            var slices = DrawV2Slices(context, canvas, rect, regions);
+            if (!slices.Rendered) return slices;
             if (state == PreviewButtonState.Highlighted &&
                 values.StateTextures.TryGetValue(BlizzardButtonState.Highlight, out var highlight))
-                DrawV2Texture(context, canvas, rect, highlight, 0.75);
-            return state != PreviewButtonState.Pushed;
+            {
+                var overlayRender = DrawV2Texture(context, canvas, rect, highlight, 0.75);
+                if (!overlayRender.Rendered) return overlayRender;
+            }
+            return state == PreviewButtonState.Pushed
+                ? BlizzardButtonRenderResult.Unsupported(
+                    $"Template '{template.Definition.Name}' declares no pushed visual.")
+                : BlizzardButtonRenderResult.Success;
         }
 
-        if (state == PreviewButtonState.Selected) return false;
+        if (state == PreviewButtonState.Selected)
+            return BlizzardButtonRenderResult.Unsupported(
+                $"Selected is not a supported state for template '{template.Definition.Name}'.");
 
         var baseState = state switch
         {
@@ -259,15 +285,18 @@ public sealed class VisualContentLayer : ICanvasLayer
             PreviewButtonState.Disabled => BlizzardButtonState.Disabled,
             _ => BlizzardButtonState.Normal,
         };
-        if (!values.StateTextures.TryGetValue(baseState, out var texture) ||
-            !DrawV2Texture(context, canvas, rect, texture)) return false;
+        if (!values.StateTextures.TryGetValue(baseState, out var texture))
+            return BlizzardButtonRenderResult.Unsupported(
+                $"Template '{template.Definition.Name}' does not define state texture {baseState}.");
+        var baseTexture = DrawV2Texture(context, canvas, rect, texture);
+        if (!baseTexture.Rendered) return baseTexture;
         if (state == PreviewButtonState.Highlighted &&
             values.StateTextures.TryGetValue(BlizzardButtonState.Highlight, out var overlay))
             return DrawV2Texture(context, canvas, rect, overlay, 0.75);
-        return true;
+        return BlizzardButtonRenderResult.Success;
     }
 
-    private static bool DrawV2Slices(DrawingContext context, CanvasRenderContext canvas, Rect rect,
+    private static BlizzardButtonRenderResult DrawV2Slices(DrawingContext context, CanvasRenderContext canvas, Rect rect,
         IReadOnlyList<BlizzardVisualRegion> regions)
     {
         var ordered = new[]
@@ -276,7 +305,8 @@ public sealed class VisualContentLayer : ICanvasLayer
             regions.FirstOrDefault(item => item.SymbolicName.Contains("Middle", StringComparison.Ordinal)),
             regions.FirstOrDefault(item => item.SymbolicName.Contains("Right", StringComparison.Ordinal)),
         };
-        if (ordered.Any(item => item?.Texture is null)) return false;
+        if (ordered.Any(item => item?.Texture is null))
+            return BlizzardButtonRenderResult.Unsupported("The template's three-slice texture regions are incomplete.");
         var side = Math.Min(rect.Width / 2, (ordered[0]!.Width ?? 20) * canvas.Viewport.Zoom);
         var destinations = new[]
         {
@@ -285,15 +315,25 @@ public sealed class VisualContentLayer : ICanvasLayer
             new Rect(rect.Right - side, rect.Y, side, rect.Height),
         };
         for (var index = 0; index < ordered.Length; index++)
-            if (!DrawV2Texture(context, canvas, destinations[index], ordered[index]!.Texture!)) return false;
-        return true;
+        {
+            var slice = DrawV2Texture(context, canvas, destinations[index], ordered[index]!.Texture!);
+            if (!slice.Rendered) return slice;
+        }
+        return BlizzardButtonRenderResult.Success;
     }
 
-    private static bool DrawV2Texture(DrawingContext context, CanvasRenderContext canvas, Rect destination,
+    private static BlizzardButtonRenderResult DrawV2Texture(DrawingContext context, CanvasRenderContext canvas, Rect destination,
         BlizzardTextureValue texture, double opacity = 1)
     {
-        if (texture.File is not { } reference || canvas.AssetResolver?.Resolve(reference) is not
-            { CanRender: true, Texture: { } decoded }) return false;
+        if (texture.File is not { } reference)
+            return BlizzardButtonRenderResult.Unresolved("The selected template texture has no file reference.");
+        if (canvas.AssetResolver is null)
+            return BlizzardButtonRenderResult.Unresolved(
+                $"Texture asset resolver is unavailable for '{reference}'.");
+        var asset = canvas.AssetResolver.Resolve(reference);
+        if (!asset.CanRender || asset.Texture is not { } decoded)
+            return BlizzardButtonRenderResult.Unresolved(
+                $"'{reference}' is {asset.Status}: {asset.Diagnostic.Message}");
         var coords = texture.TexCoords is { } value
             ? new TexCoords(value.Left, value.Right, value.Top, value.Bottom)
             : TexCoords.Full;
@@ -301,12 +341,20 @@ public sealed class VisualContentLayer : ICanvasLayer
         {
             var source = TextureSourceRect.Map(coords, decoded.Image.Width, decoded.Image.Height);
             using (context.PushOpacity(opacity)) context.DrawImage(decoded.Bitmap, source, destination);
-            return true;
+            return BlizzardButtonRenderResult.Success;
         }
         catch (ArgumentOutOfRangeException)
         {
-            return false;
+            return BlizzardButtonRenderResult.Unresolved(
+                $"'{reference}' has invalid texture coordinates {coords}.");
         }
+    }
+
+    private sealed record BlizzardButtonRenderResult(bool Rendered, bool UnsupportedState, string? Diagnostic)
+    {
+        public static BlizzardButtonRenderResult Success { get; } = new(true, false, null);
+        public static BlizzardButtonRenderResult Unsupported(string diagnostic) => new(false, true, diagnostic);
+        public static BlizzardButtonRenderResult Unresolved(string diagnostic) => new(false, false, diagnostic);
     }
 
     private static bool DrawStockButton(
@@ -375,6 +423,9 @@ public sealed class VisualContentLayer : ICanvasLayer
         Rect rect,
         StatusBarVisual? bar)
     {
+        if (bar?.BackgroundColor is { } background)
+            context.FillRectangle(Tint(background), rect);
+
         // The declared range identifies an empty authored bar as a bar rather than a missing
         // renderer, so it is surfaced even when the default fraction is zero.
         if (bar?.MinValue is { } min && bar.MaxValue is { } max)
@@ -434,10 +485,11 @@ public sealed class VisualContentLayer : ICanvasLayer
         string text,
         string? justifyH,
         string? justifyV,
-        Color color)
+        Color color,
+        double size = 11)
     {
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Normal), 11,
+            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Normal), Math.Max(1, size),
             new SolidColorBrush(color));
 
         var x = justifyH switch
