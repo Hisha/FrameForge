@@ -2,6 +2,7 @@ using System.Globalization;
 using Avalonia;
 using Avalonia.Media;
 using FrameForge.Core.Models;
+using FrameForge.Core.Templates;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
@@ -183,6 +184,32 @@ public sealed class VisualContentLayer : ICanvasLayer
         Rect rect,
         TextVisual? text)
     {
+        var v2Template = canvas.V2Templates?.Resolve(frame.Model?.Inherits);
+        if (v2Template is not null)
+        {
+            var drewTemplate = DrawV2Button(context, canvas, rect, v2Template, canvas.V2ButtonState);
+            if (!drewTemplate)
+            {
+                context.FillRectangle(new SolidColorBrush(Color.Parse("#6B4A32")) { Opacity = 0.20 }, rect);
+                context.DrawRectangle(null, new Pen(Brushes.Orange, 1), rect);
+                DrawTag(context, rect, "unsupported/unresolved template state", Color.Parse("#E5796B"));
+            }
+            if (text is { HasLiteralText: true })
+            {
+                var values = v2Template.EffectiveProperties;
+                var fontName = canvas.V2ButtonState switch
+                {
+                    PreviewButtonState.Disabled or PreviewButtonState.Selected => values.DisabledFont,
+                    PreviewButtonState.Highlighted => values.HighlightFont ?? values.NormalFont,
+                    _ => values.NormalFont,
+                };
+                if (canvas.StockTemplates?.ResolveFont(fontName) is { } font)
+                    DrawStyledText(context, canvas, rect, text.Text!, "CENTER", "MIDDLE", font);
+                else
+                    DrawClippedText(context, rect, text.Text!, "CENTER", "MIDDLE", Color.Parse("#F0DCC0"));
+            }
+            return;
+        }
         var stock = canvas.StockTemplates?.ResolveButton(frame.Model?.Inherits);
         var previewButton = canvas.PreviewOverrides?.Find(frame.Name)?.ButtonState ?? PreviewButtonState.Normal;
         var drewStock = stock is not null && DrawStockButton(context, canvas, rect, stock, previewButton);
@@ -203,6 +230,82 @@ public sealed class VisualContentLayer : ICanvasLayer
             else
                 DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
                     Color.Parse("#F0DCC0"));
+        }
+    }
+
+    private static bool DrawV2Button(DrawingContext context, CanvasRenderContext canvas, Rect rect,
+        BlizzardResolvedTemplate template, PreviewButtonState state)
+    {
+        var values = template.EffectiveProperties;
+        if (values.VisualRegions.Count > 0)
+        {
+            var visualState = state is PreviewButtonState.Disabled or PreviewButtonState.Selected
+                ? BlizzardButtonState.Disabled
+                : BlizzardButtonState.Normal;
+            var regions = values.VisualRegions.Where(item => item.Kind == BlizzardVisualRegionKind.Texture &&
+                                                              item.State == visualState).ToArray();
+            if (regions.Length != 3 || !DrawV2Slices(context, canvas, rect, regions)) return false;
+            if (state == PreviewButtonState.Highlighted &&
+                values.StateTextures.TryGetValue(BlizzardButtonState.Highlight, out var highlight))
+                DrawV2Texture(context, canvas, rect, highlight, 0.75);
+            return state != PreviewButtonState.Pushed;
+        }
+
+        if (state == PreviewButtonState.Selected) return false;
+
+        var baseState = state switch
+        {
+            PreviewButtonState.Pushed => BlizzardButtonState.Pushed,
+            PreviewButtonState.Disabled => BlizzardButtonState.Disabled,
+            _ => BlizzardButtonState.Normal,
+        };
+        if (!values.StateTextures.TryGetValue(baseState, out var texture) ||
+            !DrawV2Texture(context, canvas, rect, texture)) return false;
+        if (state == PreviewButtonState.Highlighted &&
+            values.StateTextures.TryGetValue(BlizzardButtonState.Highlight, out var overlay))
+            return DrawV2Texture(context, canvas, rect, overlay, 0.75);
+        return true;
+    }
+
+    private static bool DrawV2Slices(DrawingContext context, CanvasRenderContext canvas, Rect rect,
+        IReadOnlyList<BlizzardVisualRegion> regions)
+    {
+        var ordered = new[]
+        {
+            regions.FirstOrDefault(item => item.SymbolicName.Contains("Left", StringComparison.Ordinal)),
+            regions.FirstOrDefault(item => item.SymbolicName.Contains("Middle", StringComparison.Ordinal)),
+            regions.FirstOrDefault(item => item.SymbolicName.Contains("Right", StringComparison.Ordinal)),
+        };
+        if (ordered.Any(item => item?.Texture is null)) return false;
+        var side = Math.Min(rect.Width / 2, (ordered[0]!.Width ?? 20) * canvas.Viewport.Zoom);
+        var destinations = new[]
+        {
+            new Rect(rect.X, rect.Y, side, rect.Height),
+            new Rect(rect.X + side, rect.Y, Math.Max(0, rect.Width - side * 2), rect.Height),
+            new Rect(rect.Right - side, rect.Y, side, rect.Height),
+        };
+        for (var index = 0; index < ordered.Length; index++)
+            if (!DrawV2Texture(context, canvas, destinations[index], ordered[index]!.Texture!)) return false;
+        return true;
+    }
+
+    private static bool DrawV2Texture(DrawingContext context, CanvasRenderContext canvas, Rect destination,
+        BlizzardTextureValue texture, double opacity = 1)
+    {
+        if (texture.File is not { } reference || canvas.AssetResolver?.Resolve(reference) is not
+            { CanRender: true, Texture: { } decoded }) return false;
+        var coords = texture.TexCoords is { } value
+            ? new TexCoords(value.Left, value.Right, value.Top, value.Bottom)
+            : TexCoords.Full;
+        try
+        {
+            var source = TextureSourceRect.Map(coords, decoded.Image.Width, decoded.Image.Height);
+            using (context.PushOpacity(opacity)) context.DrawImage(decoded.Bitmap, source, destination);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
         }
     }
 

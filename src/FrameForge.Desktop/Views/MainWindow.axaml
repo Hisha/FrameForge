@@ -71,8 +71,7 @@
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
                 <Button Content="Save As" Click="OnSaveAsClick" ToolTip.Tip="Save to a new file" />
 
-                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts"
-                        IsEnabled="{Binding IsV1Project}">
+                <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
                     <Button.Flyout>
                         <MenuFlyout>
                             <MenuItem Header="Static WoW 3.3.5a Layout Package…" Click="OnExportWow335Click" />
@@ -481,6 +480,12 @@
                         <TextBlock Classes="header" Text="FRAMEFORGE 2.0 · SEMANTIC INSPECTOR" />
                         <TextBlock Classes="mono" Text="{Binding V2ProjectSummary}" TextWrapping="Wrap" />
                         <TextBlock Classes="mono" Text="{Binding V2RootSummary}" TextWrapping="Wrap" />
+                        <TextBlock Classes="mono" Text="{Binding V2TemplateRegistryStatus}" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding V2TemplateDiagnostics}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate><TextBlock Classes="mono" Foreground="#E5B567" Text="{Binding}" TextWrapping="Wrap" /></DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <Border Background="#14231A" BorderBrush="#315B40" BorderThickness="1" CornerRadius="4" Padding="7,5">
                             <StackPanel Spacing="3">
                                 <TextBlock Classes="mono" Text="{Binding V2DiagnosticsSummary}" />
@@ -525,6 +530,7 @@
                                 <TextBlock Grid.Column="3" Classes="label" Text="Height" />
                                 <TextBox Grid.Column="4" Text="{Binding V2HeightDraft, Mode=TwoWay}" />
                             </Grid>
+                            <TextBlock Classes="mono" Text="{Binding V2DimensionSummary}" TextWrapping="Wrap" />
                             <Grid ColumnDefinitions="92,*,8,92,*">
                                 <TextBlock Grid.Column="0" Classes="label" Text="Offset X" />
                                 <TextBox Grid.Column="1" Text="{Binding V2OffsetXDraft, Mode=TwoWay}" />
@@ -564,8 +570,22 @@
                                 <TextBlock Classes="label" Text="Font reference" />
                                 <TextBox Text="{Binding V2FontDraft, Mode=TwoWay}" />
                             </StackPanel>
-                            <CheckBox IsVisible="{Binding V2IsButton}" Content="Enabled"
-                                      IsChecked="{Binding V2ButtonEnabledDraft, Mode=TwoWay}" />
+                            <StackPanel IsVisible="{Binding V2IsButton}" Spacing="4">
+                                <TextBlock Classes="header" Text="BLIZZARD TEMPLATE" Margin="0,6,0,1" />
+                                <ComboBox ItemsSource="{Binding V2TemplateOptions}"
+                                          SelectedItem="{Binding V2TemplateDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="mono" Text="{Binding V2TemplateProvenanceSummary}" TextWrapping="Wrap" />
+                                <Button Content="Clear width/height overrides" IsVisible="{Binding V2HasTemplate}"
+                                        Click="OnClearV2TemplateOverridesClick" HorizontalAlignment="Left" />
+                                <TextBlock Classes="label" Text="Button text" />
+                                <TextBox Text="{Binding V2TextDraft, Mode=TwoWay}" />
+                                <CheckBox Content="Enabled" IsChecked="{Binding V2ButtonEnabledDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Text="Preview state · design-time only" />
+                                <ComboBox ItemsSource="{Binding V2PreviewStates}"
+                                          SelectedItem="{Binding V2PreviewStateDraft, Mode=TwoWay}" />
+                                <TextBlock Classes="label" Foreground="#E5B567" Text="{Binding V2PreviewStateDiagnostic}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
                             <StackPanel IsVisible="{Binding V2IsStatusBar}" Spacing="3">
                                 <Grid ColumnDefinitions="*,6,*,6,*">
                                     <TextBox Grid.Column="0" PlaceholderText="Minimum" Text="{Binding V2StatusMinimumDraft, Mode=TwoWay}" />

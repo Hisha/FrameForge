@@ -64,6 +64,8 @@ public partial class MainWindow : Window
             or nameof(MainWindowViewModel.HiddenByOrigin)
             or nameof(MainWindowViewModel.LockedNames)
             or nameof(MainWindowViewModel.PreferredSelectionNames)
+            or nameof(MainWindowViewModel.V2TemplateRegistry)
+            or nameof(MainWindowViewModel.V2PreviewButtonState)
             or nameof(MainWindowViewModel.Assets))
         {
             SyncCanvas();
@@ -94,6 +96,8 @@ public partial class MainWindow : Window
         Canvas.AssetResolver = vm.Assets;
         Canvas.StockTemplates = vm.StockTemplates;
         Canvas.PreviewOverrides = vm.ActivePreviewOverrides;
+        Canvas.V2Templates = vm.IsV2Project ? vm.V2TemplateRegistry : null;
+        Canvas.V2ButtonState = vm.V2PreviewButtonState;
         Canvas.HiddenByOrigin = vm.HiddenByOrigin;
         Canvas.LockedNames = vm.LockedNames;
         Canvas.PreferredSelectionNames = vm.PreferredSelectionNames;
@@ -112,6 +116,7 @@ public partial class MainWindow : Window
     private void OnAddV2ButtonClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.Button);
     private void OnAddV2StatusBarClick(object? sender, RoutedEventArgs e) => ViewModel?.AddV2Control(UiNodeKind.StatusBar);
     private void OnApplyV2InspectorClick(object? sender, RoutedEventArgs e) => ViewModel?.ApplyV2Inspector();
+    private void OnClearV2TemplateOverridesClick(object? sender, RoutedEventArgs e) => ViewModel?.ClearV2TemplateOverrides();
     private void OnMoveV2EarlierClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(-1);
     private void OnMoveV2LaterClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(1);
     private void OnDeleteV2Click(object? sender, RoutedEventArgs e) => ViewModel?.DeleteV2Selection();
@@ -639,6 +644,29 @@ public partial class MainWindow : Window
     {
         if (ViewModel is not { } vm)
             return;
+
+        if (vm.IsV2Project)
+        {
+            if (vm.V2Document is not { } document) return;
+            var plan = V2FrameXmlExporter.Build(document,
+                string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath, vm.V2TemplateRegistry);
+            var v2Errors = plan.Diagnostics.Where(item => item.Severity == DiagnosticSeverity.Error).ToArray();
+            if (v2Errors.Length > 0)
+            {
+                vm.Status = "Export blocked: " + string.Join(" ", v2Errors.Take(3).Select(item => $"{item.Code}: {item.Message}"));
+                return;
+            }
+            var destinations = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Choose an empty or existing WoW 3.3.5a export directory",
+                AllowMultiple = false,
+            });
+            if (destinations.Count > 0 && destinations[0].Path.LocalPath is { Length: > 0 } v2Destination)
+                try { vm.ExportV2(v2Destination); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                { vm.Status = $"Export failed safely: {ex.Message}"; }
+            return;
+        }
 
         var validation = Wow335ExportBuilder.Build(vm.Project,
             string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath);

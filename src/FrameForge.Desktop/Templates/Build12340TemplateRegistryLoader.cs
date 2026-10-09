@@ -7,7 +7,12 @@ namespace FrameForge.Desktop.Templates;
 /// Materializes the exact approved template dependency closure from a validated build-12340 client,
 /// then hands immutable source snapshots to the Core parser.
 /// </summary>
-public sealed class Build12340TemplateRegistryLoader(IWoWClientAssetProvider assets)
+public interface IBuild12340TemplateRegistryLoader
+{
+    BlizzardTemplateRegistry Load(WowClientValidation client);
+}
+
+public sealed class Build12340TemplateRegistryLoader(IWoWClientAssetProvider assets) : IBuild12340TemplateRegistryLoader
 {
     private static readonly IReadOnlyDictionary<string, string> ExpectedSourceHashes =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

@@ -366,6 +366,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AssetSettingsStore _assetSettings;
     private readonly IWoWClientAssetProvider _wowAssets;
     private readonly IStockTemplateResolver _stockTemplates;
+    private readonly IBuild12340TemplateRegistryLoader _v2TemplateLoader;
     private readonly IPreviewStateRegistry _previewStates;
     private PreviewOverrideSet _activePreviewOverrides = new(
         PreviewStateRegistry.XmlDefaults,
@@ -1042,12 +1043,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     public MainWindowViewModel(string? settingsPath, IWoWClientAssetProvider? wowAssets = null,
-        IStockTemplateResolver? stockTemplates = null, IPreviewStateRegistry? previewStates = null)
+        IStockTemplateResolver? stockTemplates = null, IPreviewStateRegistry? previewStates = null,
+        IBuild12340TemplateRegistryLoader? v2TemplateLoader = null)
     {
         _assetSettings = new AssetSettingsStore(settingsPath
             ?? Environment.GetEnvironmentVariable("FRAMEFORGE_SETTINGS_PATH"));
         _wowAssets = wowAssets ?? new WoWClientAssetProvider();
         _stockTemplates = stockTemplates ?? new StockTemplateResolver(_wowAssets);
+        _v2TemplateLoader = v2TemplateLoader ?? new Build12340TemplateRegistryLoader(_wowAssets);
         TextStyleOptions = WowTextStyleCatalog.Available(_stockTemplates);
         _previewStates = previewStates ?? new PreviewStateRegistry();
         var configuration = _assetSettings.LoadConfiguration();
@@ -1388,10 +1391,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     return;
                 }
                 var openDiagnostics = UiDocumentValidator.Validate(v2Result.Document!);
-                if (openDiagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+                if (openDiagnostics.Any(item => item.Severity == DiagnosticSeverity.Error &&
+                                                item.Code != "FFV2-TEMPLATE-003"))
                 {
                     Status = $"Could not open {FileName(path)}: " +
-                             string.Join(" ", openDiagnostics.Take(3).Select(item => $"{item.Code}: {item.Message}"));
+                             string.Join(" ", openDiagnostics.Where(item => item.Code != "FFV2-TEMPLATE-003")
+                                 .Take(3).Select(item => $"{item.Code}: {item.Message}"));
                     return;
                 }
                 LoadV2(v2Result.Document!, path, $"Opened schema-v2 project {FileName(path)}.");
@@ -1826,7 +1831,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (_v2Document is null || UiDocumentProjection.IdFromProjectionName(name) is not { } id ||
                 !_v2Document.Nodes.Any(node => node.Id == id))
                 return;
-            ApplyV2Result(_v2Editor.MoveBy(_v2Document, id, modelDx, modelDy), $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}.");
+            ApplyV2Result(V2Editor.MoveBy(_v2Document, id, modelDx, modelDy), $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}.");
             return;
         }
         _lastDragMovedSelection = _selectedNames.Count > 1 && _selectedNames.Contains(name, StringComparer.Ordinal);
@@ -2699,6 +2704,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SaveLocalSettings();
         RefreshAssetPresentation(_wowClient.Message);
         NotifyWoWClientState();
+        ReloadV2TemplateRegistry();
     }
 
     public void ClearWoWClientPath()
@@ -2708,6 +2714,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SaveLocalSettings();
         RefreshAssetPresentation("WoW client selection cleared; existing managed cache remains available.");
         NotifyWoWClientState();
+        ReloadV2TemplateRegistry();
     }
 
     public void RevalidateWoWClient()
@@ -2716,6 +2723,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ConfigureAssets();
         RefreshAssetPresentation(_wowClient.Message);
         NotifyWoWClientState();
+        ReloadV2TemplateRegistry();
     }
 
     public IReadOnlyList<AssetMaterializationResult> ResolveMissingStockAssets()

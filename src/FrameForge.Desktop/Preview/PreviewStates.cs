@@ -2,7 +2,7 @@ using FrameForge.Core.Models;
 
 namespace FrameForge.Desktop.Preview;
 
-public enum PreviewButtonState { Normal, Selected }
+public enum PreviewButtonState { Normal, Pushed, Disabled, Highlighted, Selected }
 
 /// <summary>One non-destructive, design-time contribution to an imported frame.</summary>
 public sealed record PreviewFrameOverride(

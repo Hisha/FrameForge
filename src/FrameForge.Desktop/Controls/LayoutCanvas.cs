@@ -11,6 +11,7 @@ using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Templates;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Desktop.Controls;
 
@@ -76,6 +77,8 @@ public class LayoutCanvas : Control
     private ITextureAssetResolver? _assetResolver;
     private IStockTemplateResolver? _stockTemplates;
     private PreviewOverrideSet? _previewOverrides;
+    private BlizzardTemplateRegistry? _v2Templates;
+    private PreviewButtonState _v2ButtonState;
     private IReadOnlySet<string> _hiddenByOrigin = new HashSet<string>();
     private IReadOnlySet<string> _lockedNames = new HashSet<string>();
     private IReadOnlySet<string> _preferredSelectionNames = new HashSet<string>();
@@ -277,6 +280,18 @@ public class LayoutCanvas : Control
         }
     }
 
+    public BlizzardTemplateRegistry? V2Templates
+    {
+        get => _v2Templates;
+        set { _v2Templates = value; InvalidateVisual(); }
+    }
+
+    public PreviewButtonState V2ButtonState
+    {
+        get => _v2ButtonState;
+        set { _v2ButtonState = value; InvalidateVisual(); }
+    }
+
     /// <summary>Presentation-only exclusions by origin; descendants are evaluated independently.</summary>
     public IReadOnlySet<string> HiddenByOrigin
     {
@@ -468,7 +483,9 @@ public class LayoutCanvas : Control
             // older call site, a test - drawing the same selection outline it always did.
             _selectedNames.Count > 0 || _selectedName is null
                 ? _selectedNames
-                : [_selectedName]);
+                : [_selectedName],
+            _v2Templates,
+            _v2ButtonState);
     }
 
     /// <inheritdoc />

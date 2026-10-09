@@ -6,6 +6,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -74,7 +75,9 @@ public sealed record CanvasRenderContext(
     ITextureAssetResolver? AssetResolver = null,
     IStockTemplateResolver? StockTemplates = null,
     PreviewOverrideSet? PreviewOverrides = null,
-    IReadOnlyList<string>? SelectedNames = null)
+    IReadOnlyList<string>? SelectedNames = null,
+    BlizzardTemplateRegistry? V2Templates = null,
+    PreviewButtonState V2ButtonState = PreviewButtonState.Normal)
 {
     /// <summary>
     /// The whole selection in click order, primary last.

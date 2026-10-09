@@ -1,5 +1,6 @@
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
+using FrameForge.Core.Templates;
 
 namespace FrameForge.Core.Semantics.V2;
 
@@ -11,7 +12,7 @@ public static class UiDocumentProjection
 {
     public const string ProjectNameMetadataKey = "projectName";
 
-    public static Project ToProject(UiDocument document)
+    public static Project ToProject(UiDocument document, BlizzardTemplateRegistry? templates = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         var root = document.CompositionRoots.SingleOrDefault();
@@ -32,7 +33,7 @@ public static class UiDocumentProjection
                 Visible = true,
             },
         };
-        frames.AddRange(orderedNodes.Select(node => ToFrame(node, root)));
+        frames.AddRange(orderedNodes.Select(node => ToFrame(node, root, templates)));
 
         var displayObjects = new List<DesignObjectMetadata>
         {
@@ -87,7 +88,7 @@ public static class UiDocumentProjection
         return result;
     }
 
-    private static FrameDef ToFrame(UiNode node, CompositionRoot root)
+    private static FrameDef ToFrame(UiNode node, CompositionRoot root, BlizzardTemplateRegistry? templates)
     {
         var anchor = node.Anchors.FirstOrDefault() ?? new UiAnchor
         {
@@ -95,7 +96,8 @@ public static class UiDocumentProjection
             RelativePoint = AnchorPoint.CENTER,
             Target = AnchorTarget.Parent(),
         };
-        var dimensions = Dimensions(node);
+        var effective = UiTemplateEffectiveProperties.Resolve(node, templates);
+        var dimensions = Dimensions(node, effective);
         var frame = node.AuthoredProperties.Frame;
         var region = node.AuthoredProperties.Region;
         var tint = region?.Tint;
@@ -107,10 +109,13 @@ public static class UiDocumentProjection
                 ? new TextureVisual(node.AuthoredProperties.Texture?.TextureReference, TexCoords.Full,
                     tint is null ? null : new ColorRgba(tint.Red, tint.Green, tint.Blue, tint.Alpha))
                 : null,
-            Text = node.Kind == UiNodeKind.FontString
-                ? new TextVisual(node.AuthoredProperties.FontString?.Text,
-                    FontTemplate: node.AuthoredProperties.FontString?.FontReference)
-                : null,
+            Text = node.Kind switch
+            {
+                UiNodeKind.FontString => new TextVisual(node.AuthoredProperties.FontString?.Text,
+                    FontTemplate: node.AuthoredProperties.FontString?.FontReference),
+                UiNodeKind.Button => new TextVisual(node.AuthoredProperties.Button?.Text),
+                _ => null,
+            },
             StatusBar = node.Kind == UiNodeKind.StatusBar
                 ? new StatusBarVisual(status?.Minimum, status?.Maximum, status?.Value, status?.TextureReference)
                 : null,
@@ -119,6 +124,7 @@ public static class UiDocumentProjection
         return new FrameDef
         {
             Name = node.Id.Value,
+            Inherits = node.BlizzardTemplate,
             Parent = node.Owner.Id.Value,
             Kind = node.Kind switch
             {
@@ -151,11 +157,17 @@ public static class UiDocumentProjection
         };
     }
 
-    private static (double Width, double Height) Dimensions(UiNode node) => node.IsRegion
-        ? (node.AuthoredProperties.Region?.Width ?? DefaultWidth(node.Kind),
-            node.AuthoredProperties.Region?.Height ?? DefaultHeight(node.Kind))
-        : (node.AuthoredProperties.Frame?.Width ?? DefaultWidth(node.Kind),
-            node.AuthoredProperties.Frame?.Height ?? DefaultHeight(node.Kind));
+    private static (double Width, double Height) Dimensions(UiNode node, EffectiveNodeProperties effective)
+    {
+        if (node.IsRegion)
+            return (node.AuthoredProperties.Region?.Width ?? DefaultWidth(node.Kind),
+                node.AuthoredProperties.Region?.Height ?? DefaultHeight(node.Kind));
+        var width = effective.Values.Frame?.Width ?? DefaultWidth(node.Kind);
+        if (node.AuthoredProperties.Frame?.Width is null &&
+            effective.PreviewBehaviors.Contains(BlizzardKnownPreviewBehavior.CharacterTabResizeToTextZeroPadding))
+            width = Math.Max(width, (node.AuthoredProperties.Button?.Text?.Length ?? 0) * 8 + 24);
+        return (width, effective.Values.Frame?.Height ?? DefaultHeight(node.Kind));
+    }
 
     private static double DefaultWidth(UiNodeKind kind) => kind switch
     {
