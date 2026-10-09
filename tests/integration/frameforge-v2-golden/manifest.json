@@ -1,0 +1,33 @@
+{
+  "schema": 3,
+  "package": "frameforge-v2-golden-client-test",
+  "name": "FrameForge v2 Golden Client Test",
+  "version": "1.0.0",
+  "description": "Isolated build-12340 client package for the FrameForge v2 golden FrameXML export.",
+  "content": [
+    {
+      "type": "file",
+      "source": "client/Interface/FrameXML/FrameForgeGoldenHost.xml",
+      "target": "Interface/FrameXML/FrameForgeGoldenHost.xml"
+    },
+    {
+      "type": "file",
+      "source": "client/Interface/FrameXML/FrameForgeGoldenDesign.xml",
+      "target": "Interface/FrameXML/FrameForgeGoldenDesign.xml"
+    }
+  ],
+  "clientFrameXml": {
+    "stockTocSource": "upstream/FrameXML.toc",
+    "stockTocSha256": "3158bea13225ae51137a389f0f3ab8566e94b6be84196dd2c1fda27024677754",
+    "loadEntries": [
+      {
+        "target": "Interface/FrameXML/FrameForgeGoldenHost.xml",
+        "after": "Interface/FrameXML/LFDFrame.xml"
+      },
+      {
+        "target": "Interface/FrameXML/FrameForgeGoldenDesign.xml",
+        "after": "Interface/FrameXML/FrameForgeGoldenHost.xml"
+      }
+    ]
+  }
+}

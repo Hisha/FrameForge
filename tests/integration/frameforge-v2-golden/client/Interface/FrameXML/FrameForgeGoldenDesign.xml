@@ -1,0 +1,64 @@
+<Ui xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd" xmlns="http://www.blizzard.com/wow/ui/">
+  <Frame name="GoldenDesignRoot" parent="GoldenModuleHost" setAllPoints="true">
+    <Layers>
+      <Layer level="BACKGROUND">
+        <Texture name="GoldenBackground" file="Interface\Buttons\WHITE8X8">
+          <Anchors>
+            <Anchor point="TOPLEFT" relativeTo="GoldenDesignRoot" relativePoint="TOPLEFT">
+              <Offset>
+                <AbsDimension x="0" y="0" />
+              </Offset>
+            </Anchor>
+            <Anchor point="BOTTOMRIGHT" relativeTo="GoldenDesignRoot" relativePoint="BOTTOMRIGHT">
+              <Offset>
+                <AbsDimension x="0" y="0" />
+              </Offset>
+            </Anchor>
+          </Anchors>
+          <Color r="0.08" g="0.1" b="0.14" a="1" />
+        </Texture>
+      </Layer>
+      <Layer level="OVERLAY" textureSubLevel="2">
+        <FontString name="GoldenHeader" inherits="GameFontNormalLarge" text="FrameForge Export">
+          <Size>
+            <AbsDimension x="300" y="24" />
+          </Size>
+          <Anchors>
+            <Anchor point="TOP" relativePoint="TOP">
+              <Offset>
+                <AbsDimension x="0" y="-24" />
+              </Offset>
+            </Anchor>
+          </Anchors>
+        </FontString>
+      </Layer>
+    </Layers>
+    <Frames>
+      <Button name="GoldenButton" frameStrata="MEDIUM" frameLevel="2">
+        <Size>
+          <AbsDimension x="160" y="32" />
+        </Size>
+        <Anchors>
+          <Anchor point="TOP" relativeTo="GoldenHeader" relativePoint="BOTTOM">
+            <Offset>
+              <AbsDimension x="0" y="-16" />
+            </Offset>
+          </Anchor>
+        </Anchors>
+      </Button>
+      <StatusBar name="GoldenProgress" frameLevel="1" minValue="0" maxValue="100" defaultValue="35">
+        <Size>
+          <AbsDimension x="240" y="18" />
+        </Size>
+        <Anchors>
+          <Anchor point="TOP" relativePoint="TOP">
+            <Offset>
+              <AbsDimension x="0" y="-110" />
+            </Offset>
+          </Anchor>
+        </Anchors>
+        <BarTexture file="Interface\TargetingFrame\UI-StatusBar" />
+      </StatusBar>
+    </Frames>
+  </Frame>
+</Ui>
