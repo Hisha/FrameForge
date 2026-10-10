@@ -54,6 +54,7 @@ public partial class MainWindow : Window
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(MainWindowViewModel.Layout)
+            or nameof(MainWindowViewModel.V2Layout)
             or nameof(MainWindowViewModel.Project)
             or nameof(MainWindowViewModel.SelectedName)
             or nameof(MainWindowViewModel.SelectedNames)
@@ -63,9 +64,12 @@ public partial class MainWindow : Window
             or nameof(MainWindowViewModel.OriginFilter)
             or nameof(MainWindowViewModel.HiddenByOrigin)
             or nameof(MainWindowViewModel.LockedNames)
+            or nameof(MainWindowViewModel.V2LockedNames)
             or nameof(MainWindowViewModel.PreferredSelectionNames)
             or nameof(MainWindowViewModel.V2TemplateRegistry)
             or nameof(MainWindowViewModel.V2PreviewButtonState)
+            or nameof(MainWindowViewModel.V2GridVisible)
+            or nameof(MainWindowViewModel.V2GridSize)
             or nameof(MainWindowViewModel.Assets))
         {
             SyncCanvas();
@@ -86,8 +90,9 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm)
             return;
 
-        Canvas.Project = vm.PresentationProject;
+        Canvas.Project = vm.IsV2Project ? null : vm.PresentationProject;
         Canvas.Layout = vm.Layout;
+        Canvas.V2Layout = vm.IsV2Project ? vm.V2Layout : null;
         Canvas.SelectedName = vm.SelectedName;
         Canvas.SelectedNames = vm.SelectedNames;
         Canvas.Mode = vm.ViewMode;
@@ -99,13 +104,17 @@ public partial class MainWindow : Window
         Canvas.V2Templates = vm.IsV2Project ? vm.V2TemplateRegistry : null;
         Canvas.V2ButtonState = vm.V2PreviewButtonState;
         Canvas.HiddenByOrigin = vm.HiddenByOrigin;
-        Canvas.LockedNames = vm.LockedNames;
+        Canvas.LockedNames = vm.IsV2Project ? vm.V2LockedNames : vm.LockedNames;
+        Canvas.ShowGrid = vm.IsV2DesignMode && vm.V2GridVisible;
+        Canvas.GridSize = vm.V2GridSize;
         Canvas.PreferredSelectionNames = vm.PreferredSelectionNames;
     }
 
     private void OnNewClick(object? sender, RoutedEventArgs e) => ViewModel?.NewProject();
 
     private void OnNewV2Click(object? sender, RoutedEventArgs e) => ViewModel?.NewV2Project();
+
+    private void OnNewV2LfdClick(object? sender, RoutedEventArgs e) => ViewModel?.NewV2DungeonFinderProject();
 
     private void OnNewLfdClick(object? sender, RoutedEventArgs e) => ViewModel?.NewDungeonFinderProject();
 
@@ -120,6 +129,97 @@ public partial class MainWindow : Window
     private void OnMoveV2EarlierClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(-1);
     private void OnMoveV2LaterClick(object? sender, RoutedEventArgs e) => ViewModel?.MoveV2SelectionInOrder(1);
     private void OnDeleteV2Click(object? sender, RoutedEventArgs e) => ViewModel?.DeleteV2Selection();
+    private void OnUndoV2Click(object? sender, RoutedEventArgs e) => ViewModel?.UndoV2();
+    private void OnRedoV2Click(object? sender, RoutedEventArgs e) => ViewModel?.RedoV2();
+    private void OnToggleV2LockClick(object? sender, RoutedEventArgs e) => ViewModel?.ToggleV2Lock();
+    private void OnArrangeV2Click(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is Button { Tag: string value } &&
+            Enum.TryParse<SelectionArrangeCommand>(value, out var command)) vm.ArrangeV2Selection(command);
+    }
+    private void OnReorderV2Click(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || sender is not Button { Tag: string value }) return;
+        vm.ReorderV2Selection(value == "Front" ? int.MaxValue : int.MinValue);
+    }
+    private void OnCreateV2GroupClick(object? sender, RoutedEventArgs e) => ViewModel?.CreateV2Group();
+    private void OnSelectV2GroupClick(object? sender, RoutedEventArgs e) => ViewModel?.SelectV2Group();
+    private void OnToggleV2GroupLockClick(object? sender, RoutedEventArgs e) => ViewModel?.ToggleSelectedV2GroupLock();
+    private void OnRenameV2GroupClick(object? sender, RoutedEventArgs e) => ViewModel?.RenameSelectedV2Group();
+    private void OnReplaceV2GroupMembersClick(object? sender, RoutedEventArgs e) => ViewModel?.ReplaceSelectedV2GroupMembers();
+    private void OnDeleteV2GroupClick(object? sender, RoutedEventArgs e) => ViewModel?.DeleteSelectedV2Group();
+    private void OnV2DesignModeClick(object? sender, RoutedEventArgs e) => ViewModel?.SetV2DesignMode(true);
+    private void OnV2PreviewModeClick(object? sender, RoutedEventArgs e) => ViewModel?.SetV2DesignMode(false);
+    private void OnToggleV2ReferenceLockClick(object? sender, RoutedEventArgs e) => ViewModel?.ToggleSelectedV2ReferenceLock();
+    private void OnRestoreV2ReferenceClick(object? sender, RoutedEventArgs e) => ViewModel?.RestoreSelectedV2Reference();
+    private void OnToggleV2ReferenceVisibilityClick(object? sender, RoutedEventArgs e) =>
+        ViewModel?.ToggleSelectedV2ReferenceVisibility(subtree: false);
+    private void OnHideV2ReferenceSubtreeClick(object? sender, RoutedEventArgs e) =>
+        ViewModel?.ToggleSelectedV2ReferenceVisibility(subtree: true);
+    private void OnCollapseAllV2ReferencesClick(object? sender, RoutedEventArgs e) => ViewModel?.CollapseAllV2References();
+    private void OnExpandSelectedV2ReferenceClick(object? sender, RoutedEventArgs e) => ViewModel?.ExpandSelectedV2Reference();
+
+    private async void OnBrowseV2TextureClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { V2IsTexture: true } vm) return;
+        var chooser = new StockTextureChooserWindow(
+            await vm.V2TextureChoicesAsync(), vm.V2TextureDraft, vm.WoWClientStatus,
+            vm.HasWoWClientSelection, vm.Assets, vm.V2AssetCatalogStatus, allowProjectAssets: true);
+        await chooser.ShowDialog(this);
+        if (chooser.SelectedInterfacePath is { } reference && vm.AssignSelectedV2Texture(reference))
+            Canvas.InvalidateVisual();
+    }
+
+    private async void OnImportV2TextureClick(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { V2IsTexture: true } vm || !vm.PrepareDesignAssetBrowse()) return;
+        if (await PickDesignImageAsync() is not { } path) return;
+        var import = await ConfirmExternalAssetImportIfNeededAsync(vm, path);
+        if (import is not null && vm.ImportSelectedV2Texture(path, import.Value))
+            Canvas.InvalidateVisual();
+    }
+
+    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { IsV2Project: true } vm || IsEditorInput(e.Source as Visual))
+            return;
+        var command = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0;
+        if (command && e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift)) { vm.RedoV2(); e.Handled = true; return; }
+        if (command && e.Key == Key.Z) { vm.UndoV2(); e.Handled = true; return; }
+        if (command && e.Key == Key.Y) { vm.RedoV2(); e.Handled = true; return; }
+        if (!HasVisualAncestor<LayoutCanvas>(e.Source as Visual)) return;
+        if (e.Key == Key.Delete) { vm.DeleteV2Selection(); e.Handled = true; return; }
+        if (e.Key == Key.Escape) { vm.CancelV2Gesture(); e.Handled = true; return; }
+        var step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10 : 1;
+        var delta = e.Key switch
+        {
+            Key.Left => (-step, 0),
+            Key.Right => (step, 0),
+            Key.Up => (0, step),
+            Key.Down => (0, -step),
+            _ => (0, 0),
+        };
+        if (delta == (0, 0)) return;
+        vm.NudgeV2Selection(delta.Item1, delta.Item2);
+        e.Handled = true;
+    }
+
+    private void OnWindowKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (!IsEditorInput(e.Source as Visual) && ViewModel is { IsV2Project: true } vm &&
+            e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+            vm.CompleteV2Nudge();
+    }
+
+    internal static bool IsEditorInput(Visual? visual) =>
+        HasVisualAncestor<TextBox>(visual) || HasVisualAncestor<ComboBox>(visual) || HasVisualAncestor<NumericUpDown>(visual);
+
+    private static bool HasVisualAncestor<T>(Visual? visual) where T : Visual
+    {
+        for (var current = visual; current is not null; current = current.GetVisualParent())
+            if (current is T) return true;
+        return false;
+    }
     private void OnAddDesignFrameClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignFrame();
     private void OnAddDesignTextClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignText();
     private void OnAddDesignImageClick(object? sender, RoutedEventArgs e) => ViewModel?.AddDesignImage();
@@ -746,7 +846,10 @@ public partial class MainWindow : Window
 
     private void OnCanvasSelectionRequested(object? sender, CanvasSelectionEventArgs e)
     {
-        ViewModel?.OnCanvasSelectionRequested(e.FrameName, e.Additive);
+        if (ViewModel is { IsV2Project: true } vm)
+            vm.SelectV2(e.SemanticId, e.Additive);
+        else
+            ViewModel?.OnCanvasSelectionRequested(e.FrameName, e.Additive);
     }
 
     /// <summary>
@@ -758,6 +861,13 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm)
             return;
 
+        if (vm.IsV2Project && e.SemanticId is { } id)
+        {
+            if (!vm.V2Selection.OrderedIds.Contains(id)) vm.SelectV2(id, additive: false);
+            vm.DragV2Frame(id, e.DeltaX, e.DeltaY);
+            return;
+        }
+
         if (vm.SelectedName != e.FrameName)
             vm.Select(e.FrameName);
 
@@ -765,6 +875,11 @@ public partial class MainWindow : Window
     }
 
     private void OnCanvasDragCompleted(object? sender, EventArgs e) => ViewModel?.EndDrag();
+    private void OnCanvasDragCancelled(object? sender, EventArgs e) => ViewModel?.CancelV2Drag();
+    private void OnCanvasFrameResized(object? sender, FrameResizeEventArgs e) =>
+        ViewModel?.ApplyV2ResizeDelta(e.SemanticId, e.Handle, e.DeltaX, e.DeltaY);
+    private void OnCanvasResizeCompleted(object? sender, EventArgs e) => ViewModel?.CompleteV2Gesture();
+    private void OnCanvasResizeCancelled(object? sender, EventArgs e) => ViewModel?.CancelV2Gesture();
 
     /// <summary>Runs the align or distribute command named by the button's Tag.</summary>
     private void OnArrangeClick(object? sender, RoutedEventArgs e)

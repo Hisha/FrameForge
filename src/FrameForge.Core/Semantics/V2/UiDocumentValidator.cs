@@ -78,6 +78,101 @@ public static partial class UiDocumentValidator
             ValidateAnchors(node);
             ValidateProperties(node);
             ValidateTemplate(node);
+            if (node.Editor is { ReferenceOnly: true } referenceGeometry &&
+                (referenceGeometry.ReferenceAutoWidth || referenceGeometry.ReferenceAutoHeight))
+                diagnostics.Add(new UiDiagnostic
+                {
+                    Code = "FFV2-REF-GEOMETRY-001",
+                    Severity = DiagnosticSeverity.Warning,
+                    Message = $"Reference region '{node.DisplayLabel}' declares zero for its " +
+                              $"{(referenceGeometry.ReferenceAutoWidth && referenceGeometry.ReferenceAutoHeight ? "width and height" : referenceGeometry.ReferenceAutoWidth ? "width" : "height")}; " +
+                              "the axis is preserved as automatic/unresolved rather than as an invalid authored dimension.",
+                    NodeId = node.Id,
+                    PropertyPath = "authoredProperties.region",
+                });
+            if (node.Editor?.ReferenceOnly != true && node.Owner.Kind == OwnerKind.LocalNode &&
+                nodesById.GetValueOrDefault(node.Owner.Id)?.Editor?.ReferenceOnly == true)
+                Add("FFV2-REF-007", "An authored node cannot use an editor-only reference as its structural owner.", "owner", node.Id);
+        }
+
+        if (document.Editor is { } editor)
+        {
+            foreach (var duplicate in editor.ProjectAssets.GroupBy(asset => asset.Id).Where(group => group.Count() > 1))
+                Add("FFV2-ASSET-001", $"Project asset identity '{duplicate.Key}' is duplicated.",
+                    "editor.projectAssets", duplicate.Key);
+            foreach (var asset in editor.ProjectAssets)
+            {
+                if (!asset.Id.IsValid || string.IsNullOrWhiteSpace(asset.SourceReference) ||
+                    string.IsNullOrWhiteSpace(asset.PreviewReference) || string.IsNullOrWhiteSpace(asset.PreparedReference) ||
+                    string.IsNullOrWhiteSpace(asset.Format))
+                    Add("FFV2-ASSET-002", "Project assets require a valid identity, source, preview path, prepared path, and format.",
+                        "editor.projectAssets", asset.Id);
+                if (asset.Width is <= 0 || asset.Height is <= 0)
+                    Add("FFV2-ASSET-003", "Known project asset dimensions must be positive.",
+                        "editor.projectAssets", asset.Id);
+                if (asset.IntendedClientPath is { } path &&
+                    (!path.StartsWith("Interface\\FrameForge\\Artwork\\", StringComparison.Ordinal) ||
+                     path.Contains("..", StringComparison.Ordinal)))
+                    Add("FFV2-ASSET-004", "Prepared client artwork must use the deterministic Interface\\FrameForge\\Artwork namespace.",
+                        "editor.projectAssets.intendedClientPath", asset.Id);
+            }
+            foreach (var duplicate in editor.HiddenReferenceNodes.GroupBy(id => id).Where(group => group.Count() > 1))
+                Add("FFV2-REF-VIS-001", $"Hidden reference node '{duplicate.Key}' is listed more than once.",
+                    "editor.hiddenReferenceNodes", duplicate.Key);
+            foreach (var hidden in editor.HiddenReferenceNodes.Distinct())
+                if (!nodesById.TryGetValue(hidden, out var hiddenNode) || hiddenNode.Editor?.ReferenceOnly != true)
+                    Add("FFV2-REF-VIS-002", $"Editor visibility references non-reference node '{hidden}'.",
+                        "editor.hiddenReferenceNodes", hidden);
+            foreach (var duplicate in editor.Groups.GroupBy(group => group.Id).Where(group => group.Count() > 1))
+                Add("FFV2-GROUP-001", $"Editor group identity '{duplicate.Key}' is duplicated.", "editor.groups", duplicate.Key);
+            foreach (var duplicate in editor.Groups.GroupBy(group => group.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+                Add("FFV2-GROUP-002", $"Editor group name '{duplicate.Key}' is duplicated.", "editor.groups");
+            foreach (var group in editor.Groups)
+            {
+                if (!group.Id.IsValid)
+                    Add("FFV2-GROUP-003", "Editor group identity must be a canonical GUID.", "editor.groups.id", group.Id);
+                if (string.IsNullOrWhiteSpace(group.Name))
+                    Add("FFV2-GROUP-004", "Editor group name cannot be empty.", "editor.groups.name", group.Id);
+                foreach (var duplicate in group.Members.GroupBy(id => id).Where(items => items.Count() > 1))
+                    Add("FFV2-GROUP-005", $"Node '{duplicate.Key}' occurs more than once in editor group '{group.Name}'.", "editor.groups.members", group.Id);
+                foreach (var member in group.Members.Distinct().Where(id => !nodesById.ContainsKey(id)))
+                    Add("FFV2-GROUP-006", $"Editor group '{group.Name}' references missing node '{member}'.", "editor.groups.members", group.Id);
+            }
+            foreach (var duplicate in editor.ReferenceCompositions.GroupBy(reference => reference.Id).Where(group => group.Count() > 1))
+                Add("FFV2-REF-001", $"Reference composition identity '{duplicate.Key}' is duplicated.", "editor.referenceCompositions", duplicate.Key);
+            foreach (var reference in editor.ReferenceCompositions)
+            {
+                var members = reference.Members.ToHashSet();
+                if (!reference.Id.IsValid || string.IsNullOrWhiteSpace(reference.Name) || string.IsNullOrWhiteSpace(reference.SourceIdentity))
+                    Add("FFV2-REF-002", "Reference compositions require a valid identity, name, and source identity.", "editor.referenceCompositions", reference.Id);
+                if (!members.Contains(reference.RootNodeId) || !nodesById.ContainsKey(reference.RootNodeId))
+                    Add("FFV2-REF-003", $"Reference composition '{reference.Name}' has a missing or non-member root.", "editor.referenceCompositions.rootNodeId", reference.Id);
+                if (!editor.Groups.Any(group => group.Id == reference.LockGroupId && group.Members.ToHashSet().SetEquals(members)))
+                    Add("FFV2-REF-004", $"Reference composition '{reference.Name}' requires a matching editor lock group.", "editor.referenceCompositions.lockGroupId", reference.Id);
+                foreach (var member in members)
+                {
+                    if (!nodesById.TryGetValue(member, out var node) || node.Editor?.ReferenceOnly != true ||
+                        node.Editor.ReferenceCompositionId != reference.Id)
+                        Add("FFV2-REF-005", $"Reference composition '{reference.Name}' has invalid member '{member}'.", "editor.referenceCompositions.members", reference.Id);
+                }
+                if (!reference.OriginalNodes.Select(node => node.Id).ToHashSet().SetEquals(members))
+                    Add("FFV2-REF-006", $"Reference composition '{reference.Name}' baseline does not match its members.", "editor.referenceCompositions.originalNodes", reference.Id);
+            }
+            foreach (var duplicate in editor.PreviewStates.GroupBy(state => state.Id).Where(group => group.Count() > 1))
+                Add("FFV2-PREVIEW-001", $"Preview-state identity '{duplicate.Key}' is duplicated.", "editor.previewStates", duplicate.Key);
+            foreach (var state in editor.PreviewStates)
+            {
+                if (!state.Id.IsValid || string.IsNullOrWhiteSpace(state.Name))
+                    Add("FFV2-PREVIEW-002", "Preview states require a valid identity and name.", "editor.previewStates", state.Id);
+                foreach (var value in state.Overrides)
+                {
+                    if (!nodesById.TryGetValue(value.NodeId, out var node))
+                        Add("FFV2-PREVIEW-003", $"Preview state '{state.Name}' references missing node '{value.NodeId}'.", "editor.previewStates.overrides", state.Id);
+                    if (value.ProgressValue is { } progress && (!double.IsFinite(progress) ||
+                        node?.AuthoredProperties.StatusBar is not { Minimum: { } min, Maximum: { } max } || progress < min || progress > max))
+                        Add("FFV2-PREVIEW-004", $"Preview progress for '{value.NodeId}' is outside its authored status-bar range.", "editor.previewStates.overrides.progressValue", state.Id);
+                }
+            }
         }
 
         ValidateOwnershipCycles();
@@ -227,6 +322,8 @@ public static partial class UiDocumentValidator
                 Add("FFV2-PROP-008", "StatusBar properties are valid only on StatusBar nodes.", "authoredProperties.statusBar", node.Id);
             if (node.Kind == UiNodeKind.Texture && properties.Texture is null)
                 Add("FFV2-PROP-014", "Texture nodes require a texture property block, even when the reference is not yet set.", "authoredProperties.texture", node.Id);
+            if (properties.Texture?.TexCoords is { IsValid: false })
+                Add("FFV2-PROP-025", "Texture coordinates must be finite, ordered values from zero through one.", "authoredProperties.texture.texCoords", node.Id);
             if (node.Kind == UiNodeKind.FontString && properties.FontString is null)
                 Add("FFV2-PROP-015", "FontString nodes require a font-string property block, even when its values are not yet set.", "authoredProperties.fontString", node.Id);
             if (node.Kind == UiNodeKind.Button && properties.Button is null)

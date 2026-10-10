@@ -37,7 +37,7 @@ public sealed class V2TemplateDesignerTests : IDisposable
 
         Assert.Null(vm.SelectedV2Node!.AuthoredProperties.Frame!.Width);
         Assert.Null(vm.SelectedV2Node.AuthoredProperties.Frame.Height);
-        Assert.Equal(88, vm.Project.Find(vm.SelectedV2Node.Id.Value)!.Width);
+        Assert.Equal(88, vm.V2Layout!.Elements[vm.SelectedV2Node.Id].Rect!.Value.Width);
         Assert.Contains("TemplateDeclared", vm.V2DimensionSummary);
 
         var export = vm.ExportV2(Path.Combine(_directory, "export"));

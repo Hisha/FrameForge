@@ -163,7 +163,7 @@ public sealed class StockTemplateResolverTests : IDisposable
         using var resolver = new StockTemplateResolver(_provider);
         var declared = new FrameDef
         {
-            Name = "Label", Kind = FrameKind.FONTSTRING,
+            Name = "Label", Kind = FrameKind.FONTSTRING, Width = 0, Height = 0,
             Visual = new FrameVisual { Text = new TextVisual("Hunt\nRecord", FontTemplate: "GameFontNormalLarge") },
         };
 

@@ -18,7 +18,7 @@ public sealed record SemanticEditResult
 /// The single mutation boundary for schema-v2 documents. Every candidate graph is validated
 /// before it is returned; failed operations return the original document unchanged.
 /// </summary>
-public sealed class UiDocumentEditor
+public sealed partial class UiDocumentEditor
 {
     private readonly BlizzardTemplateRegistry? _templates;
 
@@ -29,6 +29,10 @@ public sealed class UiDocumentEditor
     {
         if (!TryGetContainer(document, owner, out var error))
             return Failure(document, "FFV2-EDIT-OWNER", error!);
+        if (owner.Kind == OwnerKind.LocalNode && document.Nodes.FirstOrDefault(node => node.Id == owner.Id)?.Editor?.ReferenceOnly == true)
+            return Failure(document, "FFV2-EDIT-REFERENCE", "Authored controls cannot be parented beneath a Blizzard reference composition.", owner.Id);
+        if (OwnerIsLocked(document, owner))
+            return Failure(document, "FFV2-EDIT-LOCKED", "The owner is locked; its child list cannot be changed.", owner.Id);
 
         var id = SemanticId.New();
         var node = new UiNode
@@ -58,6 +62,16 @@ public sealed class UiDocumentEditor
         var node = document.Nodes.FirstOrDefault(item => item.Id == id);
         if (node is null)
             return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (node.Editor?.ReferenceOnly == true)
+            return Failure(document, "FFV2-EDIT-REFERENCE", "Reference-only elements cannot be deleted; delete or restore the editor reference composition instead.", id);
+
+        var locked = Descendants(document, id).Append(id)
+            .Select(lockedId => document.Nodes.First(item => item.Id == lockedId))
+            .FirstOrDefault(item => IsLocked(document, item));
+        if (locked is not null)
+            return Failure(document, "FFV2-EDIT-LOCKED", $"'{locked.DisplayLabel}' is locked and prevents deletion of this subtree.", locked.Id);
+        if (OwnerIsLocked(document, node.Owner))
+            return Failure(document, "FFV2-EDIT-LOCKED", "The owner is locked; its child list cannot be changed.", node.Owner.Id);
 
         var removed = Descendants(document, id).Append(id).ToHashSet();
         var survivorReference = document.Nodes.FirstOrDefault(item => !removed.Contains(item.Id) &&
@@ -92,19 +106,31 @@ public sealed class UiDocumentEditor
         var node = document.Nodes.FirstOrDefault(item => item.Id == id);
         if (node is null)
             return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (IsLocked(document, node))
+            return Failure(document, "FFV2-EDIT-LOCKED", $"'{node.DisplayLabel}' is locked.", id);
         if (!TryGetContainer(document, newOwner, out var error))
             return Failure(document, "FFV2-EDIT-OWNER", error!, id);
+        var newOwnerNode = newOwner.Kind == OwnerKind.LocalNode
+            ? document.Nodes.FirstOrDefault(item => item.Id == newOwner.Id)
+            : null;
+        if (newOwnerNode?.Editor?.ReferenceOnly == true && node.Editor?.ReferenceCompositionId != newOwnerNode.Editor.ReferenceCompositionId)
+            return Failure(document, "FFV2-EDIT-REFERENCE", "Authored controls cannot be moved into a Blizzard reference composition.", id);
         if (newOwner.Kind == OwnerKind.LocalNode && (newOwner.Id == id || Descendants(document, id).Contains(newOwner.Id)))
             return Failure(document, "FFV2-EDIT-CYCLE", "A node cannot be moved beneath itself or one of its descendants.", id);
         if (node.Owner == newOwner)
             return Failure(document, "FFV2-EDIT-NOCHANGE", "The node already has that owner.", id);
+        if (OwnerIsLocked(document, node.Owner) || OwnerIsLocked(document, newOwner))
+            return Failure(document, "FFV2-EDIT-LOCKED", "Reparenting cannot change the child list of a locked owner.", id);
 
         var anchors = node.Anchors;
         if (preserveVisualPosition && anchors.FirstOrDefault() is { Target.Kind: AnchorTargetKind.Parent } primary)
         {
-            var layout = UiDocumentProjection.Resolve(document);
-            if (!layout.Frames.TryGetValue(id.Value, out var nodeLayout) || nodeLayout.Rect is not { } nodeRect ||
-                !layout.Frames.TryGetValue(newOwner.Id.Value, out var ownerLayout) || ownerLayout.Rect is not { } ownerRect)
+            var root = document.CompositionRoots.SingleOrDefault();
+            if (root is null)
+                return Failure(document, "FFV2-EDIT-GEOMETRY", "Visual position cannot be preserved without exactly one composition root.", id);
+            var layout = UiLayoutResolver.Resolve(document, UiPreviewHost.FromDesignRoot(root), _templates);
+            if (!layout.Elements.TryGetValue(id, out var nodeLayout) || nodeLayout.Rect is not { } nodeRect ||
+                !layout.Elements.TryGetValue(newOwner.Id, out var ownerLayout) || ownerLayout.Rect is not { } ownerRect)
                 return Failure(document, "FFV2-EDIT-GEOMETRY", "Visual position cannot be preserved because the node or new owner has unresolved geometry.", id);
 
             var nodePoint = PointOn(nodeRect, primary.Point);
@@ -126,6 +152,8 @@ public sealed class UiDocumentEditor
         var node = document.Nodes.FirstOrDefault(item => item.Id == id);
         if (node is null)
             return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (IsLocked(document, node) || OwnerIsLocked(document, node.Owner))
+            return Failure(document, "FFV2-EDIT-LOCKED", "A locked element or owner cannot be reordered.", id);
         var children = Children(document, node.Owner).ToList();
         var oldIndex = children.IndexOf(id);
         if (oldIndex < 0)
@@ -181,6 +209,34 @@ public sealed class UiDocumentEditor
     public SemanticEditResult UpdateProperties(UiDocument document, SemanticId id, AuthoredProperties properties) =>
         UpdateNode(document, id, node => node with { AuthoredProperties = properties });
 
+    public SemanticEditResult AssignTexture(UiDocument document, SemanticId id, string? reference,
+        SemanticProjectAsset? importedAsset = null)
+    {
+        var node = document.Nodes.FirstOrDefault(item => item.Id == id);
+        if (node is null)
+            return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (node.Kind != UiNodeKind.Texture)
+            return Failure(document, "FFV2-EDIT-TEXTURE", "Texture artwork can only be assigned to a Texture node.", id);
+        if (IsLocked(document, node))
+            return Failure(document, "FFV2-EDIT-LOCKED", $"'{node.DisplayLabel}' is locked.", id);
+        var properties = node.AuthoredProperties with
+        {
+            Texture = node.AuthoredProperties.Texture! with { TextureReference = reference },
+        };
+        var editor = document.Editor ?? new DocumentEditorMetadata();
+        var assets = importedAsset is null
+            ? editor.ProjectAssets
+            : [.. editor.ProjectAssets.Where(asset => asset.Id != importedAsset.Id), importedAsset];
+        var candidate = document with
+        {
+            Nodes = [.. document.Nodes.Select(item => item.Id == id
+                ? item with { AuthoredProperties = properties }
+                : item)],
+            Editor = editor with { ProjectAssets = assets },
+        };
+        return Complete(document, candidate, id);
+    }
+
     public SemanticEditResult AssignBlizzardTemplate(UiDocument document, SemanticId id,
         string templateIdentity, bool clearEligibleOverrides = false)
     {
@@ -224,6 +280,23 @@ public sealed class UiDocumentEditor
         });
     }
 
+    /// <summary>Lock state itself remains editable so a locked node can always be unlocked.</summary>
+    public SemanticEditResult SetLocked(UiDocument document, SemanticId id, bool locked)
+    {
+        var node = document.Nodes.FirstOrDefault(item => item.Id == id);
+        if (node is null)
+            return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if ((node.Editor?.Locked ?? false) == locked)
+            return Failure(document, "FFV2-EDIT-NOCHANGE", $"'{node.DisplayLabel}' already has that lock state.", id);
+        var candidate = document with
+        {
+            Nodes = [.. document.Nodes.Select(item => item.Id == id
+                ? item with { Editor = (item.Editor ?? new NodeEditorMetadata()) with { Locked = locked } }
+                : item)],
+        };
+        return Complete(document, candidate, id);
+    }
+
     private static AuthoredProperties DefaultProperties(UiNodeKind kind) => kind switch
     {
         UiNodeKind.Frame => new() { Frame = new FrameProperties { Width = 120, Height = 64, Visible = true } },
@@ -252,8 +325,11 @@ public sealed class UiDocumentEditor
 
     private SemanticEditResult UpdateNode(UiDocument document, SemanticId id, Func<UiNode, UiNode> update)
     {
-        if (!document.Nodes.Any(item => item.Id == id))
+        var node = document.Nodes.FirstOrDefault(item => item.Id == id);
+        if (node is null)
             return Failure(document, "FFV2-EDIT-NODE", $"Node '{id}' does not exist.", id);
+        if (IsLocked(document, node))
+            return Failure(document, "FFV2-EDIT-LOCKED", $"'{node.DisplayLabel}' is locked.", id);
         var candidate = document with { Nodes = [.. document.Nodes.Select(item => item.Id == id ? update(item) : item)] };
         return Complete(document, candidate, id);
     }
@@ -296,6 +372,16 @@ public sealed class UiDocumentEditor
         else if (!node.CanOwnChildren) error = $"{node.Kind} '{node.DisplayLabel}' is a region and cannot own children.";
         return error is null;
     }
+
+    private static bool IsLocked(UiDocument document, UiNode node) =>
+        node.Editor?.Locked == true || document.Editor?.Groups.Any(group =>
+            group.Locked && group.Members.Contains(node.Id)) == true;
+
+    public static bool IsEditingLocked(UiDocument document, SemanticId id) =>
+        document.Nodes.FirstOrDefault(node => node.Id == id) is { } node && IsLocked(document, node);
+
+    private static bool OwnerIsLocked(UiDocument document, OwnerReference owner) =>
+        owner.Kind == OwnerKind.LocalNode && document.Nodes.FirstOrDefault(node => node.Id == owner.Id) is { } node && IsLocked(document, node);
 
     private static UiDocument AddChild(UiDocument document, OwnerReference owner, SemanticId child) =>
         SetChildren(document, owner, [.. Children(document, owner), child]);

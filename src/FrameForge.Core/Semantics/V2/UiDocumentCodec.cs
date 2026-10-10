@@ -130,6 +130,25 @@ public static class UiDocumentCodec
             if (envelope.ExternalReferences[index] is null) return $"$.externalReferences[{index}]";
         for (var index = 0; index < envelope.Diagnostics.Count; index++)
             if (envelope.Diagnostics[index] is null) return $"$.diagnostics[{index}]";
+        if (envelope.Editor?.Groups is { } groups)
+            for (var index = 0; index < groups.Count; index++)
+            {
+                if (groups[index] is null) return $"$.editor.groups[{index}]";
+                if (groups[index].Members is null) return $"$.editor.groups[{index}].members";
+            }
+        if (envelope.Editor?.ReferenceCompositions is { } references)
+            for (var index = 0; index < references.Count; index++)
+            {
+                if (references[index] is null) return $"$.editor.referenceCompositions[{index}]";
+                if (references[index].Members is null) return $"$.editor.referenceCompositions[{index}].members";
+                if (references[index].OriginalNodes is null) return $"$.editor.referenceCompositions[{index}].originalNodes";
+            }
+        if (envelope.Editor?.PreviewStates is { } states)
+            for (var index = 0; index < states.Count; index++)
+            {
+                if (states[index] is null) return $"$.editor.previewStates[{index}]";
+                if (states[index].Overrides is null) return $"$.editor.previewStates[{index}].overrides";
+            }
         return null;
     }
 
@@ -146,7 +165,7 @@ public static class UiDocumentCodec
         public required IReadOnlyList<CompositionRoot> CompositionRoots { get; init; }
         public required IReadOnlyList<UiNode> Nodes { get; init; }
         public required IReadOnlyList<ExternalReference> ExternalReferences { get; init; }
-        public DocumentEditorMetadata? Editor { get; init; }
+        public DocumentEditorEnvelope? Editor { get; init; }
         public required IReadOnlyList<UiDiagnostic> Diagnostics { get; init; }
 
         public static DocumentEnvelope FromDocument(UiDocument document) => new()
@@ -158,11 +177,18 @@ public static class UiDocumentCodec
             CompositionRoots = document.CompositionRoots,
             Nodes = document.Nodes,
             ExternalReferences = document.ExternalReferences,
-            Editor = document.Editor is null ? null : new DocumentEditorMetadata
+            Editor = document.Editor is null ? null : new DocumentEditorEnvelope
             {
                 Values = document.Editor.Values
                     .OrderBy(item => item.Key, StringComparer.Ordinal)
                     .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
+                Groups = document.Editor.Groups.Count == 0 ? null : [.. document.Editor.Groups],
+                ReferenceCompositions = document.Editor.ReferenceCompositions.Count == 0
+                    ? null : [.. document.Editor.ReferenceCompositions],
+                PreviewStates = document.Editor.PreviewStates.Count == 0 ? null : [.. document.Editor.PreviewStates],
+                HiddenReferenceNodes = document.Editor.HiddenReferenceNodes.Count == 0
+                    ? null : [.. document.Editor.HiddenReferenceNodes],
+                ProjectAssets = document.Editor.ProjectAssets.Count == 0 ? null : [.. document.Editor.ProjectAssets],
             },
             Diagnostics = document.Diagnostics,
         };
@@ -175,9 +201,38 @@ public static class UiDocumentCodec
             CompositionRoots = CompositionRoots,
             Nodes = Nodes,
             ExternalReferences = ExternalReferences,
-            Editor = Editor,
+            Editor = Editor is null ? null : new DocumentEditorMetadata
+            {
+                Values = Editor.Values,
+                Groups = Editor.Groups ?? [],
+                ReferenceCompositions = Editor.ReferenceCompositions ?? [],
+                PreviewStates = Editor.PreviewStates ?? [],
+                HiddenReferenceNodes = Editor.HiddenReferenceNodes ?? [],
+                ProjectAssets = Editor.ProjectAssets ?? [],
+            },
             Diagnostics = Diagnostics,
         };
+    }
+
+    private sealed record DocumentEditorEnvelope
+    {
+        public IReadOnlyDictionary<string, string> Values { get; init; } =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<SemanticEditorGroup>? Groups { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<SemanticReferenceComposition>? ReferenceCompositions { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<SemanticPreviewState>? PreviewStates { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<SemanticId>? HiddenReferenceNodes { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<SemanticProjectAsset>? ProjectAssets { get; init; }
     }
 
     private sealed class SemanticIdConverter : JsonConverter<SemanticId>

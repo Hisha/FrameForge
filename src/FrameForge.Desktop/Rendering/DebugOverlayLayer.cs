@@ -76,14 +76,14 @@ public sealed class DebugOverlayLayer : ICanvasLayer
         DrawableFrame frame,
         Rect canvasRect)
     {
-        var looks = ColorFor(frame.Model);
+        var looks = ColorFor(frame);
         var pen = frame.Model?.Placeholder ?? false
             ? PlaceholderPen
             : !frame.EffectiveVisible
                 ? HiddenPen
                 : new Pen(new SolidColorBrush(looks), frame.Model?.Parent is null ? 1.5 : 1);
 
-        if (Filled(frame.Model))
+        if (Filled(frame))
             context.FillRectangle(new SolidColorBrush(looks) { Opacity = 0.18 }, canvasRect);
 
         context.DrawRectangle(null, pen, canvasRect);
@@ -91,9 +91,9 @@ public sealed class DebugOverlayLayer : ICanvasLayer
         if (!frame.DrawLabel)
             return;
 
-        var badge = Badge(frame.Model);
+        var badge = Badge(frame);
         Label.Draw(context,
-            badge.Length == 0 ? frame.Name : $"{frame.Name}  [{badge}]",
+            badge.Length == 0 ? frame.DisplayName : $"{frame.DisplayName}  [{badge}]",
             new Point(canvasRect.X + 5, canvasRect.Y + 4),
             frame.Selected ? LabelForegroundSelected : LabelForeground);
     }
@@ -117,7 +117,7 @@ public sealed class DebugOverlayLayer : ICanvasLayer
 
         const double radius = 5;
         var marker = new Rect(box.X - radius, box.Y - radius, radius * 2, radius * 2);
-        var looks = ColorFor(frame.Model);
+        var looks = ColorFor(frame);
 
         context.FillRectangle(ZeroSizeBrush, marker);
         context.DrawRectangle(null, ZeroSizePen, marker);
@@ -126,7 +126,7 @@ public sealed class DebugOverlayLayer : ICanvasLayer
         context.DrawLine(new Pen(new SolidColorBrush(looks), 1),
             new Point(marker.X + radius, marker.Y - 3), new Point(marker.X + radius, marker.Bottom + 3));
 
-        Label.Draw(context, $"{frame.Name}  [no size]",
+        Label.Draw(context, $"{frame.DisplayName}  [no size]",
             new Point(marker.Right + 6, marker.Y - 2),
             frame.Selected ? LabelForegroundSelected : LabelForeground);
     }
@@ -168,8 +168,21 @@ public sealed class DebugOverlayLayer : ICanvasLayer
             _ => Color.Parse("#5C93B0"),
         };
 
+    internal static Color ColorFor(DrawableFrame frame) => frame.Model is not null
+        ? ColorFor(frame.Model)
+        : frame.EffectiveKind switch
+        {
+            FrameKind.FRAME => Color.Parse("#5C93B0"),
+            FrameKind.BUTTON => Color.Parse("#C08A4A"),
+            FrameKind.FONTSTRING => Color.Parse("#63C2A0"),
+            FrameKind.TEXTURE => Color.Parse("#4A6472"),
+            FrameKind.STATUSBAR => Color.Parse("#B08AC4"),
+            _ => Color.Parse("#5C93B0"),
+        };
+
     /// <summary>Whether the rectangle is drawn filled for this kind.</summary>
     internal static bool Filled(FrameDef? frame) => frame?.Kind is FrameKind.FONTSTRING or FrameKind.STATUSBAR;
+    internal static bool Filled(DrawableFrame frame) => frame.EffectiveKind is FrameKind.FONTSTRING or FrameKind.STATUSBAR;
 
     /// <summary>Short tag beside the name, so a widget is identifiable without reading its kind.</summary>
     internal static string Badge(FrameDef? frame)
@@ -182,6 +195,10 @@ public sealed class DebugOverlayLayer : ICanvasLayer
         var kindBadge = frame.Kind.Badge();
         return kindBadge + (frame.SetAllPoints ? " fill" : string.Empty);
     }
+
+    internal static string Badge(DrawableFrame frame) => frame.Model is not null
+        ? Badge(frame.Model)
+        : frame.V2Element?.IsCompositionRoot == true ? "root" : frame.EffectiveKind.Badge();
 }
 
 /// <summary>

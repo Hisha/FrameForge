@@ -7,6 +7,7 @@ using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
 using FrameForge.Core.Templates;
+using FrameForge.Core.Semantics.V2;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -41,7 +42,24 @@ public sealed record DrawableFrame(
     bool Selected,
     bool HasArea,
     bool DrawLabel,
-    bool Primary = false);
+    bool Primary = false,
+    ResolvedUiElement? V2Element = null)
+{
+    public string DisplayName => V2Element is null
+        ? Name
+        : !string.IsNullOrWhiteSpace(V2Element.DisplayLabel)
+            ? V2Element.DisplayLabel
+            : !string.IsNullOrWhiteSpace(V2Element.RuntimeName) ? V2Element.RuntimeName! : Name;
+
+    public FrameKind EffectiveKind => Model?.Kind ?? (V2Element?.Node?.Kind switch
+        {
+            UiNodeKind.Texture => FrameKind.TEXTURE,
+            UiNodeKind.FontString => FrameKind.FONTSTRING,
+            UiNodeKind.Button => FrameKind.BUTTON,
+            UiNodeKind.StatusBar => FrameKind.STATUSBAR,
+            _ => FrameKind.FRAME,
+        });
+}
 
 /// <summary>
 /// One pass over the canvas: everything the layers need, already resolved.
@@ -79,6 +97,7 @@ public sealed record CanvasRenderContext(
     BlizzardTemplateRegistry? V2Templates = null,
     PreviewButtonState V2ButtonState = PreviewButtonState.Normal)
 {
+    public ResolvedUiLayout? V2Layout { get; init; }
     /// <summary>
     /// The whole selection in click order, primary last.
     /// </summary>
@@ -92,7 +111,7 @@ public sealed record CanvasRenderContext(
         SelectedNames ?? (SelectedName is null ? [] : [SelectedName]);
 
     /// <summary>The screen (UIParent) rectangle in canvas pixels.</summary>
-    public CanvasBox ScreenBox => Viewport.RectToCanvas(LayoutResolver.ScreenRect(Project?.Screen ?? Screen.Default), Origin);
+    public CanvasBox ScreenBox => Viewport.RectToCanvas(V2Layout?.HostRect ?? LayoutResolver.ScreenRect(Project?.Screen ?? Screen.Default), Origin);
 
     /// <summary>The selected widget's drawable, or null when nothing is selected.</summary>
     public DrawableFrame? Selection => SelectedName is null
@@ -103,7 +122,9 @@ public sealed record CanvasRenderContext(
     /// Widgets the engine could not place, which have no rectangle to be drawn at.
     /// </summary>
     public IReadOnlyList<string> UnresolvedNames =>
-        Layout.Frames.Values.Where(f => f.Rect is null).Select(f => f.Name).ToArray();
+        V2Layout is null
+            ? Layout.Frames.Values.Where(f => f.Rect is null).Select(f => f.Name).ToArray()
+            : V2Layout.Elements.Values.Where(element => element.Rect is null).Select(element => element.DisplayLabel).ToArray();
 }
 
 /// <summary>Mutable counters populated during one render pass, then exposed as an immutable trace.</summary>
@@ -134,9 +155,9 @@ public sealed class CanvasRenderDiagnostics
         context.Mode,
         context.Filter,
         context.Labels,
-        context.Project?.Frames.Count ?? 0,
-        context.Layout.Rects.Count,
-        context.Layout.PaintOrder.Count,
+        context.V2Layout?.Document.Nodes.Count ?? context.Project?.Frames.Count ?? 0,
+        context.V2Layout?.Elements.Values.Count(item => item.Rect is not null) ?? context.Layout.Rects.Count,
+        context.V2Layout?.PaintOrder.Count ?? context.Layout.PaintOrder.Count,
         _visibilityAccepted.Values.Sum(),
         new Dictionary<FrameKind, int>(_visibilityAccepted),
         context.VisibleFrames.Count,
@@ -180,7 +201,7 @@ public sealed record CanvasRenderTrace(
 /// <remarks>
 /// The bands are separated so that a change to one does not repaint decisions made for another:
 /// the clean Preview content, the debug wireframe, and the selection chrome are three different
-/// concerns with three different lifetimes. In Debug all three are active, and the debug band sits
+/// concerns with three different lifetimes. In Design/Debug all three are active, and the debug band sits
 /// over the content exactly as Phase 2's wireframe sat alone.
 /// </remarks>
 public interface ICanvasLayer

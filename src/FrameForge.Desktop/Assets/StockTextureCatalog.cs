@@ -4,7 +4,10 @@ namespace FrameForge.Desktop.Assets;
 /// <param name="InterfacePath">The portable, archive-relative logical path, e.g. <c>Interface/TargetingFrame/UI-StatusBar</c>.</param>
 /// <param name="Category">A short grouping label for the chooser.</param>
 /// <param name="Notes">A one-line description of what the texture is.</param>
-public sealed record StockTextureEntry(string InterfacePath, string Category, string Notes);
+public sealed record StockTextureEntry(string InterfacePath, string Category, string Notes)
+{
+    public override string ToString() => $"{InterfacePath}  ·  {Category}";
+}
 
 /// <summary>
 /// A small, curated set of stock WoW 3.3.5a (build-12340) Interface textures that a StatusBar

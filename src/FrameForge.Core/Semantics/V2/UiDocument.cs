@@ -181,11 +181,25 @@ public sealed record RegionProperties
     public RegionDrawLayer? DrawLayer { get; init; }
     public int? Sublevel { get; init; }
     public UiColor? Tint { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Visible { get; init; }
 }
 
 public sealed record TextureProperties
 {
     public string? TextureReference { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UiTexCoords? TexCoords { get; init; }
+}
+
+/// <summary>Normalized texture crop coordinates used by the editor and native FrameXML.</summary>
+public sealed record UiTexCoords(double Left, double Right, double Top, double Bottom)
+{
+    [JsonIgnore]
+    public bool IsValid => new[] { Left, Right, Top, Bottom }.All(double.IsFinite) &&
+                           Left is >= 0 and <= 1 && Right is >= 0 and <= 1 &&
+                           Top is >= 0 and <= 1 && Bottom is >= 0 and <= 1 &&
+                           Right > Left && Bottom > Top;
 }
 
 public sealed record FontStringProperties
@@ -263,6 +277,18 @@ public sealed record NodeEditorMetadata
     public bool Collapsed { get; init; }
     public bool Locked { get; init; }
     public string? Notes { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReferenceOnly { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SemanticId? ReferenceCompositionId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReferenceSource { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReferenceTemplate { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReferenceAutoWidth { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReferenceAutoHeight { get; init; }
 }
 
 public sealed record UiNode
@@ -297,8 +323,72 @@ public sealed record ExternalReference
 
 public sealed record DocumentEditorMetadata
 {
+    public const string ProjectNameKey = "projectName";
+
     public IReadOnlyDictionary<string, string> Values { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
+    public IReadOnlyList<SemanticEditorGroup> Groups { get; init; } = [];
+    public IReadOnlyList<SemanticReferenceComposition> ReferenceCompositions { get; init; } = [];
+    public IReadOnlyList<SemanticPreviewState> PreviewStates { get; init; } = [];
+    /// <summary>
+    /// Reference-only nodes suppressed in the editor presentation. This never changes authored
+    /// visibility and is deliberately ignored by native export.
+    /// </summary>
+    public IReadOnlyList<SemanticId> HiddenReferenceNodes { get; init; } = [];
+    public IReadOnlyList<SemanticProjectAsset> ProjectAssets { get; init; } = [];
+}
+
+/// <summary>Portable editor metadata for imported artwork; packaging remains an exporter concern.</summary>
+public sealed record SemanticProjectAsset
+{
+    public required SemanticId Id { get; init; }
+    public required string SourceReference { get; init; }
+    public required string PreviewReference { get; init; }
+    public required string PreparedReference { get; init; }
+    public string? IntendedClientPath { get; init; }
+    public int? Width { get; init; }
+    public int? Height { get; init; }
+    public required string Format { get; init; }
+    public required string ConversionStatus { get; init; }
+    public required string ValidationStatus { get; init; }
+}
+
+/// <summary>Editor-only organization. Membership never changes native ownership or export.</summary>
+public sealed record SemanticEditorGroup
+{
+    public required SemanticId Id { get; init; }
+    public required string Name { get; init; }
+    public IReadOnlyList<SemanticId> Members { get; init; } = [];
+    public bool Locked { get; init; }
+}
+
+/// <summary>A protected editor reference that is rendered but excluded from native export.</summary>
+public sealed record SemanticReferenceComposition
+{
+    public required SemanticId Id { get; init; }
+    public required string Name { get; init; }
+    public required string SourceIdentity { get; init; }
+    public required SemanticId RootNodeId { get; init; }
+    public required SemanticId LockGroupId { get; init; }
+    public IReadOnlyList<SemanticId> Members { get; init; } = [];
+    public IReadOnlyList<UiNode> OriginalNodes { get; init; } = [];
+}
+
+/// <summary>One editor-only presentation state. It never represents runtime Lua behavior.</summary>
+public sealed record SemanticPreviewState
+{
+    public required SemanticId Id { get; init; }
+    public required string Name { get; init; }
+    public IReadOnlyList<SemanticPreviewOverride> Overrides { get; init; } = [];
+}
+
+public sealed record SemanticPreviewOverride
+{
+    public required SemanticId NodeId { get; init; }
+    public bool? Visible { get; init; }
+    public string? Text { get; init; }
+    public double? ProgressValue { get; init; }
+    public string? TextureReference { get; init; }
 }
 
 public enum DiagnosticSeverity

@@ -7,11 +7,13 @@ using Avalonia.Platform.Storage;
 using System.Runtime.InteropServices;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using SkiaSharp;
 using FrameForge.Core;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Semantics.V2;
 using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Controls;
 using FrameForge.Desktop.Assets;
@@ -116,6 +118,166 @@ public static class SmokeTest
             window.FindControl<Expander>("V2ControlPalette")?.IsVisible == true);
         Check("normal launch shows the v2 inspector",
             window.FindControl<StackPanel>("V2Inspector")?.IsVisible == true);
+
+        // Focused real-window acceptance for the V2 Dungeon Finder. This is opt-in because it
+        // requires the user's validated build-12340 client and writes three evidence images.
+        var phase36Directory = Environment.GetEnvironmentVariable("FRAMEFORGE_PHASE36_VISUAL_DIR");
+        var lfdDirectory = Environment.GetEnvironmentVariable("FRAMEFORGE_LFD_VISUAL_DIR");
+        if ((phase36Directory ?? lfdDirectory) is { Length: > 0 } visualDirectory)
+        {
+            var phase36 = !string.IsNullOrWhiteSpace(phase36Directory);
+            Directory.CreateDirectory(visualDirectory);
+            Check("V2 Dungeon Finder project opens", vm.NewV2DungeonFinderProject(), vm.Status);
+            await vm.V2TemplateRegistryLoadingTask;
+            await PumpAsync(8);
+            canvas.FitToContent();
+            await PumpAsync(3);
+
+            void CaptureWindow(string fileName)
+            {
+                var width = (int)Math.Max(1, Math.Round(window.Bounds.Width));
+                var height = (int)Math.Max(1, Math.Round(window.Bounds.Height));
+                var bitmap = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+                bitmap.Render(window);
+                bitmap.Save(Path.Combine(visualDirectory, fileName), new PngBitmapEncoderOptions());
+            }
+
+            var designTrace = canvas.LastRenderTrace;
+            Check("DESIGN renders inherited Dungeon Finder textures",
+                designTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) >= 20,
+                $"trace textures {designTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) ?? 0}");
+            CaptureWindow("frameforge-lfd-design.png");
+
+            vm.SetV2DesignMode(false);
+            await PumpAsync(4);
+            var previewTrace = canvas.LastRenderTrace;
+            Check("PREVIEW renders the same Dungeon Finder texture composition",
+                previewTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) ==
+                designTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE),
+                $"design {designTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) ?? 0}, preview {previewTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) ?? 0}");
+            CaptureWindow("frameforge-lfd-preview.png");
+
+            vm.SetV2DesignMode(true);
+            vm.AddV2Control(UiNodeKind.Button);
+            vm.V2WidthDraft = "180";
+            vm.V2HeightDraft = "36";
+            vm.V2OffsetXDraft = "0";
+            vm.V2OffsetYDraft = "-150";
+            vm.V2TextDraft = "Custom Overlay";
+            vm.ApplyV2Inspector();
+            await PumpAsync(4);
+            Check("authored overlay remains outside the protected reference",
+                vm.SelectedV2Node is { } overlay && overlay.Editor?.ReferenceOnly != true &&
+                overlay.Owner.Kind == OwnerKind.CompositionRoot);
+            CaptureWindow("frameforge-lfd-design-overlay.png");
+
+            if (phase36)
+            {
+                foreach (var role in vm.V2Document!.Nodes.Where(node =>
+                             node.RuntimeName is "LFDQueueFrameRoleButtonTank" or
+                                 "LFDQueueFrameRoleButtonHealer" or "LFDQueueFrameRoleButtonDPS").ToArray())
+                {
+                    vm.SelectV2(role.Id, false);
+                    vm.ToggleSelectedV2ReferenceVisibility(subtree: true);
+                }
+                await PumpAsync(4);
+                Check("role-selection reference geometry hides in editor presentation",
+                    vm.V2Document.Editor!.HiddenReferenceNodes.Count > 3);
+                CaptureWindow("frameforge-phase36-role-selection-hidden.png");
+
+                foreach (var role in vm.V2Document.Nodes.Where(node =>
+                             node.RuntimeName is "LFDQueueFrameRoleButtonTank" or
+                                 "LFDQueueFrameRoleButtonHealer" or "LFDQueueFrameRoleButtonDPS").ToArray())
+                {
+                    vm.SelectV2(role.Id, false);
+                    vm.ToggleSelectedV2ReferenceVisibility(subtree: true);
+                }
+                await PumpAsync(4);
+                Check("hidden role-selection geometry restores", vm.V2Document.Editor!.HiddenReferenceNodes.Count == 0);
+                CaptureWindow("frameforge-phase36-role-selection-restored.png");
+
+                var choices = await vm.V2TextureChoicesAsync();
+                var browser = new StockTextureChooserWindow(choices, null, vm.WoWClientStatus,
+                    vm.HasWoWClientSelection, vm.Assets, vm.V2AssetCatalogStatus);
+                browser.Show(window);
+                await PumpAsync(4);
+                await browser.SearchAndPreviewAsync("UI-LFG-FRAME");
+                await PumpAsync(8);
+                var browserBitmap = new RenderTargetBitmap(
+                    new PixelSize((int)browser.Bounds.Width, (int)browser.Bounds.Height), new Vector(96, 96));
+                browserBitmap.Render(browser);
+                browserBitmap.Save(Path.Combine(visualDirectory, "frameforge-phase36-asset-browser-lfg.png"),
+                    new PngBitmapEncoderOptions());
+                Check("asset browser search discovers LFG textures", choices.Any(choice =>
+                    choice.InterfacePath.Contains("LFG", StringComparison.OrdinalIgnoreCase)), vm.V2AssetCatalogStatus);
+                browser.Close();
+
+                vm.SelectV2(vm.V2Document.CompositionRoots.Single().Id, false);
+                vm.AddV2Control(UiNodeKind.Texture);
+                vm.V2WidthDraft = "96";
+                vm.V2HeightDraft = "96";
+                vm.V2OffsetXDraft = "120";
+                vm.V2OffsetYDraft = "-150";
+                vm.ApplyV2Inspector();
+                Check("authored Texture accepts Blizzard artwork",
+                    vm.AssignSelectedV2ClientTexture(@"Interface\LFGFrame\UI-LFG-ICONS-ROLES"), vm.Status);
+                await PumpAsync(4);
+                CaptureWindow("frameforge-phase36-authored-client-texture.png");
+
+                var phase36Work = Path.Combine(Path.GetTempPath(), $"frameforge-phase36-smoke-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(phase36Work);
+                var projectPath = Path.Combine(phase36Work, "phase36-visual.fforge.json");
+                Check("phase36 visual project saves", vm.SaveV2ToFile(projectPath), vm.Status);
+                var sourcePng = Path.Combine(phase36Work, "phase36-source.png");
+                using (var customBitmap = new SKBitmap(64, 64))
+                using (var customCanvas = new SKCanvas(customBitmap))
+                {
+                    customCanvas.Clear(SKColors.Transparent);
+                    using var paint = new SKPaint { Color = SKColors.CornflowerBlue, IsAntialias = true };
+                    customCanvas.DrawCircle(32, 32, 28, paint);
+                    using var image = SKImage.FromBitmap(customBitmap);
+                    using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+                    File.WriteAllBytes(sourcePng, png.ToArray());
+                }
+                vm.SelectV2(vm.V2Document.CompositionRoots.Single().Id, false);
+                vm.AddV2Control(UiNodeKind.Texture);
+                vm.V2WidthDraft = "128";
+                vm.V2HeightDraft = "128";
+                vm.V2OffsetXDraft = "-120";
+                vm.V2OffsetYDraft = "-150";
+                vm.ApplyV2Inspector();
+                Check("custom PNG imports and prepares as TGA", vm.ImportSelectedV2Texture(sourcePng, true), vm.Status);
+                vm.V2UseTexCoordsDraft = true;
+                vm.V2TexCoordLeftDraft = "0.1";
+                vm.V2TexCoordRightDraft = "0.9";
+                vm.V2TexCoordTopDraft = "0.1";
+                vm.V2TexCoordBottomDraft = "0.9";
+                vm.ApplyV2Inspector();
+                await PumpAsync(4);
+                Check("custom artwork paints on DESIGN canvas",
+                    canvas.LastRenderTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) > 25);
+                CaptureWindow("frameforge-phase36-custom-artwork-cropped-design.png");
+                vm.SetV2DesignMode(false);
+                await PumpAsync(4);
+                CaptureWindow("frameforge-phase36-custom-artwork-cropped-preview.png");
+                Directory.Delete(phase36Work, recursive: true);
+            }
+
+            foreach (var file in new[]
+                     {
+                         "frameforge-lfd-design.png", "frameforge-lfd-preview.png",
+                         "frameforge-lfd-design-overlay.png",
+                     })
+                Check($"visual evidence {file} written", File.Exists(Path.Combine(visualDirectory, file)));
+
+            Console.WriteLine($"SMOKE_LFD_VISUAL {{\"ok\":{failures == 0}," +
+                              $"\"resolved\":{vm.V2Layout?.Elements.Values.Count(item => item.Rect is not null) ?? 0}," +
+                              $"\"unresolved\":{vm.V2Layout?.Elements.Values.Count(item => item.Rect is null) ?? 0}," +
+                              $"\"textureAttempts\":{canvas.LastRenderTrace?.VisualAttemptsByKind.GetValueOrDefault(FrameKind.TEXTURE) ?? 0}," +
+                              $"\"directory\":\"{visualDirectory.Replace("\\", "\\\\", StringComparison.Ordinal)}\"}}");
+            Console.WriteLine(failures == 0 ? "SMOKE_PASS" : $"SMOKE_FAIL {failures} check(s)");
+            return failures == 0 ? 0 : 1;
+        }
 
         // 1. The example loads and resolves to the golden geometry.
         vm.LoadNativeHuntsExample();

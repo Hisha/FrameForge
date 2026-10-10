@@ -13,20 +13,25 @@ public static class UiTemplateEffectiveProperties
         ArgumentNullException.ThrowIfNull(node);
 
         var provenance = AuthoredProvenance(node.AuthoredProperties);
-        if (string.IsNullOrWhiteSpace(node.BlizzardTemplate))
+        var identity = node.BlizzardTemplate;
+        if (identity is null && node.Kind == UiNodeKind.Button &&
+            node.Editor is { ReferenceOnly: true, ReferenceTemplate: { } referenceTemplate } &&
+            registry?.Resolve(referenceTemplate) is not null)
+            identity = referenceTemplate;
+        if (string.IsNullOrWhiteSpace(identity))
             return Result(node.AuthoredProperties, null, null, provenance, [], [], []);
 
-        var template = registry?.Resolve(node.BlizzardTemplate);
+        var template = registry?.Resolve(identity);
         if (template is null)
         {
             provenance["template"] = EffectivePropertyOrigin.Unresolved;
             var diagnostic = new BlizzardTemplateDiagnostic(BlizzardTemplateDiagnosticSeverity.Error,
                 registry is null ? "missing-template-registry" : "unknown-template",
                 registry is null
-                    ? $"Template '{node.BlizzardTemplate}' cannot be resolved without a registry snapshot."
-                    : $"Template '{node.BlizzardTemplate}' is not present in this registry snapshot.",
-                node.BlizzardTemplate, Dependency: node.BlizzardTemplate);
-            return Result(node.AuthoredProperties, node.BlizzardTemplate, null, provenance, [], [], [diagnostic]);
+                    ? $"Template '{identity}' cannot be resolved without a registry snapshot."
+                    : $"Template '{identity}' is not present in this registry snapshot.",
+                identity, Dependency: identity);
+            return Result(node.AuthoredProperties, identity, null, provenance, [], [], [diagnostic]);
         }
 
         var authoredFrame = node.AuthoredProperties.Frame;
@@ -43,7 +48,7 @@ public static class UiTemplateEffectiveProperties
 
         var values = node.AuthoredProperties with { Frame = effectiveFrame };
         var unresolved = template.AssetDependencies.Where(item => !item.IsResolved).ToArray();
-        return Result(values, node.BlizzardTemplate, templateValues, provenance, unresolved,
+        return Result(values, identity, templateValues, provenance, unresolved,
             templateValues.PreviewBehaviors, template.Diagnostics);
 
         void AddTemplateOrigin(string effectivePath, double? authored, string templatePath)
@@ -56,7 +61,7 @@ public static class UiTemplateEffectiveProperties
             if (!templateValues.Provenance.TryGetValue(templatePath, out var source))
                 return;
             provenance[effectivePath] = source.Origin == BlizzardTemplateValueOrigin.Declared &&
-                                        source.Definition == node.BlizzardTemplate
+                                        source.Definition == identity
                 ? EffectivePropertyOrigin.TemplateDeclared
                 : EffectivePropertyOrigin.TemplateInherited;
         }

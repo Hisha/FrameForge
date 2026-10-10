@@ -178,6 +178,49 @@ public sealed class WoWClientAssetProviderTests : IDisposable
     }
 
     [Fact]
+    public void Texture_discovery_merges_partial_archive_listfiles_and_cache_without_extracting_assets()
+    {
+        var client = MakeClient("enUS");
+        var archive = Path.Combine(client, "Data", "enUS", "locale-enUS.MPQ");
+        var fake = new FakeArchiveReader();
+        fake.Add(archive, "(listfile)", System.Text.Encoding.UTF8.GetBytes(
+            "Interface\\LFGFrame\\UI-LFG-FRAME.blp\r\nInterface\\Icons\\INV_Test.tga\r\nDBFilesClient\\Map.dbc\r\n"));
+        var provider = Provider(fake, new(3, 3, 5, 12340));
+        var cached = Path.Combine(provider.CacheRoot, "Interface", "Cached", "Known.blp");
+        Directory.CreateDirectory(Path.GetDirectoryName(cached)!);
+        File.WriteAllBytes(cached, [1]);
+
+        var catalog = provider.DiscoverTextures(provider.ValidateClient(client));
+
+        Assert.Contains(@"Interface\LFGFrame\UI-LFG-FRAME.blp", catalog.Paths);
+        Assert.Contains(@"Interface\Icons\INV_Test.tga", catalog.Paths);
+        Assert.Contains(@"Interface\Cached\Known.blp", catalog.Paths);
+        Assert.DoesNotContain(catalog.Paths, path => path.Contains("Map.dbc", StringComparison.Ordinal));
+        Assert.False(catalog.IsComplete);
+        Assert.Contains("partial", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, catalog.ArchivesWithListFiles);
+    }
+
+    [Fact]
+    public void Explicit_real_client_texture_catalog_when_requested()
+    {
+        var clientRoot = Environment.GetEnvironmentVariable("FRAMEFORGE_WOW_CLIENT");
+        var cacheRoot = Environment.GetEnvironmentVariable("FRAMEFORGE_WOW_CACHE_ROOT");
+        if (string.IsNullOrWhiteSpace(clientRoot) || string.IsNullOrWhiteSpace(cacheRoot)) return;
+        var provider = new WoWClientAssetProvider(cacheRoot);
+        var validation = provider.ValidateClient(clientRoot);
+        Assert.True(validation.IsValid, validation.Message);
+
+        var catalog = provider.DiscoverTextures(validation);
+
+        Assert.NotEmpty(catalog.Paths);
+        Assert.Contains(catalog.Paths, path =>
+            path.Contains("LFGFrame", StringComparison.OrdinalIgnoreCase) &&
+            path.EndsWith(".blp", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("partial", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Resolver_precedence_remains_source_then_manual_then_managed_cache()
     {
         var sourceRoot = Path.Combine(_temp, "addon", "Interface");

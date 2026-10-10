@@ -7,6 +7,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Templates;
+using FrameForge.Core.Semantics.V2;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -63,6 +64,12 @@ public sealed class VisualContentLayer : ICanvasLayer
                 continue;
 
             var rect = new Rect(box.X, box.Y, box.Width, box.Height);
+            if (frame.V2Element?.Node is { } v2Node)
+            {
+                DrawV2(context, canvas, frame, rect, v2Node);
+                canvas.Diagnostics.AttemptVisual(frame.EffectiveKind, 1);
+                continue;
+            }
             var visual = frame.Model?.Visual;
 
             switch (frame.Model?.Kind)
@@ -91,6 +98,78 @@ public sealed class VisualContentLayer : ICanvasLayer
                     break;
             }
         }
+    }
+
+    private static void DrawV2(DrawingContext context, CanvasRenderContext canvas, DrawableFrame frame,
+        Rect rect, UiNode node)
+    {
+        var effective = frame.V2Element!.EffectiveProperties?.Values ?? node.AuthoredProperties;
+        switch (node.Kind)
+        {
+            case UiNodeKind.Texture:
+                DrawV2Texture(context, canvas, rect, effective.Texture?.TextureReference,
+                    effective.Texture?.TexCoords, effective.Region?.Tint);
+                break;
+            case UiNodeKind.FontString:
+                var font = effective.FontString;
+                if (!string.IsNullOrEmpty(font?.Text))
+                    DrawClippedText(context, rect, font.Text, font.JustifyH, font.JustifyV,
+                        effective.Region?.Tint is { } tint ? ToColor(tint) : Color.Parse("#E8F1F5"),
+                        (font.FontSize ?? 11) * canvas.Viewport.Zoom);
+                else
+                    context.DrawRectangle(null, new Pen(Brushes.SeaGreen, 1), rect);
+                break;
+            case UiNodeKind.Button:
+                var template = canvas.V2Templates?.Resolve(node.BlizzardTemplate);
+                if (template is not null)
+                {
+                    var rendered = DrawV2Button(context, canvas, rect, template, canvas.V2ButtonState);
+                    if (!rendered.Rendered)
+                        canvas.Diagnostics.ReportVisualDiagnostic(frame.Name, rendered.Diagnostic ?? "Template preview is unresolved.");
+                }
+                else
+                {
+                    context.FillRectangle(new SolidColorBrush(Color.Parse("#34424A")), rect);
+                    context.DrawRectangle(null, new Pen(Brushes.SlateGray, 1), rect);
+                }
+                if (!string.IsNullOrEmpty(effective.Button?.Text))
+                    DrawClippedText(context, rect, effective.Button.Text, "CENTER", "MIDDLE", Colors.White,
+                        11 * canvas.Viewport.Zoom);
+                break;
+            case UiNodeKind.StatusBar:
+                DrawV2StatusBar(context, rect, effective.StatusBar);
+                break;
+        }
+    }
+
+    private static void DrawV2Texture(DrawingContext context, CanvasRenderContext canvas, Rect rect,
+        string? reference, UiTexCoords? texCoords, UiColor? tint)
+    {
+        if (reference is not null && canvas.AssetResolver?.Resolve(reference) is { CanRender: true, Texture: { } decoded })
+        {
+            var source = texCoords is { IsValid: true }
+                ? TextureSourceRect.Map(new TexCoords(texCoords.Left, texCoords.Right, texCoords.Top, texCoords.Bottom),
+                    decoded.Image.Width, decoded.Image.Height)
+                : new Rect(0, 0, decoded.Image.Width, decoded.Image.Height);
+            context.DrawImage(decoded.BitmapFor(tint is null ? null : new ColorRgba(tint.Red, tint.Green, tint.Blue, tint.Alpha)),
+                source, rect);
+            return;
+        }
+        context.FillRectangle(new SolidColorBrush(tint is null ? Color.Parse("#3C4A52") : ToColor(tint)), rect);
+        context.DrawRectangle(null, new Pen(Brushes.SlateGray, 1), rect);
+    }
+
+    private static void DrawV2StatusBar(DrawingContext context, Rect rect, StatusBarProperties? status)
+    {
+        var background = status?.BackgroundColor is { } backgroundColor ? ToColor(backgroundColor) : Color.Parse("#202A30");
+        var fill = status?.FillColor is { } fillColor ? ToColor(fillColor) : Color.Parse("#63C2A0");
+        context.FillRectangle(new SolidColorBrush(background), rect);
+        var fraction = status is { Minimum: { } minimum, Maximum: { } maximum, Value: { } value } && maximum > minimum
+            ? Math.Clamp((value - minimum) / (maximum - minimum), 0, 1)
+            : 0;
+        if (fraction > 0)
+            context.FillRectangle(new SolidColorBrush(fill), new Rect(rect.X, rect.Y, rect.Width * fraction, rect.Height));
+        context.DrawRectangle(null, new Pen(Brushes.SlateGray, 1), rect);
     }
 
     /// <summary>
@@ -565,6 +644,12 @@ public sealed class VisualContentLayer : ICanvasLayer
         (byte)Math.Round(Math.Clamp(color.R, 0, 1) * 255),
         (byte)Math.Round(Math.Clamp(color.G, 0, 1) * 255),
         (byte)Math.Round(Math.Clamp(color.B, 0, 1) * 255));
+
+    private static Color ToColor(UiColor color) => Color.FromArgb(
+        (byte)Math.Round(Math.Clamp(color.Alpha, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.Red, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.Green, 0, 1) * 255),
+        (byte)Math.Round(Math.Clamp(color.Blue, 0, 1) * 255));
 
     private static string Num(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 }

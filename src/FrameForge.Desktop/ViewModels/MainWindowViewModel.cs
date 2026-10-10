@@ -14,6 +14,7 @@ using FrameForge.Core.Viewing;
 using FrameForge.Desktop.Assets;
 using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Preview;
+using FrameForge.Desktop.Services;
 using FrameForge.Desktop.Templates;
 
 namespace FrameForge.Desktop.ViewModels;
@@ -354,11 +355,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public IReadOnlyList<TreeFilterOption> TreeFilterOptions { get; }
 
     /// <summary>True when the tree is hiding anything, so the UI can say so.</summary>
-    public bool IsTreeFiltering => _treeProjection?.Filtering ?? false;
+    public bool IsTreeFiltering => IsV2Project ? _v2TreeFiltering : _treeProjection?.Filtering ?? false;
 
     /// <summary>How many nodes the tree is showing, and how many exist.</summary>
-    public string TreeFilterSummary =>
-        _treeProjection is { Filtering: true } projection
+    public string TreeFilterSummary => IsV2Project
+        ? _v2TreeFiltering ? $"{_v2TreeVisibleCount} of {V2Document?.Nodes.Count ?? 0} shown" : $"{V2Document?.Nodes.Count ?? 0} controls"
+        : _treeProjection is { Filtering: true } projection
             ? $"{projection.Visible.Count} of {Project.Frames.Count} shown"
             : $"{Project.Frames.Count} frames";
 
@@ -577,6 +579,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         foreach (var option in ModeOptions)
             option.Refresh();
+        OnPropertyChanged(nameof(IsV2DesignMode));
+        OnPropertyChanged(nameof(IsV2PreviewMode));
     }
 
     /// <summary>Re-applies the visibility filter after an edit.</summary>
@@ -1032,7 +1036,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     partial void OnTreeFilterChanged(TreeFilter value)
     {
-        RebuildTree(Project);
+        if (IsV2Project) RebuildV2Tree(); else RebuildTree(Project);
 
         foreach (var option in TreeFilterOptions)
             option.Refresh();
@@ -1102,7 +1106,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>True when the Native Hunts example is loaded, used to label the status hint.</summary>
     public string ProjectDescription =>
         IsV2Project
-            ? $"Schema v2 · {_v2Document!.Nodes.Count} controls · explicit composition root"
+            ? $"Schema v2 · {V2Document!.Nodes.Count} controls · explicit composition root"
             : Project.Frames.Count == 0
             ? "Empty project."
             : $"{Project.Frames.Count} frames on a {Number(Project.Screen.Width)} x {Number(Project.Screen.Height)} screen.";
@@ -1219,7 +1223,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// demanded two <em>movable</em> objects, which left the button lit and then did nothing.
     /// </remarks>
     public bool CanAlignSelection =>
-        SelectionArrange.CanRun(Project, Layout, _selectedNames, SelectionArrangeCommand.AlignLeft);
+        IsV2Project ? CanAlignV2 : SelectionArrange.CanRun(Project, Layout, _selectedNames, SelectionArrangeCommand.AlignLeft);
 
     /// <summary>
     /// True when a distribution command has enough selected objects to be offered.
@@ -1231,12 +1235,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// behaviour rather than fix anything.
     /// </remarks>
     public bool CanDistributeSelection =>
-        _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.DistributeHorizontal)
+        IsV2Project ? CanDistributeV2 : _selectedNames.Count >= SelectionArrange.RequiredCount(SelectionArrangeCommand.DistributeHorizontal)
         && SelectionArrange.CanRun(Project, Layout, _selectedNames, SelectionArrangeCommand.DistributeHorizontal);
 
     /// <summary>One line describing the whole selection for the multi-selection panel.</summary>
-    public string MultiSelectionSummary =>
-        _selectedNames.Count > 1 && Project.Find(_selectedNames[^1]) is { } primary
+    public string MultiSelectionSummary => IsV2Project
+        ? V2Selection.Count > 1 && SelectedV2Node is { } selected
+            ? $"{V2Selection.Count} controls selected. Primary: {selected.DisplayLabel}." : string.Empty
+        : _selectedNames.Count > 1 && Project.Find(_selectedNames[^1]) is { } primary
             ? $"{_selectedNames.Count} objects selected. Primary: {Project.Editor.DisplayNameFor(primary)}."
             : string.Empty;
 
@@ -1689,6 +1695,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void Select(string? name)
     {
+        if (IsV2Project)
+        {
+            SemanticId? id = name is not null && Guid.TryParseExact(name, "D", out _) ? new SemanticId(name) : null;
+            _v2Session?.ReplaceSelection(id);
+            RefreshV2Presentation(null);
+            RefreshV2Inspector();
+            return;
+        }
         if (name is not null && !Project.Contains(name))
             name = null;
 
@@ -1717,6 +1731,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     public void ToggleSelection(string? name)
     {
+        if (IsV2Project)
+        {
+            if (_v2Session is not null && name is not null && Guid.TryParseExact(name, "D", out _))
+                _v2Session.ToggleSelection(new SemanticId(name));
+            else
+                _v2Session?.ReplaceSelection(null);
+            RefreshV2Presentation(null);
+            RefreshV2Inspector();
+            return;
+        }
         if (name is null || !Project.Contains(name))
         {
             ReplaceSelection(null);
@@ -1766,7 +1790,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </remarks>
     private void ApplySelection(string? status = null)
     {
-        RelaidOut(Project, _selectedNames.Count > 0 ? _selectedNames[^1] : null, status);
+        if (IsV2Project)
+            RefreshV2Presentation(status);
+        else
+            RelaidOut(Project, _selectedNames.Count > 0 ? _selectedNames[^1] : null, status);
     }
 
     /// <summary>Keeps the tree selection in step when the user clicks the tree.</summary>
@@ -1792,7 +1819,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
 
     /// <summary>Re-projects and redraws the tree whenever the search text changes.</summary>
-    partial void OnTreeSearchChanged(string value) => RebuildTree(Project);
+    partial void OnTreeSearchChanged(string value)
+    {
+        if (IsV2Project) RebuildV2Tree(); else RebuildTree(Project);
+    }
 
     private FrameTreeNode? FindNode(string? name)
     {
@@ -1828,10 +1858,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (IsV2Project)
         {
-            if (_v2Document is null || UiDocumentProjection.IdFromProjectionName(name) is not { } id ||
-                !_v2Document.Nodes.Any(node => node.Id == id))
+            if (_v2Session is null || !Guid.TryParseExact(name, "D", out _))
                 return;
-            ApplyV2Result(V2Editor.MoveBy(_v2Document, id, modelDx, modelDy), $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}.");
+            var id = new SemanticId(name);
+            if (!_v2Session.Document.Nodes.Any(node => node.Id == id)) return;
+            ApplyV2DragDelta(id, modelDx, modelDy);
             return;
         }
         _lastDragMovedSelection = _selectedNames.Count > 1 && _selectedNames.Contains(name, StringComparer.Ordinal);
@@ -1889,7 +1920,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (IsV2Project)
         {
-            Status = "Multi-control alignment is not implemented for schema v2 in Milestone 2; drag or edit offsets explicitly.";
+            ArrangeV2Selection(command);
             return;
         }
         if (_selectedNames.Count == 0)
@@ -1920,7 +1951,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         if (IsV2Project)
         {
-            Status = $"Dragged {SelectedV2Node?.DisplayLabel ?? "v2 control"}; authored anchor offsets remain typed and parent-relative.";
+            CompleteV2Gesture();
             return;
         }
 
@@ -2817,6 +2848,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private IEnumerable<string> EnumerateDesignReferences()
     {
+        if (V2Document is { } v2)
+        {
+            foreach (var reference in v2.Editor?.ProjectAssets.SelectMany(asset =>
+                         new[] { asset.SourceReference, asset.PreviewReference, asset.PreparedReference }) ?? [])
+                yield return reference;
+            foreach (var reference in v2.Nodes.SelectMany(node => new[]
+                     {
+                         node.AuthoredProperties.Texture?.TextureReference,
+                         node.AuthoredProperties.StatusBar?.TextureReference,
+                     }).OfType<string>().Where(reference => !IsWowClientReference(reference)))
+                yield return reference;
+            yield break;
+        }
         foreach (var reference in Project.Editor.DesignObjects.Select(item => item.DesignAsset).OfType<string>())
             yield return reference;
         foreach (var reference in Project.Frames
@@ -2837,6 +2881,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private IEnumerable<string> EnumerateAssetReferences()
     {
+        if (V2Document is { } v2)
+        {
+            foreach (var reference in v2.Nodes.SelectMany(node => new[]
+                     {
+                         node.AuthoredProperties.Texture?.TextureReference,
+                         node.AuthoredProperties.StatusBar?.TextureReference,
+                     }).OfType<string>())
+                yield return reference;
+            yield break;
+        }
         foreach (var frame in Project.Frames)
         {
             if (frame.Visual?.Texture?.File is { Length: > 0 } texture)

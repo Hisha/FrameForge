@@ -1,6 +1,7 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FrameForge.Core.Models;
+using FrameForge.Core.Semantics.V2;
 
 namespace FrameForge.Desktop.ViewModels;
 
@@ -31,7 +32,7 @@ public sealed partial class FrameTreeNode : ObservableObject
         bool IsSelected = false,
         bool IsPrimarySelection = false)
     {
-        this.Frame = Frame;
+        _frame = Frame;
         this.Children = Children;
         this.OriginLabel = OriginLabel;
         this.IsLocked = IsLocked;
@@ -43,7 +44,34 @@ public sealed partial class FrameTreeNode : ObservableObject
         this.IsPrimarySelection = IsPrimarySelection;
     }
 
-    public FrameDef Frame { get; }
+    public FrameTreeNode(
+        UiNode? Node,
+        CompositionRoot? Root,
+        IReadOnlyList<FrameTreeNode> Children,
+        bool IsExpanded = false,
+        bool IsSelected = false,
+        bool IsPrimarySelection = false,
+        bool? IsLockedOverride = null,
+        bool IsHiddenOverride = false,
+        string GroupNames = "")
+    {
+        V2Node = Node;
+        V2Root = Root;
+        this.Children = Children;
+        OriginLabel = "Schema v2 semantic graph";
+        IsLocked = IsLockedOverride ?? Node?.Editor?.Locked ?? false;
+        IsHidden = IsHiddenOverride;
+        this.GroupNames = GroupNames;
+        DisplayNameOverride = Node?.DisplayLabel ?? Root?.RuntimeName;
+        _isExpanded = IsExpanded;
+        this.IsSelected = IsSelected;
+        this.IsPrimarySelection = IsPrimarySelection;
+    }
+
+    private readonly FrameDef? _frame;
+    public FrameDef Frame => _frame!;
+    public UiNode? V2Node { get; }
+    public CompositionRoot? V2Root { get; }
     public IReadOnlyList<FrameTreeNode> Children { get; }
     public string OriginLabel { get; }
     public bool IsLocked { get; }
@@ -52,6 +80,7 @@ public sealed partial class FrameTreeNode : ObservableObject
     public bool IsConceptual { get; }
     public bool IsSelected { get; }
     public bool IsPrimarySelection { get; }
+    public bool IsHidden { get; }
 
     /// <summary>
     /// User-owned expansion state. The TreeView writes this through a TwoWay binding before the
@@ -61,10 +90,10 @@ public sealed partial class FrameTreeNode : ObservableObject
     private bool _isExpanded;
 
     /// <summary>Frame name, shown as the tree label.</summary>
-    public string Name => Frame.Name;
+    public string Name => _frame?.Name ?? V2Node?.Id.Value ?? V2Root?.Id.Value ?? string.Empty;
     public string DisplayName => IsConceptual
-        ? $"{(IsLocked ? "🔒" : "🔓")} {DisplayNameOverride ?? Frame.Name}"
-        : DisplayNameOverride ?? Frame.Name;
+        ? $"{(IsLocked ? "🔒" : "🔓")} {DisplayNameOverride ?? _frame?.Name ?? Name}"
+        : DisplayNameOverride ?? _frame?.Name ?? Name;
 
     /// <summary>Unambiguous identity shown as the row tooltip even when DESIGN uses a friendly name.</summary>
     public string IdentitySummary => $"{KindBadge} · {Name} · {OriginLabel}";
@@ -85,15 +114,18 @@ public sealed partial class FrameTreeNode : ObservableObject
     /// What kind of FrameXML widget this is, so the tree does not imply a hierarchy of panels
     /// where the file actually contains textures and text.
     /// </summary>
-    public string KindBadge => Frame.Placeholder ? "stand-in" : Frame.Kind.Badge();
+    public string KindBadge => _frame is { Placeholder: true } ? "stand-in" : _frame is not null
+        ? _frame.Kind.Badge()
+        : V2Node?.Kind.ToString().ToLowerInvariant() ?? "root";
 
     /// <summary>True when the widget's size came from somewhere other than the file.</summary>
-    public bool IsFill => Frame.SetAllPoints;
+    public bool IsFill => _frame?.SetAllPoints ?? V2Root?.Sizing.Kind == RootSizingKind.FillHost;
 
     /// <summary>True when the source element had no name of its own.</summary>
-    public bool IsAnonymous => Frame.Anonymous;
+    public bool IsAnonymous => _frame?.Anonymous ?? V2Node?.RuntimeName is null;
 
     public string LockBadge => IsLocked ? "🔒" : string.Empty;
+    public string HiddenBadge => IsHidden ? "◌" : string.Empty;
 
     public string GroupBadge => string.IsNullOrWhiteSpace(GroupNames) ? string.Empty : $"[{GroupNames}]";
 
@@ -102,16 +134,27 @@ public sealed partial class FrameTreeNode : ObservableObject
     {
         get
         {
-            if (Frame.SetAllPoints)
+            if (_frame?.SetAllPoints == true || V2Root?.Sizing.Kind == RootSizingKind.FillHost)
                 return "fills anchor target";
 
-            var width = Format(Frame.Width);
-            var height = Format(Frame.Height);
-            return Frame.SizeReferenceOrDefault == SizeReference.PARENT
+            if (V2Node is { } node)
+            {
+                var properties = node.IsRegion ? node.AuthoredProperties.Region : null;
+                var nodeWidth = properties?.Width ?? node.AuthoredProperties.Frame?.Width;
+                var nodeHeight = properties?.Height ?? node.AuthoredProperties.Frame?.Height;
+                return $"{Format(nodeWidth)} x {Format(nodeHeight)}";
+            }
+
+            var width = Format(_frame?.Width);
+            var height = Format(_frame?.Height);
+            return _frame?.SizeReferenceOrDefault == SizeReference.PARENT
                 ? $"{width} x {height} (of parent)"
                 : $"{width} x {height}";
         }
     }
+
+    private static string Format(double? value) => value is null ? "?" :
+        Format(value.Value);
 
     private static string Format(double value) =>
         value == Math.Floor(value)

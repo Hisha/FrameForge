@@ -72,6 +72,19 @@ public interface IWoWClientAssetProvider
     void ClearCache();
 }
 
+public sealed record ClientTextureCatalog(
+    IReadOnlyList<string> Paths,
+    int ArchivesWithListFiles,
+    int ArchiveCount,
+    bool IsComplete,
+    string Diagnostic);
+
+/// <summary>Optional discovery capability; materialization remains on-demand and read-only.</summary>
+public interface IWoWClientAssetCatalogProvider
+{
+    ClientTextureCatalog DiscoverTextures(WowClientValidation client);
+}
+
 /// <summary>Reads the PE string resource without relying on Windows APIs.</summary>
 public sealed class PortableWowBuildReader : IWoWClientBuildReader
 {
@@ -149,7 +162,7 @@ public sealed class ManagedMpqArchiveReader : IWoWArchiveReader
 }
 
 /// <summary>Validates a 3.3.5a client and materializes only requested Interface assets.</summary>
-public sealed class WoWClientAssetProvider : IWoWClientAssetProvider
+public sealed class WoWClientAssetProvider : IWoWClientAssetProvider, IWoWClientAssetCatalogProvider
 {
     public const int SupportedBuild = 12340;
     private const string BuildCacheName = "wow-3.3.5a-12340";
@@ -173,6 +186,53 @@ public sealed class WoWClientAssetProvider : IWoWClientAssetProvider
     }
 
     public string CacheRoot { get; }
+
+    public ClientTextureCatalog DiscoverTextures(WowClientValidation client)
+    {
+        if (!client.IsValid)
+            return new ClientTextureCatalog([], 0, client.Archives.Count, false,
+                "A validated WoW 3.3.5a client is required before archives can be indexed.");
+
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var covered = 0;
+        foreach (var archive in client.Archives.OrderBy(item => item.Priority))
+        {
+            try
+            {
+                if (!_archives.TryRead(archive.PhysicalPath, "(listfile)", out var bytes) || bytes is not { Length: > 0 })
+                    continue;
+                covered++;
+                foreach (var line in Encoding.UTF8.GetString(bytes).Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var path = line.Trim().Replace('/', '\\');
+                    if (!path.StartsWith("Interface\\", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (Path.GetExtension(path).ToLowerInvariant() is not (".blp" or ".tga" or ".png")) continue;
+                    paths.Add(path);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                                       or NotSupportedException or MpqParsingException or War3Net.IO.Mpq.MpqParserException)
+            {
+                // A single unreadable or listfile-free archive lowers coverage; other archives and
+                // the managed cache still remain useful to the browser.
+            }
+        }
+
+        if (Directory.Exists(CacheRoot))
+        {
+            foreach (var file in Directory.EnumerateFiles(CacheRoot, "*", SearchOption.AllDirectories))
+            {
+                if (Path.GetExtension(file).ToLowerInvariant() is not (".blp" or ".tga" or ".png")) continue;
+                var relative = Path.GetRelativePath(CacheRoot, file).Replace('/', '\\');
+                if (relative.StartsWith("Interface\\", StringComparison.OrdinalIgnoreCase)) paths.Add(relative);
+            }
+        }
+
+        var ordered = paths.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new ClientTextureCatalog(ordered, covered, client.Archives.Count, false,
+            $"Discovered {ordered.Length} texture path(s) from {covered}/{client.Archives.Count} archive listfiles and the managed cache. " +
+            "MPQ listfiles are optional and may omit valid client assets; search coverage is therefore partial.");
+    }
 
     public WowClientValidation ValidateClient(string? clientPath)
     {

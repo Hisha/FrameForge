@@ -4,6 +4,7 @@ using Avalonia.Media;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Viewing;
+using FrameForge.Core.Semantics.V2;
 
 namespace FrameForge.Desktop.Rendering;
 
@@ -11,11 +12,10 @@ namespace FrameForge.Desktop.Rendering;
 /// The selection band: the selection outline and the selected widget's anchors.
 /// </summary>
 /// <remarks>
-/// Drawn last, and always, in every mode - including Preview. "What is selected" is not a debug
-/// concern; a designer working in Preview still needs to know which widget the inspector is
-/// describing, and the outline is also the affordance that makes canvas selection legible.
+/// Drawn last in Design/Debug/Hybrid modes. Preview deliberately omits this editor-only chrome so
+/// the composed interface can be judged without selection affordances.
 /// <para>
-/// Hybrid is where this earns its keep: Preview's clean rendering plus the anchors and resolved
+/// Hybrid is where this earns its keep: clean rendering plus the anchors and resolved
 /// bounds of the current selection is the answer to "show me the UI, but show me exactly what
 /// controls the thing I have selected". Preview alone hides the geometry, which is right for
 /// judging appearance and wrong for editing.
@@ -28,6 +28,8 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
 
     /// <inheritdoc />
     public int Order => 20;
+
+    public bool AppliesTo(CanvasViewMode mode) => mode != CanvasViewMode.PREVIEW;
 
     private static readonly IPen SelectedPen = new Pen(new SolidColorBrush(Color.Parse("#F2C14E")), 2);
     private static readonly IPen SecondaryPen =
@@ -57,11 +59,13 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
         // Anchors stay exclusive to the primary. Four widgets' anchor lines at once is not more
         // information, it is a hairball; the primary's anchors are the ones the inspector is
         // describing right now.
-        if (canvas.SelectedName is { } primary
-            && canvas.Layout.Frames.TryGetValue(primary, out var detail)
-            && ViewPolicy.ShowsSelectionGeometry(canvas.Mode))
+        if (canvas.SelectedName is { } primary && ViewPolicy.ShowsSelectionGeometry(canvas.Mode))
         {
-            DrawAnchors(context, canvas, detail);
+            if (canvas.V2Layout is { } v2 && Guid.TryParseExact(primary, "D", out _)
+                && v2.Elements.TryGetValue(new SemanticId(primary), out var native))
+                DrawAnchors(context, canvas, native);
+            else if (canvas.Layout.Frames.TryGetValue(primary, out var detail))
+                DrawAnchors(context, canvas, detail);
         }
     }
 
@@ -173,6 +177,32 @@ public sealed class SelectionOverlayLayer : ICanvasLayer
                 : new Point(8, 8);
 
             Label.Draw(context, summary, new Point(position.X + 8, position.Y + 4), Foreground);
+        }
+    }
+
+    private static void DrawAnchors(DrawingContext context, CanvasRenderContext canvas, ResolvedUiElement detail)
+    {
+        foreach (var anchor in detail.Anchors)
+        {
+            if (anchor.OwnPosition is not { } ownModel) continue;
+            var own = ToCanvas(canvas, ownModel);
+            if (anchor.TargetPosition is not { } targetModel)
+            {
+                DrawOwnPoint(context, own, anchor.Index == 0);
+                Label.Draw(context, $"Anchor {anchor.Index + 1}: target unresolved",
+                    new Point(own.X + 8, own.Y - 7), Unresolved);
+                continue;
+            }
+            var target = ToCanvas(canvas, targetModel);
+            var pen = !anchor.Resolved ? AnchorBrokenPen : anchor.Index == 0 ? AnchorConnectorPen : AnchorExtraPen;
+            context.DrawLine(pen, target, own);
+            context.DrawRectangle(null, TargetPen, new Rect(target.X - 4.5, target.Y - 4.5, 9, 9));
+            DrawOwnPoint(context, own, anchor.Index == 0);
+        }
+        if (detail.Anchors.Count > 1 && detail.Rect is { } rect)
+        {
+            var position = ToCanvas(canvas, new ModelPoint(rect.Right, rect.Top));
+            Label.Draw(context, $"{detail.Anchors.Count} anchors", new Point(position.X + 8, position.Y + 4), Foreground);
         }
     }
 

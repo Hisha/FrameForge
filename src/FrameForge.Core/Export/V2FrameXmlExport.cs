@@ -81,6 +81,7 @@ public static partial class V2FrameXmlExporter
         BlizzardTemplateRegistry? registry = null)
     {
         ArgumentNullException.ThrowIfNull(document);
+        document = ExportableDocument(document);
         var diagnostics = UiDocumentValidator.Validate(document, registry)
             .Select(item => new V2FrameXmlDiagnostic(item.Severity, item.Code, item.Message, item.NodeId, item.PropertyPath))
             .ToList();
@@ -122,11 +123,74 @@ public static partial class V2FrameXmlExporter
             return new(document, root, string.Empty, string.Empty, names, controls, dependencies, assets, diagnostics);
         }
         ValidateGeneratedStructure(document, root, names, parsed, diagnostics);
+        var nativeLayout = UiLayoutResolver.Resolve(document, UiPreviewHost.FromDesignRoot(root), registry);
+        var conformancePlan = new V2FrameXmlExportPlan(document, root, xml, string.Empty, names, controls,
+            dependencies, assets, diagnostics);
+        diagnostics.AddRange(V2LayoutExportConformance.Validate(nativeLayout, conformancePlan));
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
             return new(document, root, string.Empty, string.Empty, names, controls, dependencies, assets, diagnostics);
 
         var manifest = WriteManifest(document, root, controls, dependencies, assets, diagnostics, xml);
         return new(document, root, xml, manifest, names, controls, dependencies, assets, diagnostics);
+    }
+
+    /// <summary>Removes editor-only Blizzard references while preserving legitimate native anchors to their globals.</summary>
+    private static UiDocument ExportableDocument(UiDocument source)
+    {
+        var referenceNodes = source.Nodes.Where(node => node.Editor?.ReferenceOnly == true)
+            .ToDictionary(node => node.Id);
+        if (referenceNodes.Count == 0) return source;
+        var externalNames = source.ExternalReferences.Select(item => item.GlobalName).ToHashSet(StringComparer.Ordinal);
+        var added = new List<ExternalReference>();
+        UiAnchor Convert(UiAnchor anchor)
+        {
+            if (anchor.Target.Kind != AnchorTargetKind.LocalNode || anchor.Target.NodeId is not { } target ||
+                !referenceNodes.TryGetValue(target, out var reference)) return anchor;
+            if (string.IsNullOrWhiteSpace(reference.RuntimeName)) return anchor;
+            if (externalNames.Add(reference.RuntimeName))
+                added.Add(new ExternalReference
+                {
+                    GlobalName = reference.RuntimeName,
+                    ExpectedSource = reference.Editor?.ReferenceSource,
+                    Description = "Existing Blizzard UI global referenced by an authored FrameForge control.",
+                });
+            return anchor with { Target = AnchorTarget.External(reference.RuntimeName) };
+        }
+        var removed = referenceNodes.Keys.ToHashSet();
+        var authoredNodes = source.Nodes.Where(node => !removed.Contains(node.Id)).Select(node => node with
+        {
+            Children = [.. node.Children.Where(id => !removed.Contains(id))],
+            Anchors = [.. node.Anchors.Select(Convert)],
+        }).ToArray();
+        var requiredExternals = authoredNodes.SelectMany(node => node.Anchors)
+            .Where(anchor => anchor.Target.Kind == AnchorTargetKind.ExternalGlobal)
+            .Select(anchor => anchor.Target.GlobalName)
+            .OfType<string>()
+            .Append(source.CompositionRoots.FirstOrDefault()?.ExternalHostName ?? string.Empty)
+            .ToHashSet(StringComparer.Ordinal);
+        return source with
+        {
+            Nodes = authoredNodes,
+            CompositionRoots = [.. source.CompositionRoots.Select(root => root with
+            {
+                Children = [.. root.Children.Where(id => !removed.Contains(id))],
+            })],
+            ExternalReferences = [.. source.ExternalReferences.Concat(added)
+                .Where(reference => requiredExternals.Contains(reference.GlobalName))],
+            Editor = source.Editor is null ? null : source.Editor with
+            {
+                Groups = [.. source.Editor.Groups.Select(group => group with
+                {
+                    Members = [.. group.Members.Where(id => !removed.Contains(id))],
+                }).Where(group => group.Members.Count > 0)],
+                ReferenceCompositions = [],
+                PreviewStates = [.. source.Editor.PreviewStates.Select(state => state with
+                {
+                    Overrides = [.. state.Overrides.Where(value => !removed.Contains(value.NodeId))],
+                })],
+                HiddenReferenceNodes = [],
+            },
+        };
     }
 
     public static V2FrameXmlExportResult Export(
@@ -666,6 +730,15 @@ public static partial class V2FrameXmlExporter
         }
         var region = node.AuthoredProperties.Region;
         WriteGeometry(writer, node, root, names, region?.Width, region?.Height);
+        if (node.Kind == UiNodeKind.Texture && node.AuthoredProperties.Texture?.TexCoords is { } texCoords)
+        {
+            writer.WriteStartElement("TexCoords");
+            writer.WriteAttributeString("left", Number(texCoords.Left));
+            writer.WriteAttributeString("right", Number(texCoords.Right));
+            writer.WriteAttributeString("top", Number(texCoords.Top));
+            writer.WriteAttributeString("bottom", Number(texCoords.Bottom));
+            writer.WriteEndElement();
+        }
         if (region?.Tint is { } tint)
             WriteColor(writer, tint);
         if (node.AuthoredProperties.FontString?.FontSize is { } fontSize)

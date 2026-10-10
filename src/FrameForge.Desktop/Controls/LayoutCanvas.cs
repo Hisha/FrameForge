@@ -12,6 +12,7 @@ using FrameForge.Desktop.Preview;
 using FrameForge.Desktop.Inspection;
 using FrameForge.Desktop.Templates;
 using FrameForge.Core.Templates;
+using FrameForge.Core.Semantics.V2;
 
 namespace FrameForge.Desktop.Controls;
 
@@ -22,7 +23,11 @@ namespace FrameForge.Desktop.Controls;
 /// rather than "select only this". The canvas reports the key state and nothing more: deciding
 /// what "additive" means to a selection is the view model's business.
 /// </param>
-public sealed record CanvasSelectionEventArgs(string? FrameName, bool Additive);
+public sealed record CanvasSelectionEventArgs(string? FrameName, bool Additive)
+{
+    public SemanticId? SemanticId => FrameName is not null && Guid.TryParseExact(FrameName, "D", out _)
+        ? new SemanticId(FrameName) : null;
+}
 
 /// <summary>Draws and edits a FrameForge layout, in one of three view modes.</summary>
 /// <remarks>
@@ -59,13 +64,23 @@ public class LayoutCanvas : Control
     // intentionally shared; keep it dispatcher-neutral by using Avalonia's immutable brush.
     private static readonly IImmutableBrush CanvasFill =
         new ImmutableSolidColorBrush(Color.Parse("#0C1116"));
+    private static readonly IImmutableBrush GridBrush = new ImmutableSolidColorBrush(Color.Parse("#24313A"));
+    private static readonly IImmutableBrush HandleFill = new ImmutableSolidColorBrush(Color.Parse("#F2C14E"));
+    private static readonly IImmutableBrush HandleActiveFill = new ImmutableSolidColorBrush(Color.Parse("#FFFFFF"));
+    private static readonly IPen HandlePen = new ImmutablePen(
+        new ImmutableSolidColorBrush(Color.Parse("#172129")), 1);
 
     private LayoutResult? _layout;
     private Project? _project;
+    private ResolvedUiLayout? _v2Layout;
     private string? _selectedName;
     private IReadOnlyList<string> _selectedNames = [];
     private bool _dragging;
+    private bool _resizing;
+    private IPointer? _dragPointer;
     private string? _dragName;
+    private V2ResizeHandle? _resizeHandle;
+    private V2ResizeHandle? _hoverResizeHandle;
     private double _dragLastCanvasX;
     private double _dragLastCanvasY;
     private Viewport _viewport = Viewport.Identity;
@@ -82,6 +97,8 @@ public class LayoutCanvas : Control
     private IReadOnlySet<string> _hiddenByOrigin = new HashSet<string>();
     private IReadOnlySet<string> _lockedNames = new HashSet<string>();
     private IReadOnlySet<string> _preferredSelectionNames = new HashSet<string>();
+    private bool _showGrid;
+    private double _gridSize = 8;
 
     /// <summary>The completed render pass's policy, drawable, layer, and visual-paint counts.</summary>
     public CanvasRenderTrace? LastRenderTrace { get; private set; }
@@ -94,6 +111,13 @@ public class LayoutCanvas : Control
 
     /// <summary>Raised when a drag ends.</summary>
     public event EventHandler? DragCompleted;
+
+    /// <summary>Raised when an in-progress drag is cancelled before commit.</summary>
+    public event EventHandler? DragCancelled;
+
+    public event EventHandler<FrameResizeEventArgs>? FrameResized;
+    public event EventHandler? ResizeCompleted;
+    public event EventHandler? ResizeCancelled;
 
     /// <summary>Raised when the user asks to fit the content to the control.</summary>
     public event EventHandler? FitRequested;
@@ -144,6 +168,13 @@ public class LayoutCanvas : Control
             _layout = value;
             InvalidateVisual();
         }
+    }
+
+    /// <summary>The native schema-v2 layout. When set, it is the canvas source of truth.</summary>
+    public ResolvedUiLayout? V2Layout
+    {
+        get => _v2Layout;
+        set { _v2Layout = value; InvalidateVisual(); }
     }
 
     /// <summary>The selected frame name, or null.</summary>
@@ -311,6 +342,18 @@ public class LayoutCanvas : Control
         set => _preferredSelectionNames = value;
     }
 
+    public bool ShowGrid
+    {
+        get => _showGrid;
+        set { _showGrid = value; InvalidateVisual(); }
+    }
+
+    public double GridSize
+    {
+        get => _gridSize;
+        set { _gridSize = double.IsFinite(value) ? Math.Clamp(value, 1, 256) : 8; InvalidateVisual(); }
+    }
+
     /// <summary>Current zoom and pan, in model units.</summary>
     public Viewport Viewport
     {
@@ -339,11 +382,12 @@ public class LayoutCanvas : Control
     /// </remarks>
     public void FitToContent()
     {
-        if (Bounds.Width <= 1 || Bounds.Height <= 1 || _layout is null)
+        if (Bounds.Width <= 1 || Bounds.Height <= 1 || (_layout is null && _v2Layout is null))
             return;
 
         const double margin = 40;
-        var rect = FitBox(_layout) ?? LayoutResolver.ScreenRect(_project?.Screen ?? Screen.Default);
+        var rect = _v2Layout?.Bounds ?? (_layout is null ? null : FitBox(_layout))
+            ?? _v2Layout?.HostRect ?? LayoutResolver.ScreenRect(_project?.Screen ?? Screen.Default);
         var zoomX = (Bounds.Width - margin * 2) / Math.Max(rect.Width, 1);
         var zoomY = (Bounds.Height - margin * 2) / Math.Max(rect.Height, 1);
         var zoom = Viewport.ClampZoom(Math.Min(zoomX, zoomY));
@@ -356,9 +400,14 @@ public class LayoutCanvas : Control
     /// <returns>True when the selection had resolved bounds and was centered.</returns>
     public bool RevealSelection()
     {
-        if (_selectedName is null || _layout is null
-            || !_layout.Frames.TryGetValue(_selectedName, out var detail)
-            || detail.Rect is not { } rect)
+        FrameRect? selectedRect = null;
+        if (_selectedName is not null && _v2Layout is { } v2 && Guid.TryParseExact(_selectedName, "D", out _)
+            && v2.Elements.TryGetValue(new SemanticId(_selectedName), out var native))
+            selectedRect = native.Rect;
+        else if (_selectedName is not null && _layout is { } legacy
+                 && legacy.Frames.TryGetValue(_selectedName, out var detail))
+            selectedRect = detail.Rect;
+        if (selectedRect is not { } rect)
             return false;
 
         _viewport = new Viewport(_viewport.Zoom, rect.CenterX, rect.CenterY);
@@ -402,15 +451,70 @@ public class LayoutCanvas : Control
 
         context.FillRectangle(CanvasFill, new Rect(Bounds.Size));
 
-        if (_layout is null)
+        if (_layout is null && _v2Layout is null)
             return;
+
+        if (_showGrid && _v2Layout is not null && _mode != CanvasViewMode.PREVIEW) DrawGrid(context);
 
         var canvas = BuildContext();
         var layers = _pipeline.For(_mode);
         foreach (var layer in layers)
             layer.Render(context, canvas);
 
+        if (_mode != CanvasViewMode.PREVIEW) DrawResizeHandles(context);
+
         LastRenderTrace = canvas.Diagnostics.Snapshot(canvas, [.. layers.Select(layer => layer.Name)]);
+    }
+
+    private void DrawGrid(DrawingContext context)
+    {
+        var spacing = _gridSize * _viewport.Zoom;
+        if (spacing < 4) return;
+        var originX = _viewport.ModelToCanvasX(0, Origin);
+        var originY = _viewport.ModelToCanvasY(0, Origin);
+        var startX = originX % spacing;
+        if (startX < 0) startX += spacing;
+        var startY = originY % spacing;
+        if (startY < 0) startY += spacing;
+        var pen = new Pen(GridBrush, 1);
+        for (var x = startX; x <= Bounds.Width; x += spacing) context.DrawLine(pen, new Point(x, 0), new Point(x, Bounds.Height));
+        for (var y = startY; y <= Bounds.Height; y += spacing) context.DrawLine(pen, new Point(0, y), new Point(Bounds.Width, y));
+    }
+
+    private void DrawResizeHandles(DrawingContext context)
+    {
+        foreach (var (handle, rect) in GetV2ResizeHandles())
+            context.DrawRectangle(handle == _resizeHandle || handle == _hoverResizeHandle ? HandleActiveFill : HandleFill,
+                HandlePen, rect, 1, 1);
+    }
+
+    public IReadOnlyDictionary<V2ResizeHandle, Rect> GetV2ResizeHandles()
+    {
+        if (_mode == CanvasViewMode.PREVIEW || _v2Layout is null || _selectedName is null || _selectedNames.Count != 1 ||
+            !Guid.TryParseExact(_selectedName, "D", out _) || _lockedNames.Contains(_selectedName)) return new Dictionary<V2ResizeHandle, Rect>();
+        var id = new SemanticId(_selectedName);
+        if (!_v2Layout.Elements.TryGetValue(id, out var element) || element.Rect is not { } model ||
+            element.Node?.Kind is not (UiNodeKind.Frame or UiNodeKind.Texture or UiNodeKind.Button or UiNodeKind.StatusBar))
+            return new Dictionary<V2ResizeHandle, Rect>();
+        var box = _viewport.RectToCanvas(model, Origin);
+        const double size = 9;
+        Rect At(double x, double y) => new(x - size / 2, y - size / 2, size, size);
+        var cx = box.X + box.Width / 2;
+        var cy = box.Y + box.Height / 2;
+        return new Dictionary<V2ResizeHandle, Rect>
+        {
+            [V2ResizeHandle.Left] = At(box.X, cy), [V2ResizeHandle.Right] = At(box.Right, cy),
+            [V2ResizeHandle.Top] = At(cx, box.Y), [V2ResizeHandle.Bottom] = At(cx, box.Bottom),
+            [V2ResizeHandle.TopLeft] = At(box.X, box.Y), [V2ResizeHandle.TopRight] = At(box.Right, box.Y),
+            [V2ResizeHandle.BottomLeft] = At(box.X, box.Bottom), [V2ResizeHandle.BottomRight] = At(box.Right, box.Bottom),
+        };
+    }
+
+    private V2ResizeHandle? ResizeHandleAt(Point point)
+    {
+        foreach (var pair in GetV2ResizeHandles())
+            if (pair.Value.Contains(point)) return pair.Key;
+        return null;
     }
 
     /// <summary>
@@ -423,6 +527,9 @@ public class LayoutCanvas : Control
     /// </remarks>
     private CanvasRenderContext BuildContext()
     {
+        if (_v2Layout is not null)
+            return BuildV2Context(_v2Layout);
+
         var origin = Origin;
         var layout = _layout!;
         var drawable = new List<DrawableFrame>(layout.PaintOrder.Count);
@@ -488,6 +595,57 @@ public class LayoutCanvas : Control
             _v2ButtonState);
     }
 
+    private CanvasRenderContext BuildV2Context(ResolvedUiLayout layout)
+    {
+        var origin = Origin;
+        var drawable = new List<DrawableFrame>(layout.PaintOrder.Count);
+        var diagnostics = new CanvasRenderDiagnostics();
+        foreach (var id in layout.PaintOrder)
+        {
+            if (!layout.Elements.TryGetValue(id, out var element)) continue;
+            var selected = _selectedNames.Contains(id.Value, StringComparer.Ordinal) || id.Value == _selectedName;
+            var visible = V2Visible(element, _filter);
+            if (visible) diagnostics.Accept(V2Kind(element));
+            if (!visible && !(selected && ViewPolicy.ShowsSelectionGeometry(_mode))) continue;
+            drawable.Add(new DrawableFrame(id.Value, null, element.Rect,
+                element.Rect is { } rect ? _viewport.RectToCanvas(rect, origin) : null,
+                element.EffectiveVisible, selected,
+                element.Rect is { Width: > 0, Height: > 0 },
+                visible && (_labels == LabelPolicy.ALL || _labels == LabelPolicy.SELECTED && selected),
+                id.Value == _selectedName, element));
+        }
+        return new CanvasRenderContext(null, _layout ?? new LayoutResult
+        {
+            Frames = new Dictionary<string, FrameLayout>(), Rects = new Dictionary<string, FrameRect>(),
+            PaintOrder = [], Issues = [],
+        }, _viewport, origin, Bounds.Size, _mode, _filter, _labels, _selectedName, drawable,
+            diagnostics, _assetResolver, _stockTemplates, _previewOverrides,
+            _selectedNames.Count > 0 || _selectedName is null ? _selectedNames : [_selectedName],
+            _v2Templates, _v2ButtonState) { V2Layout = layout };
+    }
+
+    private static FrameKind V2Kind(ResolvedUiElement element) => element.Node?.Kind switch
+    {
+        UiNodeKind.Texture => FrameKind.TEXTURE,
+        UiNodeKind.FontString => FrameKind.FONTSTRING,
+        UiNodeKind.Button => FrameKind.BUTTON,
+        UiNodeKind.StatusBar => FrameKind.STATUSBAR,
+        _ => FrameKind.FRAME,
+    };
+
+    private static bool V2Visible(ResolvedUiElement element, VisibilityFilter filter)
+    {
+        if (!filter.HasFlag(VisibilityFilter.HIDDEN) && !element.EffectiveVisible) return false;
+        var flag = V2Kind(element) switch
+        {
+            FrameKind.TEXTURE => VisibilityFilter.TEXTURES,
+            FrameKind.FONTSTRING => VisibilityFilter.TEXT,
+            FrameKind.BUTTON => VisibilityFilter.BUTTONS,
+            _ => VisibilityFilter.FRAMES,
+        };
+        return filter.HasFlag(flag);
+    }
+
     /// <inheritdoc />
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
@@ -500,7 +658,24 @@ public class LayoutCanvas : Control
     {
         base.OnPointerPressed(e);
 
+        if (_v2Layout is not null && _mode == CanvasViewMode.PREVIEW)
+            return;
+
         var point = e.GetPosition(this);
+        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && ResizeHandleAt(point) is { } resizeHandle &&
+            _selectedName is { } selected)
+        {
+            Focus();
+            _resizing = true;
+            _resizeHandle = resizeHandle;
+            _dragPointer = e.Pointer;
+            _dragName = selected;
+            _dragLastCanvasX = point.X;
+            _dragLastCanvasY = point.Y;
+            e.Pointer.Capture(this);
+            InvalidateVisual();
+            return;
+        }
         var hits = HitTestCandidates(point.X, point.Y);
 
         // Double-clicking empty canvas space is the shortcut for Fit.
@@ -515,11 +690,15 @@ public class LayoutCanvas : Control
         // through the stack instead of silently settling for whatever happened to be on top.
         var hit = CycleHit(hits, point.X, point.Y);
 
-        SelectionRequested?.Invoke(this, new CanvasSelectionEventArgs(hit, IsAdditiveModifier(e.KeyModifiers)));
+        var additive = IsAdditiveModifier(e.KeyModifiers);
+        if (additive || hit is null || !_selectedNames.Contains(hit, StringComparer.Ordinal))
+            SelectionRequested?.Invoke(this, new CanvasSelectionEventArgs(hit, additive));
 
         if (hit is not null && !_lockedNames.Contains(hit) && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
+            Focus();
             _dragging = true;
+            _dragPointer = e.Pointer;
             _dragName = hit;
             _dragLastCanvasX = point.X;
             _dragLastCanvasY = point.Y;
@@ -546,8 +725,21 @@ public class LayoutCanvas : Control
     /// </summary>
     public IReadOnlyList<string> HitTestCandidates(double canvasX, double canvasY)
     {
-        if (_project is null || _layout is null)
-            return [];
+        if (_v2Layout is { } v2)
+        {
+            var hits = new List<string>();
+            for (var index = v2.PaintOrder.Count - 1; index >= 0; index--)
+            {
+                var id = v2.PaintOrder[index];
+                if (!v2.Elements.TryGetValue(id, out var element) || element.Rect is not { } rect || !V2Visible(element, _filter)) continue;
+                var box = _viewport.RectToCanvas(rect, Origin);
+                var slack = box.Width <= 0 || box.Height <= 0 ? HitTester.ZeroAreaPickTolerance : 0;
+                if (canvasX >= box.X - slack && canvasX <= box.Right + slack && canvasY >= box.Y - slack && canvasY <= box.Bottom + slack)
+                    hits.Add(id.Value);
+            }
+            return SelectionPriority.Order(hits, _preferredSelectionNames);
+        }
+        if (_project is null || _layout is null) return [];
 
         var candidates = HitTester.CandidatesAt(_project!, _layout, _viewport, Origin, _filter, canvasX, canvasY)
             .Where(name => !_hiddenByOrigin.Contains(name))
@@ -608,10 +800,33 @@ public class LayoutCanvas : Control
     {
         base.OnPointerMoved(e);
 
-        if (!_dragging || _dragName is null)
+        if (_v2Layout is not null && _mode == CanvasViewMode.PREVIEW)
             return;
 
         var point = e.GetPosition(this);
+        if (!_dragging && !_resizing)
+        {
+            var hover = ResizeHandleAt(point);
+            if (_hoverResizeHandle != hover)
+            {
+                _hoverResizeHandle = hover;
+                InvalidateVisual();
+            }
+            return;
+        }
+
+        if (_resizing && _dragName is not null && _resizeHandle is { } handle)
+        {
+            var (resizeX, resizeY) = _viewport.CanvasDeltaToModel(point.X - _dragLastCanvasX, point.Y - _dragLastCanvasY);
+            _dragLastCanvasX = point.X;
+            _dragLastCanvasY = point.Y;
+            if (resizeX != 0 || resizeY != 0)
+                FrameResized?.Invoke(this, new FrameResizeEventArgs(new SemanticId(_dragName), handle, resizeX, resizeY));
+            return;
+        }
+
+        if (!_dragging || _dragName is null)
+            return;
         var (dx, dy) = _viewport.CanvasDeltaToModel(point.X - _dragLastCanvasX, point.Y - _dragLastCanvasY);
 
         _dragLastCanvasX = point.X;
@@ -626,13 +841,37 @@ public class LayoutCanvas : Control
     {
         base.OnPointerReleased(e);
 
-        if (!_dragging)
+        if (!_dragging && !_resizing)
             return;
 
+        var wasResize = _resizing;
+
         _dragging = false;
+        _resizing = false;
         _dragName = null;
+        _resizeHandle = null;
+        _dragPointer = null;
         e.Pointer.Capture(null);
-        DragCompleted?.Invoke(this, EventArgs.Empty);
+        if (wasResize) ResizeCompleted?.Invoke(this, EventArgs.Empty);
+        else DragCompleted?.Invoke(this, EventArgs.Empty);
+        InvalidateVisual();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (_v2Layout is null || (!_dragging && !_resizing) || e.Key != Key.Escape) return;
+        var wasResize = _resizing;
+        _dragging = false;
+        _resizing = false;
+        _dragName = null;
+        _resizeHandle = null;
+        _dragPointer?.Capture(null);
+        _dragPointer = null;
+        if (wasResize) ResizeCancelled?.Invoke(this, EventArgs.Empty);
+        else DragCancelled?.Invoke(this, EventArgs.Empty);
+        InvalidateVisual();
+        e.Handled = true;
     }
 
     /// <inheritdoc />
@@ -663,4 +902,9 @@ public class LayoutCanvas : Control
 /// <param name="FrameName">The frame being dragged.</param>
 /// <param name="DeltaX">Model X delta. Dragging right is positive.</param>
 /// <param name="DeltaY">Model Y delta. Dragging DOWN the screen is negative.</param>
-public sealed record FrameDragEventArgs(string FrameName, double DeltaX, double DeltaY);
+public sealed record FrameDragEventArgs(string FrameName, double DeltaX, double DeltaY)
+{
+    public SemanticId? SemanticId => Guid.TryParseExact(FrameName, "D", out _) ? new SemanticId(FrameName) : null;
+}
+
+public sealed record FrameResizeEventArgs(SemanticId SemanticId, V2ResizeHandle Handle, double DeltaX, double DeltaY);

@@ -16,6 +16,8 @@
     Height="880"
     MinWidth="1000"
     MinHeight="640"
+    KeyDown="OnWindowKeyDown"
+    KeyUp="OnWindowKeyUp"
     WindowStartupLocation="CenterScreen">
 
     <Window.Styles>
@@ -56,7 +58,16 @@
         <!-- Toolbar: project lifecycle plus the two layout actions that have no obvious home. -->
         <Border Grid.Row="0" Background="#0D141A" BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,8">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="New" Click="OnNewV2Click" ToolTip.Tip="Start a blank FrameForge 2.0 project" />
+                <Button Content="New" ToolTip.Tip="Choose a FrameForge 2.0 starting project">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuItem Header="Blank Interface" Click="OnNewV2Click" />
+                            <MenuItem Header="Blizzard UI">
+                                <MenuItem Header="Dungeon Finder / LFD" Click="OnNewV2LfdClick" />
+                            </MenuItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button Content="Open" Click="OnOpenClick"
                         ToolTip.Tip="Open a .fforge.json project or a WoW FrameXML file" />
                 <Button Content="Save" Click="OnSaveClick" ToolTip.Tip="Save to the current file" />
@@ -86,6 +97,10 @@
                 <Button Content="Add Frame" Click="OnAddFrameClick" IsVisible="{Binding IsV1Project}" />
                 <Button Content="Delete Frame" Click="OnDeleteFrameClick" IsVisible="{Binding IsV1Project}" />
                 <Button Content="Fit" Click="OnFitClick" ToolTip.Tip="Frame the whole layout in the canvas" />
+                <Button Content="{Binding V2UndoLabel}" Click="OnUndoV2Click" IsVisible="{Binding IsV2Project}"
+                        IsEnabled="{Binding CanUndoV2}" />
+                <Button Content="{Binding V2RedoLabel}" Click="OnRedoV2Click" IsVisible="{Binding IsV2Project}"
+                        IsEnabled="{Binding CanRedoV2}" />
 
                 <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
                 <Expander Header="WoW Client" VerticalAlignment="Center">
@@ -291,6 +306,38 @@
             </StackPanel>
         </Border>
 
+        <Border Grid.Row="2" IsVisible="{Binding IsV2Project}" Background="#0B1116"
+                BorderBrush="#22303A" BorderThickness="0,0,0,1" Padding="10,6">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Classes="label" Text="Mode" />
+                <RadioButton GroupName="V2CanvasMode" Content="DESIGN" IsChecked="{Binding IsV2DesignMode, Mode=OneWay}"
+                             Click="OnV2DesignModeClick" ToolTip.Tip="Edit with selection, anchors, handles, diagnostics, and grid aids" />
+                <RadioButton GroupName="V2CanvasMode" Content="PREVIEW" IsChecked="{Binding IsV2PreviewMode, Mode=OneWay}"
+                             Click="OnV2PreviewModeClick" ToolTip.Tip="Read-only approximation using the same V2 layout and renderer" />
+                <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+                <TextBlock Classes="label" Text="Simulation" />
+                <ComboBox MinWidth="150" ItemsSource="{Binding V2PresentationStates}"
+                          SelectedItem="{Binding SelectedV2PresentationState, Mode=TwoWay}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsV2DesignMode}">
+                    <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+                    <TextBlock Classes="label" Text="Align to primary" />
+                    <Button Content="Left" Tag="AlignLeft" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Center H" Tag="AlignCenterHorizontal" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Right" Tag="AlignRight" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Top" Tag="AlignTop" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Center V" Tag="AlignCenterVertical" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Bottom" Tag="AlignBottom" Click="OnArrangeV2Click" IsEnabled="{Binding CanAlignV2}" />
+                    <Button Content="Distribute H" Tag="DistributeHorizontal" Click="OnArrangeV2Click" IsEnabled="{Binding CanDistributeV2}" />
+                    <Button Content="Distribute V" Tag="DistributeVertical" Click="OnArrangeV2Click" IsEnabled="{Binding CanDistributeV2}" />
+                    <Rectangle Width="1" Fill="#22303A" Margin="4,2" />
+                    <CheckBox Content="Snap" IsChecked="{Binding V2SnapEnabled, Mode=TwoWay}" />
+                    <CheckBox Content="Grid" IsChecked="{Binding V2GridVisible, Mode=TwoWay}" />
+                    <NumericUpDown Width="70" Minimum="1" Maximum="256" Increment="1"
+                                   Value="{Binding V2GridSize, Mode=TwoWay}" ToolTip.Tip="Grid size in native UI units" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <!-- Row 3 is the only star row: the toolbar, view controls and import banner size to their
              content above it and the status bar sits below it, so this cell is exactly the canvas's
              allotment. -->
@@ -332,6 +379,16 @@
                         </ItemsControl>
 
                         <TextBlock Classes="mono" Text="{Binding TreeFilterSummary}" Opacity="0.7" IsVisible="{Binding IsInspectWorkspace}" />
+
+                        <StackPanel IsVisible="{Binding IsV2Project}" Spacing="4">
+                            <Grid ColumnDefinitions="*,6,Auto,6,Auto">
+                                <ComboBox Grid.Column="0" ItemsSource="{Binding V2HierarchyScopes}"
+                                          SelectedItem="{Binding V2HierarchyScope, Mode=TwoWay}" />
+                                <Button Grid.Column="2" Content="Collapse refs" Click="OnCollapseAllV2ReferencesClick" />
+                                <Button Grid.Column="4" Content="Expand selected" Click="OnExpandSelectedV2ReferenceClick" />
+                            </Grid>
+                            <TextBlock Classes="label" Text="Search matches display labels and runtime names; filters are editor-only." TextWrapping="Wrap" />
+                        </StackPanel>
 
                         <Expander Header="Add object" IsVisible="{Binding ShowV1DesignTools}" IsExpanded="True">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
@@ -412,7 +469,7 @@
                         </TreeView.Styles>
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate DataType="vm:FrameTreeNode" ItemsSource="{Binding Children}">
-                                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" MinWidth="180"
+                                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" MinWidth="180"
                                       ToolTip.Tip="{Binding IdentitySummary}">
                                     <!-- The kind and the "fills" tag are what distinguish a
                                          FontString from a Texture from a Frame. Importing 51
@@ -433,9 +490,11 @@
                                     <TextBlock Grid.Column="2" Text="{Binding DisplayName}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" />
                                     <TextBlock Grid.Column="3" Text="{Binding LockBadge}" Margin="4,0" />
-                                    <TextBlock Grid.Column="4" Text="{Binding GroupBadge}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
+                                    <TextBlock Grid.Column="4" Text="{Binding HiddenBadge}" Margin="2,0" Foreground="#E5B567"
+                                               ToolTip.Tip="Hidden in editor presentation; still present in the reference hierarchy." />
+                                    <TextBlock Grid.Column="5" Text="{Binding GroupBadge}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                                MaxWidth="70" TextTrimming="CharacterEllipsis" Opacity="0.75" />
-                                    <TextBlock Grid.Column="5" Text="{Binding SizeText}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
+                                    <TextBlock Grid.Column="6" Text="{Binding SizeText}" Classes="mono" IsVisible="{Binding $parent[Window].DataContext.IsInspectWorkspace}"
                                                VerticalAlignment="Center" Opacity="0.75" />
                                 </Grid>
                             </TreeDataTemplate>
@@ -450,6 +509,10 @@
                                        SelectionRequested="OnCanvasSelectionRequested"
                                        FrameDragged="OnCanvasFrameDragged"
                                        DragCompleted="OnCanvasDragCompleted"
+                                       DragCancelled="OnCanvasDragCancelled"
+                                       FrameResized="OnCanvasFrameResized"
+                                       ResizeCompleted="OnCanvasResizeCompleted"
+                                       ResizeCancelled="OnCanvasResizeCancelled"
                                        FitRequested="OnCanvasFitRequested" />
             </Border>
 
@@ -524,8 +587,20 @@
                             </StackPanel>
                             <StackPanel IsVisible="{Binding V2IsTexture}" Spacing="3">
                                 <TextBlock Classes="label" Text="Texture reference" />
-                                <TextBox Text="{Binding V2TextureDraft, Mode=TwoWay}" />
+                                <Grid ColumnDefinitions="*,6,Auto,6,Auto">
+                                    <TextBox Grid.Column="0" Text="{Binding V2TextureDraft, Mode=TwoWay}" />
+                                    <Button Grid.Column="2" Content="Browse client…" Click="OnBrowseV2TextureClick" />
+                                    <Button Grid.Column="4" Content="Import…" Click="OnImportV2TextureClick" />
+                                </Grid>
                                 <TextBlock Classes="label" Foreground="#E5B567" Text="{Binding V2SelectedAssetDiagnostic}" TextWrapping="Wrap" />
+                                <CheckBox Content="Use rectangular texture crop" IsChecked="{Binding V2UseTexCoordsDraft, Mode=TwoWay}" />
+                                <Grid ColumnDefinitions="*,6,*,6,*,6,*" IsEnabled="{Binding V2UseTexCoordsDraft}">
+                                    <TextBox Grid.Column="0" PlaceholderText="Left" Text="{Binding V2TexCoordLeftDraft, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="2" PlaceholderText="Right" Text="{Binding V2TexCoordRightDraft, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="4" PlaceholderText="Top" Text="{Binding V2TexCoordTopDraft, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="6" PlaceholderText="Bottom" Text="{Binding V2TexCoordBottomDraft, Mode=TwoWay}" />
+                                </Grid>
+                                <TextBlock Classes="label" Text="Rectangular normalized coordinates only (0–1). More complex mappings are not supported." TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel IsVisible="{Binding V2IsFontString}" Spacing="3">
                                 <TextBlock Classes="label" Text="Text" />
@@ -544,7 +619,6 @@
                                 <TextBlock Classes="header" Text="BLIZZARD TEMPLATE" Margin="0,6,0,1" />
                                 <ComboBox ItemsSource="{Binding V2TemplateOptions}"
                                           SelectedItem="{Binding V2TemplateDraft, Mode=TwoWay}" />
-                                <TextBlock Classes="mono" Text="{Binding V2TemplateProvenanceSummary}" TextWrapping="Wrap" />
                                 <Button Content="Clear width/height overrides" IsVisible="{Binding V2HasTemplate}"
                                         Click="OnClearV2TemplateOverridesClick" HorizontalAlignment="Left" />
                                 <TextBlock Classes="label" Text="Button text" />
@@ -570,17 +644,52 @@
 
                             <TextBlock Classes="label" Foreground="#E5796B" Text="{Binding V2InspectorValidation}"
                                        TextWrapping="Wrap" />
+                            <Border IsVisible="{Binding HasSelectedV2Reference}" Background="#17232C"
+                                    BorderBrush="#7FB2C9" BorderThickness="1" CornerRadius="4" Padding="8,6">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Classes="header" Text="BLIZZARD REFERENCE" />
+                                    <TextBlock Classes="label" Text="Client-owned preview composition. Edits persist only in the FrameForge project and are never exported as duplicate stock UI." TextWrapping="Wrap" />
+                                    <WrapPanel>
+                                        <Button Content="{Binding V2ReferenceLockLabel}" Click="OnToggleV2ReferenceLockClick" Margin="0,0,5,0" />
+                                        <Button Content="{Binding V2ReferenceVisibilityLabel}" Click="OnToggleV2ReferenceVisibilityClick" Margin="0,0,5,0" />
+                                        <Button Content="Hide subtree" Click="OnHideV2ReferenceSubtreeClick" Margin="0,0,5,0" />
+                                        <Button Content="Restore original" Click="OnRestoreV2ReferenceClick" />
+                                    </WrapPanel>
+                                    <TextBlock Classes="label" Text="Editor visibility is a design aid; it does not hide the Blizzard control in the actual WoW client." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                             <WrapPanel Margin="0,5,0,0">
                                 <Button Content="Apply" Click="OnApplyV2InspectorClick" Margin="0,0,5,5" />
                                 <Button Content="Earlier" Click="OnMoveV2EarlierClick" Margin="0,0,5,5" />
                                 <Button Content="Later" Click="OnMoveV2LaterClick" Margin="0,0,5,5" />
-                                <Button Content="Delete" Click="OnDeleteV2Click" Margin="0,0,5,5" />
+                                <Button Content="Back" Tag="Back" Click="OnReorderV2Click" Margin="0,0,5,5" />
+                                <Button Content="Front" Tag="Front" Click="OnReorderV2Click" Margin="0,0,5,5" />
+                                <Button Content="{Binding V2LockActionLabel}" Click="OnToggleV2LockClick" Margin="0,0,5,5" />
+                                <Button Content="Delete" Click="OnDeleteV2Click" Margin="0,0,5,5"
+                                        IsEnabled="{Binding CanDeleteSelectedV2}"
+                                        ToolTip.Tip="Protected Blizzard references cannot be structurally deleted; hide them from the editor presentation instead." />
                             </WrapPanel>
+                            <Expander Header="Editor groups" IsExpanded="False">
+                                <StackPanel Spacing="5" Margin="0,5,0,0">
+                                    <TextBox Text="{Binding V2GroupNameDraft, Mode=TwoWay}" PlaceholderText="Group name" />
+                                    <ComboBox ItemsSource="{Binding V2Groups}" SelectedItem="{Binding SelectedV2Group, Mode=TwoWay}" />
+                                    <WrapPanel>
+                                        <Button Content="Create from selection" Click="OnCreateV2GroupClick" Margin="0,0,5,5" />
+                                        <Button Content="Select members" Click="OnSelectV2GroupClick" Margin="0,0,5,5" />
+                                        <Button Content="Rename" Click="OnRenameV2GroupClick" Margin="0,0,5,5" />
+                                        <Button Content="Replace members" Click="OnReplaceV2GroupMembersClick" Margin="0,0,5,5" />
+                                        <Button Content="Lock / unlock" Click="OnToggleV2GroupLockClick" Margin="0,0,5,5" />
+                                        <Button Content="Delete group" Click="OnDeleteV2GroupClick" Margin="0,0,5,5" />
+                                    </WrapPanel>
+                                    <TextBlock Classes="label" Text="Groups are editor-only; they do not change FrameXML ownership." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
 
                         <Expander Header="Advanced · templates and diagnostics" IsExpanded="False">
                             <StackPanel Spacing="5" Margin="0,6,0,0">
                                 <TextBlock Classes="mono" Text="{Binding V2TemplateRegistryStatus}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding V2TemplateProvenanceSummary}" TextWrapping="Wrap" />
                                 <ItemsControl ItemsSource="{Binding V2TemplateDiagnostics}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate><TextBlock Classes="mono" Foreground="#E5B567" Text="{Binding}" TextWrapping="Wrap" /></DataTemplate>
