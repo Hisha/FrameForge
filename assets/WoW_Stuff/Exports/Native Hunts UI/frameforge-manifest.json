@@ -1,0 +1,29 @@
+{
+  "schema": "frameforge-wow335-manifest",
+  "version": 2,
+  "target": {
+    "game": "World of Warcraft",
+    "version": "3.3.5a",
+    "build": 12340
+  },
+  "project": "Dungeon Finder UI",
+  "layout": "FrameForgeLayout.xml",
+  "rootRuntimeId": "FrameForge_Dungeon_Finder_UI",
+  "rootParentRuntimeId": "UIParent",
+  "stockFoundation": {
+    "identity": "wow-3.3.5a-12340:Interface/FrameXML/LFDFrame.xml:LFDParentFrame",
+    "strategy": "artwork-and-template-reference-only"
+  },
+  "states": [],
+  "bindings": [
+    {
+      "sourceObject": "DesignObject",
+      "runtimeId": "Header_Text",
+      "visibilityRuntimeId": "Header_Text__FFLayer",
+      "type": "FontString",
+      "allStates": true,
+      "states": [],
+      "runtimeValueRequired": false
+    }
+  ]
+}

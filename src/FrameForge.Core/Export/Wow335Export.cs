@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml;
+using FrameForge.Core.Geometry;
 using FrameForge.Core.Import;
 using FrameForge.Core.Models;
 
@@ -20,10 +21,10 @@ public sealed record WowExportObject(
     string WrapperName,
     FrameKind Kind,
     FrameDef Frame,
+    FrameDef ExportFrame,
     DesignObjectMetadata Metadata,
-    string? ParentRuntimeName,
-    string? RelativeRuntimeName,
     int DrawOrder,
+    int FrameLevel,
     string DrawLayer,
     IReadOnlyList<string> StateIds,
     string? TextureReference,
@@ -34,7 +35,14 @@ public sealed record WowExportObject(
     string? Outline,
     bool? Shadow,
     string? JustifyH,
-    string? JustifyV);
+    string? JustifyV)
+{
+    public bool IsRegion => Kind is FrameKind.TEXTURE or FrameKind.FONTSTRING;
+    public string OwnerRuntimeName => IsRegion ? WrapperName : RuntimeName;
+    public string VisibilityRuntimeName => OwnerRuntimeName;
+}
+
+public sealed record WowExportRoot(double Width, double Height, FrameAnchor Anchor);
 
 public sealed record WowExportAsset(
     IReadOnlyList<string> ProjectReferences,
@@ -49,8 +57,8 @@ public sealed record WowExportAsset(
 public sealed record WowExportModel(
     string ProjectName,
     string RootRuntimeName,
+    WowExportRoot Root,
     string? StockFoundationIdentity,
-    string StockParentRuntimeName,
     IReadOnlyList<DesignState> States,
     IReadOnlyList<WowExportObject> Objects,
     IReadOnlyList<WowExportAsset> Assets,
@@ -94,7 +102,8 @@ public static partial class Wow335ExportBuilder
 
         var order = project.Editor.EffectiveDesignOrder(project);
         var rank = order.Select((name, index) => (name, index)).ToDictionary(x => x.name, x => x.index, StringComparer.Ordinal);
-        var usedNames = new HashSet<string>(StringComparer.Ordinal);
+        var rootRuntimeName = "FrameForge_" + SafeIdentifier(project.Name);
+        var usedNames = new HashSet<string>(StringComparer.Ordinal) { rootRuntimeName };
         var runtimeBySource = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var metadata in authored)
         {
@@ -110,6 +119,22 @@ public static partial class Wow335ExportBuilder
             runtimeBySource[frame.Name] = unique;
         }
 
+        var ownerBySource = authored.ToDictionary(
+            metadata => metadata.FrameName,
+            metadata =>
+            {
+                var frame = project.Find(metadata.FrameName)!;
+                var runtime = runtimeBySource[frame.Name];
+                return frame.Kind is FrameKind.TEXTURE or FrameKind.FONTSTRING ? runtime + "__FFLayer" : runtime;
+            },
+            StringComparer.Ordinal);
+        var layout = LayoutResolver.Resolve(project);
+        var rootRect = ResolveRootRect(project, stockGroup, stock, authored, layout, diagnostics);
+        var screenRect = LayoutResolver.ScreenRect(project.Screen);
+        var root = new WowExportRoot(rootRect.Width, rootRect.Height, FrameAnchor.Create(
+            AnchorPoint.TOPLEFT, "UIParent", AnchorPoint.TOPLEFT,
+            rootRect.Left - screenRect.Left, rootRect.Top - screenRect.Top));
+
         var projectDirectory = string.IsNullOrWhiteSpace(projectFilePath) ? null : Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
         var assetConsumers = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
         var assetFrames = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
@@ -117,7 +142,8 @@ public static partial class Wow335ExportBuilder
         foreach (var metadata in authored.OrderBy(m => rank.GetValueOrDefault(m.FrameName, int.MaxValue)).ThenBy(m => m.FrameName, StringComparer.Ordinal))
         {
             var frame = project.Find(metadata.FrameName)!;
-            ValidateFrame(frame, metadata, stateIds, project, diagnostics);
+            var exportFrame = BuildExportFrame(frame, rootRuntimeName, rootRect, layout, ownerBySource, diagnostics);
+            ValidateFrame(frame, exportFrame, metadata, stateIds, project, diagnostics);
             var runtime = runtimeBySource[frame.Name];
             string? texture = null;
             if (!string.IsNullOrWhiteSpace(metadata.DesignAsset))
@@ -146,12 +172,26 @@ public static partial class Wow335ExportBuilder
             var drawIndex = rank.GetValueOrDefault(frame.Name, objects.Count);
             var layerIndex = Math.Min(DrawLayers.Length - 1, drawIndex * DrawLayers.Length / Math.Max(1, authored.Length));
             objects.Add(new(
-                frame.Name, runtime, runtime + "__FFLayer", frame.Kind, frame, metadata,
-                TranslateReference(frame.Parent, runtimeBySource), TranslateReference(frame.RelativeTo, runtimeBySource),
-                drawIndex, frame.Visual?.DrawLayer ?? DrawLayers[layerIndex], [.. metadata.StateIds], texture, text,
+                frame.Name, runtime, runtime + "__FFLayer", frame.Kind, frame, exportFrame, metadata,
+                drawIndex, 0, frame.Visual?.DrawLayer ?? DrawLayers[layerIndex], [.. metadata.StateIds], texture, text,
                 style?.BaseStyle ?? frame.Visual?.Text?.FontTemplate, style?.Size, style?.Color, style?.Outline,
                 style?.Shadow, style?.JustifyH ?? frame.Visual?.Text?.JustifyH, frame.Visual?.Text?.JustifyV));
         }
+
+        var objectBySource = objects.ToDictionary(item => item.SourceName, StringComparer.Ordinal);
+        var levels = new Dictionary<string, int>(StringComparer.Ordinal);
+        var resolvingLevels = new HashSet<string>(StringComparer.Ordinal);
+        int ResolveLevel(WowExportObject item)
+        {
+            if (levels.TryGetValue(item.SourceName, out var level)) return level;
+            level = Math.Max(item.DrawOrder + 1, item.Frame.LevelOrDefault);
+            if (!resolvingLevels.Add(item.SourceName)) return level;
+            if (item.Frame.Parent is { } parent && objectBySource.TryGetValue(parent, out var parentObject))
+                level = Math.Max(level, ResolveLevel(parentObject) + 1);
+            resolvingLevels.Remove(item.SourceName);
+            return levels[item.SourceName] = level;
+        }
+        objects = objects.Select(item => item with { FrameLevel = ResolveLevel(item) }).ToList();
 
         var assets = BuildAssets(project.Name, projectDirectory, assetConsumers, assetFrames, diagnostics,
             out var logicalByProjectReference);
@@ -169,19 +209,119 @@ public static partial class Wow335ExportBuilder
                 $"Runtime binding '{conflict.Key}' is used by incompatible value types: {string.Join(", ", conflict.Select(item => BindingValueType(item.Kind)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))}."));
         }
 
-        return new(project.Name, "FrameForge_" + SafeIdentifier(project.Name), stockGroup?.StockIdentity,
-            "LFDParentFrame", [.. project.Editor.DesignStates], objects, assets, diagnostics);
+        return new(project.Name, rootRuntimeName, root, stockGroup?.StockIdentity,
+            [.. project.Editor.DesignStates], objects, assets, diagnostics);
     }
 
-    private static void ValidateFrame(FrameDef frame, DesignObjectMetadata metadata, HashSet<string> stateIds, Project project, List<ExportDiagnostic> diagnostics)
+    private static FrameRect ResolveRootRect(
+        Project project,
+        EditorGroup? stockGroup,
+        IReadOnlySet<string> stock,
+        IReadOnlyList<DesignObjectMetadata> authored,
+        LayoutResult layout,
+        List<ExportDiagnostic> diagnostics)
+    {
+        var identityName = stockGroup?.StockIdentity?.Split(':', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        var foundation = identityName is null ? null : project.Find(identityName);
+        foundation ??= project.Frames.FirstOrDefault(frame => stock.Contains(frame.Name)
+            && (frame.Parent is null || !stock.Contains(frame.Parent)));
+        if (foundation is not null && layout.Rects.TryGetValue(foundation.Name, out var foundationRect)
+            && foundationRect.Width > 0 && foundationRect.Height > 0)
+            return foundationRect;
+
+        FrameRect? bounds = null;
+        foreach (var metadata in authored)
+        {
+            if (!layout.Rects.TryGetValue(metadata.FrameName, out var rect))
+                continue;
+            bounds = bounds is null ? rect : bounds.Value.Union(rect);
+        }
+        if (bounds is { Width: > 0, Height: > 0 } authoredBounds)
+            return authoredBounds;
+
+        diagnostics.Add(new(ExportSeverity.Warning, "ROOT_FALLBACK_SCREEN",
+            "No stock foundation or authored bounds could define an export root; the project screen was used."));
+        return LayoutResolver.ScreenRect(project.Screen);
+    }
+
+    private static FrameDef BuildExportFrame(
+        FrameDef source,
+        string rootRuntimeName,
+        FrameRect rootRect,
+        LayoutResult layout,
+        IReadOnlyDictionary<string, string> ownerBySource,
+        List<ExportDiagnostic> diagnostics)
+    {
+        if (!layout.Rects.TryGetValue(source.Name, out var sourceRect))
+        {
+            diagnostics.Add(new(ExportSeverity.Error, "LAYOUT_UNRESOLVED",
+                "The object's authored geometry could not be resolved for native export.", source.Name));
+            return source with { Parent = rootRuntimeName, RelativeTo = null };
+        }
+
+        var exportParent = source.Parent is { } parent && ownerBySource.TryGetValue(parent, out var parentOwner)
+            ? parentOwner
+            : rootRuntimeName;
+
+        FrameAnchor ConvertAnchor(FrameAnchor anchor)
+        {
+            var sourceTarget = anchor.RelativeTo ?? source.Parent;
+            if (sourceTarget is not null && ownerBySource.TryGetValue(sourceTarget, out var targetOwner))
+            {
+                return anchor with
+                {
+                    RelativeTo = anchor.RelativeTo is null && source.Parent == sourceTarget
+                        ? null
+                        : targetOwner,
+                };
+            }
+
+            var ownPosition = LayoutResolver.AnchorPosition(sourceRect, anchor.Point);
+            var rootPosition = LayoutResolver.AnchorPosition(rootRect, anchor.RelativePoint);
+            return anchor with
+            {
+                RelativeTo = null,
+                OffsetX = ownPosition.X - rootPosition.X,
+                OffsetY = ownPosition.Y - rootPosition.Y,
+            };
+        }
+
+        var primary = ConvertAnchor(source.PrimaryAnchor);
+        var extras = source.ExtraAnchors.Select(ConvertAnchor).ToArray();
+        var targetChangedToRoot = (source.RelativeTo ?? source.Parent) is not { } originalTarget
+                                  || !ownerBySource.ContainsKey(originalTarget);
+        var preserveSetAllPoints = source.SetAllPoints && (!targetChangedToRoot
+            || (Math.Abs(sourceRect.Left - rootRect.Left) < 1e-6
+                && Math.Abs(sourceRect.Top - rootRect.Top) < 1e-6
+                && Math.Abs(sourceRect.Width - rootRect.Width) < 1e-6
+                && Math.Abs(sourceRect.Height - rootRect.Height) < 1e-6));
+
+        return source with
+        {
+            Parent = exportParent,
+            Width = sourceRect.Width,
+            Height = sourceRect.Height,
+            SizeReference = SizeReference.SCREEN,
+            Point = primary.Point,
+            RelativeTo = primary.RelativeTo,
+            RelativePoint = primary.RelativePoint,
+            OffsetX = primary.OffsetX,
+            OffsetY = primary.OffsetY,
+            SetAllPoints = preserveSetAllPoints,
+            ExtraAnchors = extras,
+        };
+    }
+
+    private static void ValidateFrame(FrameDef frame, FrameDef exportFrame, DesignObjectMetadata metadata, HashSet<string> stateIds, Project project, List<ExportDiagnostic> diagnostics)
     {
         if (frame.Kind is FrameKind.OTHER or FrameKind.BUTTON)
             diagnostics.Add(new(ExportSeverity.Error, "OBJECT_UNSUPPORTED", "This DESIGN object type cannot be exported safely.", frame.Name));
-        if (frame.SizeReferenceOrDefault == SizeReference.PARENT)
-            diagnostics.Add(new(ExportSeverity.Error, "SIZE_REFERENCE_UNSUPPORTED", "Parent-relative fractional sizes cannot yet be represented without changing authored geometry.", frame.Name));
         if (frame.Visual?.DrawLayer is { } layer && layer is not ("BACKGROUND" or "BORDER" or "ARTWORK" or "OVERLAY" or "HIGHLIGHT"))
             diagnostics.Add(new(ExportSeverity.Error, "DRAW_LAYER_INVALID", $"Draw layer '{layer}' is not supported by WoW 3.3.5a.", frame.Name));
-        if (!Finite(frame.Width) || !Finite(frame.Height) || frame.Width <= 0 || frame.Height <= 0 || !Finite(frame.OffsetX) || !Finite(frame.OffsetY))
+        var invalidDeclaredSize = !Finite(frame.Width) || !Finite(frame.Height) || frame.Width < 0 || frame.Height < 0
+                                  || ((frame.Width == 0 || frame.Height == 0) && !frame.HasMultipleAnchors && !frame.SetAllPoints);
+        if (invalidDeclaredSize || !Finite(exportFrame.Width) || !Finite(exportFrame.Height) || exportFrame.Width <= 0 || exportFrame.Height <= 0
+            || exportFrame.AllAnchors.Any(anchor => !Finite(anchor.OffsetX) || !Finite(anchor.OffsetY)))
             diagnostics.Add(new(ExportSeverity.Error, "GEOMETRY_INVALID", "Width, height, and offsets must be finite; width and height must be positive.", frame.Name));
         foreach (var reference in new[] { frame.Parent, frame.RelativeTo }.Where(r => r is not null && r != "UIParent"))
             if (!project.Contains(reference)) diagnostics.Add(new(ExportSeverity.Error, "REFERENCE_INVALID", $"Anchor/parent target '{reference}' does not exist.", frame.Name));
@@ -214,8 +354,6 @@ public static partial class Wow335ExportBuilder
             diagnostics.Add(new(ExportSeverity.Error, "BINDING_KEY_EDITOR_ID", "Runtime binding keys must express application semantics, not FrameForge editor/source identities.", frame.Name));
     }
 
-    private static string? TranslateReference(string? source, IReadOnlyDictionary<string, string> names) =>
-        source is null ? null : names.TryGetValue(source, out var runtime) ? runtime + "__FFLayer" : source;
     private static bool HasAuthoredOverride(DesignObjectMetadata m) => m.TextOverride is not null || m.TextStyle is not null || m.DesignAsset is not null || m.RuntimeValueRequired || m.RuntimeBinding is not null || m.StateIds.Count > 0;
     private static string BindingValueType(FrameKind kind) => kind == FrameKind.STATUSBAR ? "number" : "string";
     private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
@@ -546,21 +684,22 @@ public static class Wow335Exporter
         x.WriteStartElement("Ui", "http://www.blizzard.com/wow/ui/");
         x.WriteAttributeString("xmlns", "xsi", null, "http://www.w3.org/2001/XMLSchema-instance");
         x.WriteAttributeString("xsi", "schemaLocation", null, "http://www.blizzard.com/wow/ui/ ..\\FrameXML\\UI.xsd");
-        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", model.StockParentRuntimeName); x.WriteAttributeString("setAllPoints", "true");
+        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", "UIParent");
+        WriteSize(x, model.Root.Width, model.Root.Height);
+        x.WriteStartElement("Anchors"); WriteAnchor(x, model.Root.Anchor, "UIParent"); x.WriteEndElement();
         x.WriteStartElement("Frames");
-        var wrappers = model.Objects.ToDictionary(o => o.SourceName, o => o.WrapperName, StringComparer.Ordinal);
-        foreach (var item in model.Objects.OrderBy(o => o.DrawOrder).ThenBy(o => o.RuntimeName, StringComparer.Ordinal)) WriteObject(x, item, wrappers);
+        foreach (var item in model.Objects.OrderBy(o => o.DrawOrder).ThenBy(o => o.RuntimeName, StringComparer.Ordinal)) WriteObject(x, item);
         x.WriteEndElement(); x.WriteEndElement(); x.WriteEndElement();
         x.Flush();
         return output.ToString();
     }
 
-    private static void WriteObject(XmlWriter x, WowExportObject item, IReadOnlyDictionary<string, string> wrappers)
+    private static void WriteObject(XmlWriter x, WowExportObject item)
     {
         var region = item.Kind is FrameKind.TEXTURE or FrameKind.FONTSTRING;
         if (region)
         {
-            x.WriteStartElement("Frame"); x.WriteAttributeString("name", item.WrapperName); WriteCommonAttributes(x, item); WriteGeometry(x, item, wrappers);
+            x.WriteStartElement("Frame"); x.WriteAttributeString("name", item.WrapperName); WriteCommonAttributes(x, item); WriteGeometry(x, item);
             x.WriteStartElement("Layers"); x.WriteStartElement("Layer"); x.WriteAttributeString("level", item.DrawLayer);
             WriteRegion(x, item);
             x.WriteEndElement(); x.WriteEndElement(); x.WriteEndElement();
@@ -570,13 +709,13 @@ public static class Wow335Exporter
         if (item.Kind == FrameKind.STATUSBAR && item.Frame.Visual!.StatusBar is { } bar)
         {
             x.WriteAttributeString("minValue", N(bar.MinValue!.Value)); x.WriteAttributeString("maxValue", N(bar.MaxValue!.Value));
-            WriteGeometry(x, item, wrappers);
+            WriteGeometry(x, item);
             if (item.TextureReference is { } texture) { x.WriteStartElement("BarTexture"); x.WriteAttributeString("file", texture); x.WriteEndElement(); }
             if (bar.BarColor is { } color) WriteColor(x, "BarColor", color);
         }
         else
         {
-            WriteGeometry(x, item, wrappers);
+            WriteGeometry(x, item);
         }
         x.WriteEndElement();
     }
@@ -621,25 +760,25 @@ public static class Wow335Exporter
 
     private static void WriteCommonAttributes(XmlWriter x, WowExportObject item)
     {
-        if (item.ParentRuntimeName is { } parent) x.WriteAttributeString("parent", parent);
-        x.WriteAttributeString("frameStrata", item.Frame.StratumOrDefault.ToString()); x.WriteAttributeString("frameLevel", (item.DrawOrder + 1).ToString(CultureInfo.InvariantCulture));
+        if (item.ExportFrame.Parent is { } parent) x.WriteAttributeString("parent", parent);
+        x.WriteAttributeString("frameStrata", item.Frame.StratumOrDefault.ToString()); x.WriteAttributeString("frameLevel", item.FrameLevel.ToString(CultureInfo.InvariantCulture));
         if (!item.Frame.Visible || item.StateIds.Count > 0) x.WriteAttributeString("hidden", "true");
     }
-    private static void WriteGeometry(XmlWriter x, WowExportObject item, IReadOnlyDictionary<string, string> wrappers)
+    private static void WriteGeometry(XmlWriter x, WowExportObject item)
     {
-        if (item.Frame.SetAllPoints) x.WriteAttributeString("setAllPoints", "true");
+        if (item.ExportFrame.SetAllPoints) x.WriteAttributeString("setAllPoints", "true");
         else
         {
-            x.WriteStartElement("Size"); x.WriteStartElement("AbsDimension"); x.WriteAttributeString("x", N(item.Frame.Width)); x.WriteAttributeString("y", N(item.Frame.Height)); x.WriteEndElement(); x.WriteEndElement();
-            x.WriteStartElement("Anchors"); WriteAnchor(x, item.Frame.PrimaryAnchor, item.RelativeRuntimeName ?? item.ParentRuntimeName ?? "UIParent");
-            foreach (var anchor in item.Frame.ExtraAnchors)
-            {
-                var relative = anchor.RelativeTo is null ? item.ParentRuntimeName ?? "UIParent"
-                    : wrappers.GetValueOrDefault(anchor.RelativeTo, anchor.RelativeTo);
-                WriteAnchor(x, anchor, relative);
-            }
+            WriteSize(x, item.ExportFrame.Width, item.ExportFrame.Height);
+            x.WriteStartElement("Anchors"); WriteAnchor(x, item.ExportFrame.PrimaryAnchor, item.ExportFrame.RelativeTo ?? item.ExportFrame.Parent ?? "UIParent");
+            foreach (var anchor in item.ExportFrame.ExtraAnchors)
+                WriteAnchor(x, anchor, anchor.RelativeTo ?? item.ExportFrame.Parent ?? "UIParent");
             x.WriteEndElement();
         }
+    }
+    private static void WriteSize(XmlWriter x, double width, double height)
+    {
+        x.WriteStartElement("Size"); x.WriteStartElement("AbsDimension"); x.WriteAttributeString("x", N(width)); x.WriteAttributeString("y", N(height)); x.WriteEndElement(); x.WriteEndElement();
     }
     private static void WriteAnchor(XmlWriter x, FrameAnchor anchor, string relative)
     {
@@ -650,11 +789,18 @@ public static class Wow335Exporter
 
     public static string WriteManifest(WowExportModel model)
     {
-        var states = model.States.Select(state => new { state.Id, state.Name, show = model.Objects.Where(o => o.StateIds.Count == 0 || o.StateIds.Contains(state.Id, StringComparer.Ordinal)).Select(o => o.RuntimeName).ToArray(), hide = model.Objects.Where(o => o.StateIds.Count > 0 && !o.StateIds.Contains(state.Id, StringComparer.Ordinal)).Select(o => o.RuntimeName).ToArray() }).ToArray();
+        var states = model.States.Select(state => new
+        {
+            state.Id,
+            state.Name,
+            show = model.Objects.Where(o => o.Frame.Visible && (o.StateIds.Count == 0 || o.StateIds.Contains(state.Id, StringComparer.Ordinal))).Select(o => o.VisibilityRuntimeName).ToArray(),
+            hide = model.Objects.Where(o => !o.Frame.Visible || (o.StateIds.Count > 0 && !o.StateIds.Contains(state.Id, StringComparer.Ordinal))).Select(o => o.VisibilityRuntimeName).ToArray(),
+        }).ToArray();
         var bindings = model.Objects.Select(o => new
         {
             sourceObject = o.SourceName,
             runtimeId = o.RuntimeName,
+            visibilityRuntimeId = o.VisibilityRuntimeName,
             type = o.Kind.TagName(),
             allStates = o.StateIds.Count == 0,
             states = o.StateIds,
@@ -664,7 +810,7 @@ public static class Wow335Exporter
             operation = o.Metadata.RuntimeValueRequired ? o.Kind == FrameKind.STATUSBAR ? "SetValue" : "SetText" : null,
             editorPreviewDefault = o.Kind == FrameKind.STATUSBAR ? o.Frame.Visual?.StatusBar?.DefaultValue : null,
         }).ToArray();
-        return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = model.StockParentRuntimeName, strategy = "reference-client-owned-foundation" }, states, bindings }, JsonOptions());
+        return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, rootParentRuntimeId = "UIParent", stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = (string?)null, strategy = "artwork-and-template-reference-only" }, states, bindings }, JsonOptions());
     }
     public static string WriteAssets(WowExportModel model) => JsonSerializer.Serialize(new
     {
@@ -684,7 +830,7 @@ public static class Wow335Exporter
     }, JsonOptions());
     public static string WriteReport(WowExportModel model)
     {
-        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine("Stock foundation: referenced; not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
+        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Root: {model.RootRuntimeName}, parent UIParent, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine("Stock foundation: geometry provenance only; not a runtime parent; not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
         foreach (var d in model.Diagnostics.OrderBy(d => d.Severity).ThenBy(d => d.Code, StringComparer.Ordinal).ThenBy(d => d.FrameName, StringComparer.Ordinal)) b.AppendLine($"{d.Severity.ToString().ToUpperInvariant()} {d.Code}{(d.FrameName is null ? "" : $" [{d.FrameName}]")}: {d.Message}");
         return b.ToString().Replace("\r\n", "\n");
     }

@@ -1,6 +1,8 @@
 using System.Xml.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FrameForge.Core.Export;
+using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
 using Xunit;
@@ -9,6 +11,126 @@ namespace FrameForge.Core.Tests;
 
 public sealed class Wow335ExportTests
 {
+    [Fact]
+    public void RootIsIndependentAndScreenAuthoredObjectsAreRebasedToIt()
+    {
+        using var fixture = ExportFixture.Create();
+        var model = Wow335ExportBuilder.Build(fixture.Project, fixture.ProjectPath);
+        var xml = XDocument.Parse(Wow335Exporter.WriteXml(model));
+        XNamespace ns = "http://www.blizzard.com/wow/ui/";
+        var root = Assert.Single(xml.Root!.Elements(ns + "Frame"));
+
+        Assert.Equal(model.RootRuntimeName, root.Attribute("name")!.Value);
+        Assert.Equal("UIParent", root.Attribute("parent")!.Value);
+        Assert.Null(root.Attribute("setAllPoints"));
+        Assert.DoesNotContain("LFDParentFrame", xml.ToString());
+        Assert.All(model.Objects, item => Assert.Equal(model.RootRuntimeName, item.ExportFrame.Parent));
+        Assert.All(root.Descendants(ns + "Anchor").Skip(1), anchor =>
+            Assert.Equal(model.RootRuntimeName, anchor.Attribute("relativeTo")!.Value));
+    }
+
+    [Fact]
+    public void RebasingPreservesGeometryAndMovingRootMovesEveryTopLevelObject()
+    {
+        using var fixture = ExportFixture.Create();
+        var model = Wow335ExportBuilder.Build(fixture.Project, fixture.ProjectPath);
+        var sourceLayout = LayoutResolver.Resolve(fixture.Project);
+        var rootFrame = new FrameDef
+        {
+            Name = model.RootRuntimeName,
+            Width = model.Root.Width,
+            Height = model.Root.Height,
+            Point = model.Root.Anchor.Point,
+            RelativePoint = model.Root.Anchor.RelativePoint,
+            OffsetX = model.Root.Anchor.OffsetX,
+            OffsetY = model.Root.Anchor.OffsetY,
+        };
+        var rootRect = LayoutResolver.ResolveFrameRect(rootFrame,
+            LayoutResolver.ScreenRect(fixture.Project.Screen), null);
+        const double dx = 73;
+        const double dy = -41;
+
+        foreach (var item in model.Objects)
+        {
+            var exported = LayoutResolver.ResolveFrameRect(item.ExportFrame,
+                target => target == model.RootRuntimeName ? rootRect : null, null, out var notes);
+            Assert.Empty(notes);
+            var source = sourceLayout.Rects[item.SourceName];
+            Assert.Equal(source, exported);
+
+            var moved = LayoutResolver.ResolveFrameRect(item.ExportFrame,
+                target => target == model.RootRuntimeName ? rootRect.Translate(dx, dy) : null, null, out notes);
+            Assert.Empty(notes);
+            Assert.Equal(exported.Translate(dx, dy), moved);
+        }
+    }
+
+    [Fact]
+    public void NestedFramesOwnRegionsAndReferencesUseActualNativeOwners()
+    {
+        var project = new Project
+        {
+            Name = "Nested",
+            Frames =
+            [
+                new() { Name = "Container", Kind = FrameKind.FRAME, Width = 200, Height = 100, Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER },
+                new() { Name = "Bar", Parent = "Container", Kind = FrameKind.STATUSBAR, Width = 100, Height = 10, Visual = new FrameVisual { StatusBar = new StatusBarVisual(0, 100, 0, null, null) } },
+                new() { Name = "Texture", Parent = "Container", RelativeTo = "Bar", Kind = FrameKind.TEXTURE, Width = 16, Height = 16 },
+                new() { Name = "Label", Parent = "Container", Kind = FrameKind.FONTSTRING, Width = 80, Height = 20, Visual = new FrameVisual { Text = new TextVisual("Label") } },
+            ],
+            Editor = new EditorMetadata
+            {
+                DesignOrder = ["Container", "Bar", "Texture", "Label"],
+                DesignObjects =
+                [
+                    new() { FrameName = "Container" },
+                    new() { FrameName = "Bar" },
+                    new() { FrameName = "Texture" },
+                    new() { FrameName = "Label" },
+                ],
+            },
+        };
+
+        var model = Wow335ExportBuilder.Build(project, null);
+        var container = Assert.Single(model.Objects, item => item.SourceName == "Container");
+        var bar = Assert.Single(model.Objects, item => item.SourceName == "Bar");
+        var texture = Assert.Single(model.Objects, item => item.SourceName == "Texture");
+        var label = Assert.Single(model.Objects, item => item.SourceName == "Label");
+        Assert.Equal(container.RuntimeName, bar.ExportFrame.Parent);
+        Assert.Equal(container.RuntimeName, texture.ExportFrame.Parent);
+        Assert.Equal(bar.RuntimeName, texture.ExportFrame.RelativeTo);
+        Assert.Equal(container.RuntimeName, label.ExportFrame.Parent);
+        Assert.EndsWith("__FFLayer", texture.OwnerRuntimeName, StringComparison.Ordinal);
+        Assert.EndsWith("__FFLayer", label.OwnerRuntimeName, StringComparison.Ordinal);
+        Assert.Equal(bar.RuntimeName, bar.OwnerRuntimeName);
+        Assert.True(bar.FrameLevel > container.FrameLevel);
+    }
+
+    [Fact]
+    public void StateVisibilityTargetsRegionOwnersAndBindingsTargetRegions()
+    {
+        using var fixture = ExportFixture.Create();
+        var model = Wow335ExportBuilder.Build(fixture.Project, fixture.ProjectPath);
+        using var manifest = JsonDocument.Parse(Wow335Exporter.WriteManifest(model));
+        var state = manifest.RootElement.GetProperty("states")[0];
+        Assert.Contains("Bad_Name__FFLayer", state.GetProperty("show").EnumerateArray().Select(item => item.GetString()));
+        var binding = manifest.RootElement.GetProperty("bindings").EnumerateArray()
+            .Single(item => item.GetProperty("sourceObject").GetString() == "Text1");
+        Assert.Equal("Bad_Name", binding.GetProperty("runtimeId").GetString());
+        Assert.Equal("Bad_Name__FFLayer", binding.GetProperty("visibilityRuntimeId").GetString());
+    }
+
+    [Fact]
+    public void SaveReopenKeepsGeneratedNativeLayoutIdentical()
+    {
+        using var fixture = ExportFixture.Create();
+        var reopened = ProjectCodec.Parse(ProjectCodec.Serialize(fixture.Project));
+        Assert.True(reopened.Ok, reopened.ErrorText);
+        Assert.Equal(
+            Wow335Exporter.WriteXml(Wow335ExportBuilder.Build(fixture.Project, fixture.ProjectPath)),
+            Wow335Exporter.WriteXml(Wow335ExportBuilder.Build(reopened.Project!, fixture.ProjectPath)));
+    }
+
     [Fact]
     public void ExportIsDeterministicPortableAndWellFormed()
     {
@@ -353,6 +475,12 @@ public sealed class Wow335ExportTests
         var expected = project.Editor.DesignObjects.Count(item => project.Contains(item.FrameName) && !stock.Contains(item.FrameName));
         Assert.Equal(expected, model.Objects.Count);
         Assert.Equal(49, model.Objects.Count);
+        Assert.Equal("UIParent", model.Root.Anchor.RelativeTo);
+        Assert.Equal(355, model.Root.Width, 8);
+        Assert.Equal(440, model.Root.Height, 8);
+        Assert.All(model.Objects, item => Assert.Equal(model.RootRuntimeName, item.ExportFrame.Parent));
+        Assert.All(model.Objects.SelectMany(item => item.ExportFrame.AllAnchors), anchor =>
+            Assert.True(anchor.RelativeTo is null || anchor.RelativeTo != "UIParent"));
         var progress = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Progress");
         Assert.Equal(FrameKind.STATUSBAR, progress.Kind);
         Assert.Equal(@"Interface\TargetingFrame\UI-StatusBar", progress.TextureReference);
@@ -370,6 +498,10 @@ public sealed class Wow335ExportTests
             var result = Wow335Exporter.Export(project, path, destination);
             Assert.True(result.Success, result.Summary);
             Assert.Equal(sourceBefore, File.ReadAllBytes(path));
+            var xml = File.ReadAllText(Path.Combine(destination, Wow335Exporter.XmlFileName));
+            Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"UIParent\">", xml);
+            Assert.DoesNotContain("LFDParentFrame", xml);
+            Assert.Single(Regex.Matches(xml, "relativeTo=\"UIParent\"").Cast<Match>());
             Assert.Contains("Round-trip self-check: PASS (49/49 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
             Assert.Equal(11, result.Model!.Assets.Count);
             Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());

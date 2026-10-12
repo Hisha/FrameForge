@@ -26,7 +26,9 @@ suffixes in authored order. The manifest records the internal-to-runtime mapping
 
 An empty state membership means `allStates: true`. Each authored state has explicit `show` and
 `hide` arrays, so later addon code can implement `ApplyState(name)` without FrameForge knowing
-anything about Native Hunts behavior or data sources.
+anything about a particular module's behavior or data sources. For Texture and FontString
+regions, those arrays address the generated owning frame; `visibilityRuntimeId` records that
+owner separately from the region's `runtimeId` used for text/value updates.
 
 Runtime values are opt-in DESIGN metadata on FontString and StatusBar objects. **Runtime value**
 must be enabled and a semantic **Binding Key** supplied; FrameForge never infers a binding from
@@ -42,15 +44,24 @@ language.
 
 ## Layout and draw order
 
-The exporter writes logical WoW anchors, offsets, width, and height; it never writes Avalonia
-canvas coordinates. Regions are hosted in generated frames so authored order can be expressed
-with deterministic frame levels as well as WoW draw layers. Parent and anchor references are
-translated to the generated runtime identities. State-specific objects start hidden until the
+The exporter resolves the existing v1 project geometry and writes logical WoW anchors, offsets,
+width, and height; it never writes Avalonia canvas coordinates. Its generated root is an
+independent `UIParent` child with explicit size and placement. Anchors against the screen or an
+editor-only/stock foundation are rebased to that root, while relationships between authored
+objects remain native parent-relative anchors. Moving the root therefore moves the full authored
+composition without changing the design's initial screen position.
+
+Texture and FontString regions are hosted in generated frames because WoW regions require an
+owning frame and cross-region authored order needs deterministic frame levels. Native Frames and
+StatusBars remain their own owners; parent and anchor references target the actual emitted owner
+rather than assuming every object has a wrapper. State-specific owners start hidden until the
 runtime applies a state.
 
-The conceptual Dungeon Finder group is not flattened. The export root is attached to the stock
-`LFDParentFrame`, and the manifest records the validated build-12340 stock identity. Stock
-members stay client-owned and behind custom DESIGN content.
+The conceptual stock-framework group is not flattened or copied. When present, its resolved root
+rectangle supplies the independent export root's initial geometry, and the manifest retains the
+validated stock identity as provenance. The generated interface is not parented to that stock
+window and does not depend on the window being visible. Stock artwork, font styles, and templates
+remain legal logical client references.
 
 ## Text, StatusBars, and assets
 

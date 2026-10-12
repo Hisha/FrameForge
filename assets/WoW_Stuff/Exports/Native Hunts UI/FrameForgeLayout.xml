@@ -1,0 +1,37 @@
+<Ui xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd" xmlns="http://www.blizzard.com/wow/ui/">
+  <Frame name="FrameForge_Dungeon_Finder_UI" parent="UIParent">
+    <Size>
+      <AbsDimension x="355" y="440" />
+    </Size>
+    <Anchors>
+      <Anchor point="TOPLEFT" relativeTo="UIParent" relativePoint="TOPLEFT">
+        <Offset>
+          <AbsDimension x="0" y="0" />
+        </Offset>
+      </Anchor>
+    </Anchors>
+    <Frames>
+      <Frame name="Header_Text__FFLayer" parent="FrameForge_Dungeon_Finder_UI" frameStrata="MEDIUM" frameLevel="1">
+        <Size>
+          <AbsDimension x="270" y="18" />
+        </Size>
+        <Anchors>
+          <Anchor point="CENTER" relativeTo="FrameForge_Dungeon_Finder_UI" relativePoint="CENTER">
+            <Offset>
+              <AbsDimension x="32.4041775061431" y="169.487702797442" />
+            </Offset>
+          </Anchor>
+        </Anchors>
+        <Layers>
+          <Layer level="BACKGROUND">
+            <FontString name="Header_Text" setAllPoints="true" text="Native Hunts" inherits="GameFontNormal" justifyH="CENTER" justifyV="MIDDLE">
+              <FontHeight>
+                <AbsValue val="12" />
+              </FontHeight>
+            </FontString>
+          </Layer>
+        </Layers>
+      </Frame>
+    </Frames>
+  </Frame>
+</Ui>

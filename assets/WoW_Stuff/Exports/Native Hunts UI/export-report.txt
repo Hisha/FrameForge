@@ -1,0 +1,13 @@
+FrameForge WoW 3.3.5a export report
+Project: Dungeon Finder UI
+Objects: 1
+Runtime bindings: 0
+States: 
+Project assets: 0
+Packaged source files: 0
+Root: FrameForge_Dungeon_Finder_UI, parent UIParent, size 355x440
+Stock foundation: geometry provenance only; not a runtime parent; not copied
+StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization
+
+Diagnostics:
+Round-trip self-check: PASS (1/1 runtime identities)
