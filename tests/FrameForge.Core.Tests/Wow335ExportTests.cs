@@ -416,11 +416,123 @@ public sealed class Wow335ExportTests
         Assert.Equal("tga-type-2-bgra32-top-left", entry.GetProperty("generatedFormat").GetString());
         Assert.Equal(2, entry.GetProperty("width").GetInt32());
         Assert.Equal(2, entry.GetProperty("height").GetInt32());
+        Assert.Equal(2, entry.GetProperty("sourceWidth").GetInt32());
+        Assert.Equal(2, entry.GetProperty("sourceHeight").GetInt32());
+        Assert.False(entry.GetProperty("paddingApplied").GetBoolean());
         Assert.Matches("^[0-9A-F]{64}$", entry.GetProperty("generatedContentSha256").GetString()!);
     }
 
     [Fact]
-    public void CorruptAndIncompatiblePngsFailClearlyWithoutReplacingSuccessfulExport()
+    public void NonPowerOfTwoPngIsPaddedAndSharedCropsRetainTheirSourcePixels()
+    {
+        using var fixture = ExportFixture.Create();
+        var pixels = new[]
+        {
+            new SKColor(1, 11, 21, 31), new SKColor(2, 12, 22, 32), new SKColor(3, 13, 23, 33),
+            new SKColor(4, 14, 24, 34), new SKColor(5, 15, 25, 35), new SKColor(6, 16, 26, 36),
+            new SKColor(7, 17, 27, 37), new SKColor(8, 18, 28, 38), new SKColor(9, 19, 29, 39),
+        };
+        WritePng(Path.Combine(fixture.Root, "non-pot.png"), 3, 3, pixels, withAlpha: true);
+        WritePng(Path.Combine(fixture.Root, "opaque-non-pot.png"), 3, 2,
+            [SKColors.Red, SKColors.Green, SKColors.Blue, SKColors.White, SKColors.Black, SKColors.Yellow],
+            withAlpha: false);
+        var project = AddTextures(fixture.Project,
+            ("Full", "non-pot.png"), ("Crop", "non-pot.png"), ("OpaquePadded", "opaque-non-pot.png"));
+        project = project with
+        {
+            Frames = project.Frames.Select(frame => frame.Name switch
+            {
+                "Full" => frame with
+                {
+                    Width = 137,
+                    Height = 49,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, TexCoords.Full) },
+                },
+                "Crop" => frame with
+                {
+                    Width = 17,
+                    Height = 101,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, new(.25, .75, .25, .75)) },
+                },
+                _ => frame,
+            }).ToArray(),
+        };
+
+        var result = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
+        Assert.True(result.Success, result.Summary);
+        var asset = Assert.Single(result.Model!.Assets, item => item.ProjectReferences.Contains("non-pot.png"));
+        Assert.Equal((3, 3, 4, 4),
+            (asset.SourceWidth, asset.SourceHeight, asset.TextureWidth, asset.TextureHeight));
+
+        var tga = DecodeTga(Path.Combine(fixture.Output1, "textures", "non_pot.tga"));
+        Assert.Equal((4, 4), (tga.Width, tga.Height));
+        for (var y = 0; y < 4; y++)
+        for (var x = 0; x < 4; x++)
+        {
+            var offset = (y * 4 + x) * 4;
+            if (x < 3 && y < 3)
+            {
+                var source = pixels[y * 3 + x];
+                Assert.Equal(new byte[] { source.Blue, source.Green, source.Red, source.Alpha },
+                    tga.Bgra[offset..(offset + 4)]);
+            }
+            else
+            {
+                Assert.Equal(new byte[4], tga.Bgra[offset..(offset + 4)]);
+            }
+        }
+
+        var full = Assert.Single(result.Model.Objects, item => item.SourceName == "Full");
+        var crop = Assert.Single(result.Model.Objects, item => item.SourceName == "Crop");
+        Assert.Equal((137d, 49d), (full.ExportFrame.Width, full.ExportFrame.Height));
+        Assert.Equal((17d, 101d), (crop.ExportFrame.Width, crop.ExportFrame.Height));
+        Assert.Equal(new TexCoords(0, .75, 0, .75), full.ExportFrame.Visual!.Texture!.TexCoords);
+        Assert.Equal(new TexCoords(.1875, .5625, .1875, .5625), crop.ExportFrame.Visual!.Texture!.TexCoords);
+        AssertTextureSamplesMatch(pixels, 3, 3, tga.Bgra, 4, 4,
+            TexCoords.Full, full.ExportFrame.Visual.Texture.TexCoords);
+        AssertTextureSamplesMatch(pixels, 3, 3, tga.Bgra, 4, 4,
+            new(.25, .75, .25, .75), crop.ExportFrame.Visual.Texture.TexCoords);
+
+        var xml = XDocument.Load(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName));
+        XNamespace ns = "http://www.blizzard.com/wow/ui/";
+        Assert.Equal("0.75", xml.Descendants(ns + "Texture").Single(element => element.Attribute("name")?.Value == full.RuntimeName)
+            .Element(ns + "TexCoords")!.Attribute("right")!.Value);
+        Assert.Equal("0.5625", xml.Descendants(ns + "Texture").Single(element => element.Attribute("name")?.Value == crop.RuntimeName)
+            .Element(ns + "TexCoords")!.Attribute("right")!.Value);
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
+        var entry = manifest.RootElement.GetProperty("assets").EnumerateArray()
+            .Single(item => item.GetProperty("projectReferences").EnumerateArray().Any(reference => reference.GetString() == "non-pot.png"));
+        Assert.Equal(3, entry.GetProperty("sourceWidth").GetInt32());
+        Assert.Equal(3, entry.GetProperty("sourceHeight").GetInt32());
+        Assert.Equal(4, entry.GetProperty("width").GetInt32());
+        Assert.Equal(4, entry.GetProperty("height").GetInt32());
+        Assert.True(entry.GetProperty("paddingApplied").GetBoolean());
+
+        var opaque = DecodeTga(Path.Combine(fixture.Output1, "textures", "opaque_non_pot.tga"));
+        Assert.Equal((4, 2), (opaque.Width, opaque.Height));
+        for (var y = 0; y < 2; y++)
+        {
+            Assert.All(Enumerable.Range(0, 3), x => Assert.Equal(255, opaque.Bgra[(y * 4 + x) * 4 + 3]));
+            Assert.Equal(new byte[4], opaque.Bgra[((y * 4 + 3) * 4)..((y * 4 + 4) * 4)]);
+        }
+
+        var repeated = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output2);
+        Assert.True(repeated.Success, repeated.Summary);
+        foreach (var relative in new[]
+                 {
+                     Wow335Exporter.XmlFileName,
+                     Wow335Exporter.ManifestFileName,
+                     Wow335Exporter.AssetsFileName,
+                     "textures/non_pot.tga",
+                     "textures/opaque_non_pot.tga",
+                 })
+            Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Output1, relative)),
+                File.ReadAllBytes(Path.Combine(fixture.Output2, relative)));
+    }
+
+    [Fact]
+    public void CorruptPngFailsClearlyWithoutReplacingSuccessfulExport()
     {
         using var fixture = ExportFixture.Create();
         Assert.True(Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1).Success);
@@ -433,15 +545,6 @@ public sealed class Wow335ExportTests
         Assert.Contains(corrupt.Diagnostics, diagnostic => diagnostic.Code == "ASSET_TEXTURE_INVALID"
             && diagnostic.Message.Contains("corrupt.png", StringComparison.Ordinal));
         Assert.Equal(previousManifest, File.ReadAllBytes(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
-
-        WritePng(Path.Combine(fixture.Root, "bad-size.png"), 3, 2,
-            Enumerable.Repeat(SKColors.White, 6).ToArray(), withAlpha: true);
-        var incompatible = Wow335Exporter.Export(AddTextures(fixture.Project, ("BadSize", "bad-size.png")),
-            fixture.ProjectPath, fixture.Output2);
-        Assert.False(incompatible.Success);
-        Assert.Contains(incompatible.Diagnostics, diagnostic => diagnostic.Code == "ASSET_TEXTURE_INVALID"
-            && diagnostic.Message.Contains("powers of two", StringComparison.Ordinal));
-        Assert.False(Directory.Exists(fixture.Output2));
     }
 
     [Fact]
@@ -841,5 +944,38 @@ public sealed class Wow335ExportTests
         var pixels = bytes[18..];
         Assert.Equal(width * height * 4, pixels.Length);
         return (width, height, bytes[16], bytes[17], pixels);
+    }
+
+    private static void AssertTextureSamplesMatch(
+        IReadOnlyList<SKColor> source,
+        int sourceWidth,
+        int sourceHeight,
+        IReadOnlyList<byte> paddedBgra,
+        int paddedWidth,
+        int paddedHeight,
+        TexCoords sourceCoordinates,
+        TexCoords paddedCoordinates)
+    {
+        const int samples = 37;
+        for (var y = 0; y < samples; y++)
+        for (var x = 0; x < samples; x++)
+        {
+            // Pixel-centre samples avoid making an unsupported claim about the WoW client's
+            // precise edge filtering while still verifying the complete coordinate composition.
+            var tx = (x + .5) / samples;
+            var ty = (y + .5) / samples;
+            var sourceU = sourceCoordinates.Left + (sourceCoordinates.Right - sourceCoordinates.Left) * tx;
+            var sourceV = sourceCoordinates.Top + (sourceCoordinates.Bottom - sourceCoordinates.Top) * ty;
+            var paddedU = paddedCoordinates.Left + (paddedCoordinates.Right - paddedCoordinates.Left) * tx;
+            var paddedV = paddedCoordinates.Top + (paddedCoordinates.Bottom - paddedCoordinates.Top) * ty;
+            var sourceX = Math.Clamp((int)(sourceU * sourceWidth), 0, sourceWidth - 1);
+            var sourceY = Math.Clamp((int)(sourceV * sourceHeight), 0, sourceHeight - 1);
+            var paddedX = Math.Clamp((int)(paddedU * paddedWidth), 0, paddedWidth - 1);
+            var paddedY = Math.Clamp((int)(paddedV * paddedHeight), 0, paddedHeight - 1);
+            var expected = source[sourceY * sourceWidth + sourceX];
+            var offset = (paddedY * paddedWidth + paddedX) * 4;
+            Assert.Equal(new byte[] { expected.Blue, expected.Green, expected.Red, expected.Alpha },
+                new[] { paddedBgra[offset], paddedBgra[offset + 1], paddedBgra[offset + 2], paddedBgra[offset + 3] });
+        }
     }
 }

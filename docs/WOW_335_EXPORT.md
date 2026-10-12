@@ -77,22 +77,37 @@ Stock textures such as `Interface\TargetingFrame\UI-StatusBar` remain logical cl
 Project-owned PNG, TGA, and BLP inputs are copied unchanged into the export's `assets/` directory.
 PNG inputs are also decoded through FrameForge's existing SkiaSharp codec and written to
 `textures/` as deterministic, uncompressed TGA type 2 files: 32-bit BGRA pixels, eight alpha bits,
-and a top-left origin. Opaque PNGs use alpha 255. RGB and alpha values, dimensions, and row order
-are preserved; sources are never resized or modified.
+and a top-left origin. Opaque PNGs use alpha 255. RGB and alpha values and row order are preserved;
+sources are never resized or modified.
 
-WoW UI textures must have power-of-two width and height. The exporter rejects non-positive or
-non-power-of-two PNG dimensions and dimensions that cannot fit the TGA format's unsigned 16-bit
-fields. It does not impose a smaller fixed maximum because the effective upper bound in the 3.3.5a
-renderer also depends on the graphics device. Decode failures, incomplete pixel data, invalid
-generated headers, and incorrect generated lengths block publication.
+WoW 3.3.5a UI textures use power-of-two dimensions. A non-power-of-two PNG is placed unchanged at
+the top-left of the next power-of-two canvas; every added pixel is transparent black. FrameForge
+does not resample the image. Exported rectangular texture coordinates are composed with the
+source-to-padded width and height ratios, including coordinates that already crop the source, so
+different objects can continue to share and crop one generated TGA. The editor model currently
+supports the four-edge rectangular FrameXML mapping; it does not contain an eight-value corner
+mapping to transform.
+
+The coordinate composition maps corresponding source texel centres exactly. No opaque edge
+extrusion is written because that would violate the transparent-black padding contract. Precise
+filtering at the outermost edge remains dependent on the WoW 3.3.5a renderer and graphics device;
+the exporter does not claim a client-side filtering result without an in-game test.
+
+The exporter rejects non-positive PNG dimensions and source dimensions whose next power of two
+cannot fit the TGA format's unsigned 16-bit fields. It does not impose a smaller fixed maximum
+because the effective upper bound in the 3.3.5a renderer also depends on the graphics device.
+Decode failures, incomplete pixel data, invalid generated headers, and incorrect generated lengths
+block publication.
 
 Each manifest entry retains the package-relative source, source SHA-256, original project
 reference(s), logical `Interface\FrameForge\...` identity, and packaging target. Converted PNG
 entries additionally record `generatedFile`, `generatedContentSha256`, `generatedFormat`, image
-dimensions, and the exact `requiredMpqDestination` ending in `.tga`. Identical content shares one
-packaged source file. Same-name files with different content receive deterministic hash suffixes
-instead of overwriting each other. Existing project-owned TGA and BLP inputs retain their prior
-source-packaging behavior; this exporter enhancement does not add BLP conversion.
+dimensions, and the exact `requiredMpqDestination` ending in `.tga`. `sourceWidth` and
+`sourceHeight` describe the PNG; `width` and `height` describe the generated power-of-two TGA; and
+`paddingApplied` records whether they differ. Identical content shares one packaged source file.
+Same-name files with different content receive deterministic hash suffixes instead of overwriting
+each other. Existing project-owned TGA and BLP inputs retain their prior source-packaging behavior;
+this exporter enhancement does not add BLP conversion.
 
 Re-export replaces the four root contract files and its declared source and generated texture
 files. It removes a stale file only when the previous version-2 FrameForge asset manifest proves
