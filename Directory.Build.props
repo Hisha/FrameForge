@@ -6,11 +6,11 @@
     The version lives here and nowhere else. scripts/publish-*.sh and
     scripts/publish-win.ps1 read it back with
     `dotnet msbuild <project> -getProperty:Version`, and the Inno Setup
-    installer takes it as an ISCC /D define, so tagging v0.1.0 only ever
+    installer takes it as an ISCC /D define, so tagging a release only ever
     requires editing this one file.
   -->
   <PropertyGroup>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
   </PropertyGroup>
 
   <PropertyGroup>

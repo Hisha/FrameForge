@@ -4,8 +4,8 @@ FrameForge is a WoW UI frame layout editor. This repository contains a clean .NE
 
 ## Current Version
 
-v0.1.0 — geometry/editor foundation, read-only FrameXML import, real local-client assets, focused
-stock template/font fidelity, and non-destructive design-time preview states.
+v0.3.0 — native BLP2/DXT5 export, usage-based texture optimization, corrected WoW 3.3.5a
+FrameXML hierarchy and state visibility, and independently verified deterministic output.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Dragging updates **only offsetX/offsetY**. `Point`, `RelativeTo`, `RelativePoint` remain unchanged.
 - Downward screen drags produce negative model Y.
 
-## Features (v0.1)
+## Features (v0.3)
 
 - 9-anchor anchoring system with parent/sibling/descendant relationships
 - Layout resolution with visibility inheritance, paint order, and cycle detection
@@ -201,7 +201,33 @@ pwsh scripts/publish-win.ps1
 pwsh scripts/publish-win.ps1 -Installer
 ```
 
-Produces `dist/FrameForge-0.1.0-win-x64.zip` and `dist/FrameForge-Setup-0.1.0.exe` when installer is built.
+Produces `dist/FrameForge-<version>-win-x64.zip` and `dist/FrameForge-Setup-<version>.exe` when the installer is built.
+
+## BLP2 export in v0.3.0
+
+BLP2/DXT5 is now the preferred WoW 3.3.5a texture export from both the desktop **Export** menu
+and `--export-wow335`. FrameForge uses a managed, cross-platform BC3 encoder, generates complete
+mip chains, and independently validates the BLP2 container and decoded base mip before publishing
+an export. The output is deterministic for the same project and source assets.
+
+The default optimization sizes each shared texture from its largest authored use, targets two
+source texels per displayed UI pixel, preserves aspect ratio, and never upscales. Choose
+**BLP2/DXT5 (preserve source resolution)** or pass `--preserve-source-resolution` when runtime use
+outside the authored layout requires the original resolution. **Legacy TGA** remains available in
+the desktop menu and with `--texture-format tga`.
+
+Native Hunts provided the concrete WoW 3.3.5a PTR acceptance case:
+
+| Metric                | Previous TGA                  | v0.3.0 BLP2           |
+| --------------------- | ----------------------------- | --------------------- |
+| Native Hunts textures | 11                            | 11                    |
+| Total size            | 160 MiB                       | 3.54 MiB              |
+| Largest texture       | 4096×1024                     | 1024×1024             |
+| WoW PTR result        | Crashed when displaying Hunts | Rendered successfully |
+
+The successful PTR test used the default optimized BLP2 output, not source-resolution
+preservation. It validates this Native Hunts layout and asset set; it is not a claim that every
+possible FrameXML layout has been tested in-game.
 
 ### Application icon assets
 
@@ -222,14 +248,14 @@ than the derived PNG.
 Create and push a tag to trigger GitHub release:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 GitHub Actions builds, tests, publishes both platforms and creates the release with:
-- `FrameForge-0.1.0-linux-x64.zip`
-- `FrameForge-0.1.0-win-x64.zip`  
-- `FrameForge-Setup-0.1.0.exe`
+- `FrameForge-0.3.0-linux-x64.zip`
+- `FrameForge-0.3.0-win-x64.zip`
+- `FrameForge-Setup-0.3.0.exe`
 
 All official releases are **self-contained** and do not require installing the .NET runtime separately.
 

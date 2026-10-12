@@ -871,7 +871,7 @@ public sealed class Wow335ExportTests
         var destination = Path.Combine(Path.GetTempPath(), "frameforge-native-hunts-export", Guid.NewGuid().ToString("N"));
         try
         {
-            var result = Wow335Exporter.Export(project, path, destination);
+            var result = Wow335Exporter.Export(project, path, destination, Wow335ExportOptions.Preferred);
             Assert.True(result.Success, result.Summary);
             Assert.Equal(sourceBefore, File.ReadAllBytes(path));
             var xml = File.ReadAllText(Path.Combine(destination, Wow335Exporter.XmlFileName));
@@ -894,7 +894,8 @@ public sealed class Wow335ExportTests
                     Assert.True(File.Exists(Path.Combine(destination, generated.GetString()!.Replace('/', Path.DirectorySeparatorChar))));
                 }
             }
-            Assert.Equal(generatedCount, Directory.EnumerateFiles(Path.Combine(destination, "textures"), "*.tga", SearchOption.AllDirectories).Count());
+            Assert.Equal(11, generatedCount);
+            Assert.Equal(generatedCount, Directory.EnumerateFiles(Path.Combine(destination, "textures"), "*.blp", SearchOption.AllDirectories).Count());
             var relocated = Path.Combine(Path.GetTempPath(), "frameforge-native-hunts-relocated-" + Guid.NewGuid().ToString("N"));
             Directory.Move(destination, relocated);
             destination = relocated;
@@ -904,7 +905,7 @@ public sealed class Wow335ExportTests
                 if (entry.TryGetProperty("generatedFile", out var generated))
                     Assert.True(File.Exists(Path.Combine(destination, generated.GetString()!.Replace('/', Path.DirectorySeparatorChar))));
             }
-            foreach (var forbiddenPattern in new[] { "*.blp", "*.mpq", "*.ttf", "*.otf" })
+            foreach (var forbiddenPattern in new[] { "*.tga", "*.mpq", "*.ttf", "*.otf" })
                 Assert.Empty(Directory.EnumerateFiles(destination, forbiddenPattern, SearchOption.AllDirectories));
         }
         finally

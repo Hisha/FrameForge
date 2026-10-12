@@ -40,6 +40,16 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Verify source version matches tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(dotnet msbuild src/FrameForge.Desktop/FrameForge.Desktop.csproj -getProperty:Version)"
+          if [[ "$source_version" != "${{ needs.validate-tag.outputs.version }}" ]]; then
+            echo "ERROR: source version ${source_version} does not match tag version ${{ needs.validate-tag.outputs.version }}." >&2
+            exit 1
+          fi
+
       - name: Restore
         run: dotnet restore FrameForge.slnx
 
@@ -200,8 +210,8 @@ jobs:
             "release-assets/FrameForge-${VERSION}-linux-x64.zip" \
             "release-assets/FrameForge-${VERSION}-win-x64.zip" \
             "release-assets/FrameForge-Setup-${VERSION}.exe" \
-            --title "FrameForge $TAG" \
-            --generate-notes \
+            --title "FrameForge v${VERSION} — Native BLP2 Export" \
+            --notes-file RELEASE_NOTES.md \
             --verify-tag
             
             

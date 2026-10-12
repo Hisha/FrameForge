@@ -26,6 +26,21 @@ FrameForge --export-wow335 <project.fforge.json> <directory> \
 The command-line default is BLP2/DXT5. The three-argument Core API overload retains legacy TGA
 behavior for existing callers; new callers select `Wow335ExportOptions.Preferred` explicitly.
 
+## v0.3.0 Native Hunts acceptance result
+
+The preferred exporter was validated in-game on WoW 3.3.5a PTR with the Native Hunts integration.
+That test used the default usage-optimized BLP2 output, not **Preserve source resolution**.
+
+| Metric                | Previous TGA                  | v0.3.0 BLP2           |
+| --------------------- | ----------------------------- | --------------------- |
+| Native Hunts textures | 11                            | 11                    |
+| Total size            | 160 MiB                       | 3.54 MiB              |
+| Largest texture       | 4096×1024                     | 1024×1024             |
+| WoW PTR result        | Crashed when displaying Hunts | Rendered successfully |
+
+This is a concrete acceptance result for one integration rather than a claim that every possible
+layout, asset combination, renderer, or graphics device has been validated in-game.
+
 ## Runtime identity and state
 
 The DESIGN display name is the preferred runtime identity. Invalid identifier characters are
