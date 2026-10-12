@@ -5,8 +5,8 @@ Runtime bindings: 0
 States: 
 Project assets: 0
 Packaged source files: 0
-Root: FrameForge_Dungeon_Finder_UI, parent UIParent, size 355x440
-Stock foundation: geometry provenance only; not a runtime parent; not copied
+Root: FrameForge_Dungeon_Finder_UI, parent LFDParentFrame, size 355x440
+Stock foundation: runtime parent LFDParentFrame; stock definitions and artwork not copied
 StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization
 
 Diagnostics:

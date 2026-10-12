@@ -5,6 +5,7 @@ using FrameForge.Core.Export;
 using FrameForge.Core.Geometry;
 using FrameForge.Core.Models;
 using FrameForge.Core.Serialization;
+using SkiaSharp;
 using Xunit;
 
 namespace FrameForge.Core.Tests;
@@ -210,6 +211,8 @@ public sealed class Wow335ExportTests
             Assert.Equal(File.ReadAllText(Path.Combine(fixture.Output1, file!)), File.ReadAllText(Path.Combine(fixture.Output2, file!)));
         Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Output1, "assets", "panel.png")),
             File.ReadAllBytes(Path.Combine(fixture.Output2, "assets", "panel.png")));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Output1, "textures", "panel.tga")),
+            File.ReadAllBytes(Path.Combine(fixture.Output2, "textures", "panel.tga")));
         _ = XDocument.Load(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName));
         var all = string.Join("\n", first.WrittenFiles.Select(File.ReadAllText));
         Assert.DoesNotContain(fixture.Root, all, StringComparison.OrdinalIgnoreCase);
@@ -362,10 +365,103 @@ public sealed class Wow335ExportTests
         Assert.False(Path.IsPathRooted(asset.GetProperty("source").GetString()));
         Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Root, "panel.png")),
             File.ReadAllBytes(Path.Combine(fixture.Output1, "assets", "panel.png")));
+        Assert.True(File.Exists(Path.Combine(fixture.Output1, "textures", "panel.tga")));
         Assert.DoesNotContain(manifest.RootElement.GetRawText(), "UI-StatusBar", StringComparison.OrdinalIgnoreCase);
         Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.blp", SearchOption.AllDirectories));
+        Assert.Single(Directory.EnumerateFiles(fixture.Output1, "*.tga", SearchOption.AllDirectories));
         Assert.Contains(@"Interface\TargetingFrame\UI-StatusBar",
             File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName)));
+    }
+
+    [Fact]
+    public void PngConversionPreservesAlphaRgbDimensionsAndTopLeftOrientation()
+    {
+        using var fixture = ExportFixture.Create();
+        var pixels = new[]
+        {
+            new SKColor(10, 20, 30, 40), new SKColor(50, 60, 70, 80),
+            new SKColor(90, 100, 110, 120), new SKColor(130, 140, 150, 160),
+        };
+        WritePng(Path.Combine(fixture.Root, "alpha.png"), 2, 2, pixels, withAlpha: true);
+        WritePng(Path.Combine(fixture.Root, "opaque.png"), 2, 4,
+            Enumerable.Range(0, 8).Select(index => new SKColor((byte)(index + 1), 2, 3, 255)).ToArray(),
+            withAlpha: false);
+        var project = AddTextures(fixture.Project, ("Alpha", "alpha.png"), ("Opaque", "opaque.png"));
+        var expectedXml = Wow335Exporter.WriteXml(Wow335ExportBuilder.Build(project, fixture.ProjectPath));
+
+        var result = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
+        Assert.True(result.Success, result.Summary);
+        Assert.Equal(expectedXml, File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName)));
+
+        var alpha = DecodeTga(Path.Combine(fixture.Output1, "textures", "alpha.tga"));
+        Assert.Equal((2, 2), (alpha.Width, alpha.Height));
+        Assert.Equal(32, alpha.BitsPerPixel);
+        Assert.Equal(0x28, alpha.Descriptor);
+        Assert.Equal(new byte[]
+        {
+            30, 20, 10, 40, 70, 60, 50, 80,
+            110, 100, 90, 120, 150, 140, 130, 160,
+        }, alpha.Bgra);
+
+        var opaque = DecodeTga(Path.Combine(fixture.Output1, "textures", "opaque.tga"));
+        Assert.Equal((2, 4), (opaque.Width, opaque.Height));
+        Assert.All(opaque.Bgra.Where((_, index) => index % 4 == 3), value => Assert.Equal(255, value));
+        Assert.Equal(2, File.ReadAllBytes(Path.Combine(fixture.Root, "opaque.png"))[25]);
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
+        var entry = manifest.RootElement.GetProperty("assets").EnumerateArray()
+            .Single(item => item.GetProperty("projectReferences").EnumerateArray().Any(reference => reference.GetString() == "alpha.png"));
+        Assert.Equal("textures/alpha.tga", entry.GetProperty("generatedFile").GetString());
+        Assert.Equal("Interface/FrameForge/Fixture/alpha.tga", entry.GetProperty("requiredMpqDestination").GetString());
+        Assert.Equal("tga-type-2-bgra32-top-left", entry.GetProperty("generatedFormat").GetString());
+        Assert.Equal(2, entry.GetProperty("width").GetInt32());
+        Assert.Equal(2, entry.GetProperty("height").GetInt32());
+        Assert.Matches("^[0-9A-F]{64}$", entry.GetProperty("generatedContentSha256").GetString()!);
+    }
+
+    [Fact]
+    public void CorruptAndIncompatiblePngsFailClearlyWithoutReplacingSuccessfulExport()
+    {
+        using var fixture = ExportFixture.Create();
+        Assert.True(Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1).Success);
+        var previousManifest = File.ReadAllBytes(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName));
+
+        File.WriteAllBytes(Path.Combine(fixture.Root, "corrupt.png"), [1, 2, 3]);
+        var corrupt = Wow335Exporter.Export(AddTextures(fixture.Project, ("Corrupt", "corrupt.png")),
+            fixture.ProjectPath, fixture.Output1);
+        Assert.False(corrupt.Success);
+        Assert.Contains(corrupt.Diagnostics, diagnostic => diagnostic.Code == "ASSET_TEXTURE_INVALID"
+            && diagnostic.Message.Contains("corrupt.png", StringComparison.Ordinal));
+        Assert.Equal(previousManifest, File.ReadAllBytes(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
+
+        WritePng(Path.Combine(fixture.Root, "bad-size.png"), 3, 2,
+            Enumerable.Repeat(SKColors.White, 6).ToArray(), withAlpha: true);
+        var incompatible = Wow335Exporter.Export(AddTextures(fixture.Project, ("BadSize", "bad-size.png")),
+            fixture.ProjectPath, fixture.Output2);
+        Assert.False(incompatible.Success);
+        Assert.Contains(incompatible.Diagnostics, diagnostic => diagnostic.Code == "ASSET_TEXTURE_INVALID"
+            && diagnostic.Message.Contains("powers of two", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(fixture.Output2));
+    }
+
+    [Fact]
+    public void ProjectWithoutCustomTexturesExportsWithoutCreatingAssetDirectories()
+    {
+        using var fixture = ExportFixture.Create();
+        var project = fixture.Project with
+        {
+            Frames = fixture.Project.Frames.Where(frame => frame.Name != "Image").ToArray(),
+            Editor = fixture.Project.Editor with
+            {
+                DesignObjects = fixture.Project.Editor.DesignObjects.Where(item => item.FrameName != "Image").ToArray(),
+                DesignOrder = fixture.Project.Editor.DesignOrder.Where(name => name != "Image").ToArray(),
+            },
+        };
+
+        var result = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
+        Assert.True(result.Success, result.Summary);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Output1, "assets")));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Output1, "textures")));
     }
 
     [Fact]
@@ -403,8 +499,10 @@ public sealed class Wow335ExportTests
         using var fixture = ExportFixture.Create();
         Directory.CreateDirectory(Path.Combine(fixture.Root, "a"));
         Directory.CreateDirectory(Path.Combine(fixture.Root, "b"));
-        File.WriteAllBytes(Path.Combine(fixture.Root, "a", "shared.png"), [10, 11]);
-        File.WriteAllBytes(Path.Combine(fixture.Root, "b", "shared.png"), [20, 21]);
+        WritePng(Path.Combine(fixture.Root, "a", "shared.png"), 2, 2,
+            Enumerable.Repeat(SKColors.Red, 4).ToArray(), withAlpha: true);
+        WritePng(Path.Combine(fixture.Root, "b", "shared.png"), 2, 2,
+            Enumerable.Repeat(SKColors.Blue, 4).ToArray(), withAlpha: true);
         var project = AddTextures(fixture.Project,
             ("A1", "a/shared.png"), ("A2", "a/shared.png"), ("B", "b/shared.png"));
 
@@ -430,7 +528,7 @@ public sealed class Wow335ExportTests
     {
         using var fixture = ExportFixture.Create();
         Directory.CreateDirectory(Path.Combine(fixture.Root, "copies"));
-        File.WriteAllBytes(Path.Combine(fixture.Root, "copies", "same.png"), [1, 2, 3]);
+        File.Copy(Path.Combine(fixture.Root, "panel.png"), Path.Combine(fixture.Root, "copies", "same.png"));
         var project = AddTextures(fixture.Project, ("Copy", "copies/same.png"));
         var result = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1);
         Assert.True(result.Success, result.Summary);
@@ -475,6 +573,7 @@ public sealed class Wow335ExportTests
         };
         Assert.True(Wow335Exporter.Export(withoutImage, fixture.ProjectPath, fixture.Output1).Success);
         Assert.False(File.Exists(Path.Combine(fixture.Output1, "assets", "panel.png")));
+        Assert.False(File.Exists(Path.Combine(fixture.Output1, "textures", "panel.tga")));
         Assert.Equal("keep", File.ReadAllText(userFile));
     }
 
@@ -487,6 +586,23 @@ public sealed class Wow335ExportTests
         File.WriteAllBytes(conflict, [99]);
         var exception = Assert.Throws<InvalidDataException>(() =>
             Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1 + Path.DirectorySeparatorChar));
+        Assert.Contains("not owned", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([99], File.ReadAllBytes(conflict));
+        Assert.False(File.Exists(Path.Combine(fixture.Output1, Wow335Exporter.ManifestFileName)));
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Output1, ".frameforge-staging-*"));
+    }
+
+    [Fact]
+    public void ExportWillNotOverwriteAnUnownedConflictingGeneratedTexture()
+    {
+        using var fixture = ExportFixture.Create();
+        Directory.CreateDirectory(Path.Combine(fixture.Output1, "textures"));
+        var conflict = Path.Combine(fixture.Output1, "textures", "panel.tga");
+        File.WriteAllBytes(conflict, [99]);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            Wow335Exporter.Export(fixture.Project, fixture.ProjectPath, fixture.Output1));
+
         Assert.Contains("not owned", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal([99], File.ReadAllBytes(conflict));
         Assert.False(File.Exists(Path.Combine(fixture.Output1, Wow335Exporter.ManifestFileName)));
@@ -574,18 +690,29 @@ public sealed class Wow335ExportTests
             Assert.Equal(11, result.Model!.Assets.Count);
             Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());
             using var assets = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, Wow335Exporter.AssetsFileName)));
+            var generatedCount = 0;
             foreach (var entry in assets.RootElement.GetProperty("assets").EnumerateArray())
             {
                 var source = entry.GetProperty("source").GetString()!;
                 Assert.StartsWith("assets/", source, StringComparison.Ordinal);
                 Assert.True(File.Exists(Path.Combine(destination, source.Replace('/', Path.DirectorySeparatorChar))));
+                if (entry.TryGetProperty("generatedFile", out var generated))
+                {
+                    generatedCount++;
+                    Assert.True(File.Exists(Path.Combine(destination, generated.GetString()!.Replace('/', Path.DirectorySeparatorChar))));
+                }
             }
+            Assert.Equal(generatedCount, Directory.EnumerateFiles(Path.Combine(destination, "textures"), "*.tga", SearchOption.AllDirectories).Count());
             var relocated = Path.Combine(Path.GetTempPath(), "frameforge-native-hunts-relocated-" + Guid.NewGuid().ToString("N"));
             Directory.Move(destination, relocated);
             destination = relocated;
             foreach (var entry in assets.RootElement.GetProperty("assets").EnumerateArray())
+            {
                 Assert.True(File.Exists(Path.Combine(destination, entry.GetProperty("source").GetString()!.Replace('/', Path.DirectorySeparatorChar))));
-            foreach (var forbiddenPattern in new[] { "*.blp", "*.mpq", "*.tga", "*.ttf", "*.otf" })
+                if (entry.TryGetProperty("generatedFile", out var generated))
+                    Assert.True(File.Exists(Path.Combine(destination, generated.GetString()!.Replace('/', Path.DirectorySeparatorChar))));
+            }
+            foreach (var forbiddenPattern in new[] { "*.blp", "*.mpq", "*.ttf", "*.otf" })
                 Assert.Empty(Directory.EnumerateFiles(destination, forbiddenPattern, SearchOption.AllDirectories));
         }
         finally
@@ -656,7 +783,8 @@ public sealed class Wow335ExportTests
         {
             var root = Path.Combine(Path.GetTempPath(), "frameforge-export-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            File.WriteAllBytes(Path.Combine(root, "panel.png"), [1, 2, 3]);
+            WritePng(Path.Combine(root, "panel.png"), 2, 2,
+                [SKColors.Red, SKColors.Green, SKColors.Blue, SKColors.Transparent], withAlpha: true);
             var frames = new FrameDef[]
             {
                 new() { Name = "Text1", Kind = FrameKind.FONTSTRING, Width = 100, Height = 20, Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER, Visual = new FrameVisual { Text = new TextVisual(null) } },
@@ -683,5 +811,35 @@ public sealed class Wow335ExportTests
             return new() { Root = root, ProjectPath = projectPath, Output1 = Path.Combine(root, "one"), Output2 = Path.Combine(root, "two"), Project = project };
         }
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
+    }
+
+    private static void WritePng(string path, int width, int height, IReadOnlyList<SKColor> pixels, bool withAlpha)
+    {
+        Assert.Equal(width * height, pixels.Count);
+        var info = new SKImageInfo(width, height,
+            withAlpha ? SKColorType.Rgba8888 : SKColorType.Rgb888x,
+            withAlpha ? SKAlphaType.Unpremul : SKAlphaType.Opaque);
+        using var bitmap = new SKBitmap(info);
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+            bitmap.SetPixel(x, y, pixels[y * width + x]);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        data.SaveTo(stream);
+    }
+
+    private static (int Width, int Height, int BitsPerPixel, int Descriptor, byte[] Bgra) DecodeTga(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        Assert.True(bytes.Length >= 18);
+        Assert.Equal(0, bytes[0]);
+        Assert.Equal(0, bytes[1]);
+        Assert.Equal(2, bytes[2]);
+        var width = BitConverter.ToUInt16(bytes, 12);
+        var height = BitConverter.ToUInt16(bytes, 14);
+        var pixels = bytes[18..];
+        Assert.Equal(width * height * 4, pixels.Length);
+        return (width, height, bytes[16], bytes[17], pixels);
     }
 }

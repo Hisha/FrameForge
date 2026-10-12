@@ -74,17 +74,32 @@ only as `editorPreviewDefault` in the manifest and is deliberately omitted from 
 initialization, leaving `SetValue` to addon Lua.
 
 Stock textures such as `Interface\TargetingFrame\UI-StatusBar` remain logical client references.
-Project-owned PNG, TGA, and BLP inputs are copied into the export's `assets/` directory. Each
-manifest entry names that package-relative source, its SHA-256, original project reference(s),
-logical `Interface\FrameForge\...` identity, and downstream packaging target. Identical content
-shares one packaged source file. Same-name files with different content receive deterministic
-hash suffixes instead of overwriting each other. PNG conversion and placement in a client patch
-remain downstream packaging responsibilities.
+Project-owned PNG, TGA, and BLP inputs are copied unchanged into the export's `assets/` directory.
+PNG inputs are also decoded through FrameForge's existing SkiaSharp codec and written to
+`textures/` as deterministic, uncompressed TGA type 2 files: 32-bit BGRA pixels, eight alpha bits,
+and a top-left origin. Opaque PNGs use alpha 255. RGB and alpha values, dimensions, and row order
+are preserved; sources are never resized or modified.
 
-Re-export replaces the four root contract files and its declared asset files. It removes a stale
-asset only when the previous version-2 FrameForge asset manifest proves ownership of that exact
-path; unrelated files in the selected directory are preserved. A conflicting unowned file blocks
-the export rather than being overwritten.
+WoW UI textures must have power-of-two width and height. The exporter rejects non-positive or
+non-power-of-two PNG dimensions and dimensions that cannot fit the TGA format's unsigned 16-bit
+fields. It does not impose a smaller fixed maximum because the effective upper bound in the 3.3.5a
+renderer also depends on the graphics device. Decode failures, incomplete pixel data, invalid
+generated headers, and incorrect generated lengths block publication.
+
+Each manifest entry retains the package-relative source, source SHA-256, original project
+reference(s), logical `Interface\FrameForge\...` identity, and packaging target. Converted PNG
+entries additionally record `generatedFile`, `generatedContentSha256`, `generatedFormat`, image
+dimensions, and the exact `requiredMpqDestination` ending in `.tga`. Identical content shares one
+packaged source file. Same-name files with different content receive deterministic hash suffixes
+instead of overwriting each other. Existing project-owned TGA and BLP inputs retain their prior
+source-packaging behavior; this exporter enhancement does not add BLP conversion.
+
+Re-export replaces the four root contract files and its declared source and generated texture
+files. It removes a stale file only when the previous version-2 FrameForge asset manifest proves
+ownership of that exact path; unrelated files in the selected directory are preserved. A
+conflicting unowned file blocks the export rather than being overwritten. PNG conversion occurs in
+the staging directory, so conversion or validation failure leaves a previous successful package
+unchanged.
 
 ## Validation
 

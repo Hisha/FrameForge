@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -52,6 +53,8 @@ public sealed record WowExportAsset(
     string LogicalTexture,
     string PackagingTarget,
     string Conversion,
+    int? TextureWidth,
+    int? TextureHeight,
     IReadOnlyList<string> Consumers);
 
 public sealed record WowExportModel(
@@ -398,7 +401,8 @@ public static partial class Wow335ExportBuilder
     private static string SafePathSegment(string value) => SafeIdentifier(value).Trim('_');
 
     private sealed record AssetCandidate(string ProjectReference, string PhysicalPath, string ContentSha256,
-        string Extension, string BaseFileName, string BaseLogicalStem, IReadOnlyList<string> Consumers);
+        string Extension, string BaseFileName, string BaseLogicalStem, IReadOnlyList<string> Consumers,
+        int? TextureWidth, int? TextureHeight);
 
     private static IReadOnlyList<WowExportAsset> BuildAssets(
         string projectName,
@@ -421,10 +425,26 @@ public static partial class Wow335ExportBuilder
                     $"Project artwork '{pair.Key}' must be PNG, TGA, or BLP.", frameName));
                 continue;
             }
+            int? textureWidth = null;
+            int? textureHeight = null;
+            if (extension == ".png")
+            {
+                try
+                {
+                    using var source = new FileStream(physical!, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    (textureWidth, textureHeight) = PngTgaConverter.Validate(source);
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException)
+                {
+                    diagnostics.Add(new(ExportSeverity.Error, "ASSET_TEXTURE_INVALID",
+                        $"Project artwork '{pair.Key}' cannot be converted for WoW 3.3.5a: {ex.Message}", frameName));
+                    continue;
+                }
+            }
             var stem = SafePathSegment(Path.GetFileNameWithoutExtension(pair.Key));
             if (stem.Length == 0) stem = "asset";
             candidates.Add(new(pair.Key, physical!, hash!, extension, stem + extension, stem,
-                [.. pair.Value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]));
+                [.. pair.Value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)], textureWidth, textureHeight));
         }
 
         var fileCollisions = candidates.GroupBy(item => item.BaseFileName, StringComparer.OrdinalIgnoreCase)
@@ -468,7 +488,9 @@ public static partial class Wow335ExportBuilder
                 group.Key.ContentSha256,
                 logical,
                 $"textures/{group.Key.LogicalStem}.tga",
-                canonical.Extension == ".png" ? "png-to-wow-compatible-tga-or-blp" : "copy-wow-compatible-artwork",
+                canonical.Extension == ".png" ? "png-to-uncompressed-32-bit-tga" : "copy-wow-compatible-artwork",
+                canonical.TextureWidth,
+                canonical.TextureHeight,
                 [.. members.SelectMany(item => item.Candidate.Consumers).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]));
         }
         logicalByProjectReference = logicalMap;
@@ -559,6 +581,7 @@ public static class Wow335Exporter
         try
         {
             Directory.CreateDirectory(staging);
+            var generatedHashes = new Dictionary<string, string>(StringComparer.Ordinal);
             var stagedFiles = new[]
             {
                 Path.Combine(staging, XmlFileName), Path.Combine(staging, ManifestFileName),
@@ -576,9 +599,36 @@ public static class Wow335Exporter
                     throw new InvalidDataException($"Project artwork '{asset.ProjectReferences[0]}' changed while the export was being written.");
             }
 
+            foreach (var asset in model.Assets.Where(IsPngConversion))
+            {
+                try
+                {
+                    var sourcePath = ResolvePackagePath(staging, asset.PackageSource);
+                    var targetPath = ResolvePackagePath(staging, asset.PackagingTarget);
+                    Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                    using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var target = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        var dimensions = PngTgaConverter.Convert(source, target);
+                        if (dimensions.Width != asset.TextureWidth || dimensions.Height != asset.TextureHeight)
+                            throw new InvalidDataException("PNG dimensions changed while the export was being written.");
+                    }
+                    ValidateGeneratedTga(targetPath, asset.TextureWidth!.Value, asset.TextureHeight!.Value);
+                    using var generated = new FileStream(targetPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    generatedHashes[asset.PackagingTarget] = Convert.ToHexString(SHA256.HashData(generated));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+                {
+                    var diagnostic = new ExportDiagnostic(ExportSeverity.Error, "ASSET_CONVERSION_FAILED",
+                        $"Project artwork '{asset.ProjectReferences[0]}' could not be converted to '{asset.PackagingTarget}': {ex.Message}");
+                    var failedDiagnostics = model.Diagnostics.Append(diagnostic).ToArray();
+                    return new(false, model with { Diagnostics = failedDiagnostics }, failedDiagnostics, []);
+                }
+            }
+
             File.WriteAllText(stagedFiles[0], WriteXml(model), new UTF8Encoding(false));
             File.WriteAllText(stagedFiles[1], WriteManifest(model), new UTF8Encoding(false));
-            File.WriteAllText(stagedFiles[2], WriteAssets(model), new UTF8Encoding(false));
+            File.WriteAllText(stagedFiles[2], WriteAssets(model, generatedHashes), new UTF8Encoding(false));
             var roundTrip = FrameXmlImporter.ImportFile(stagedFiles[0]);
             if (!roundTrip.Ok || roundTrip.Project is null)
                 throw new InvalidDataException("Generated FrameXML failed the independent importer self-check: " +
@@ -597,7 +647,7 @@ public static class Wow335Exporter
             using (var reader = XmlReader.Create(stagedFiles[0]))
                 while (reader.Read()) { }
 
-            PublishStagedPackage(staging, destinationRoot, stagedFiles, finalFiles, model.Assets);
+            PublishStagedPackage(staging, destinationRoot, stagedFiles, finalFiles, model.Assets, generatedHashes);
             return new(true, model, model.Diagnostics, finalFiles);
         }
         finally
@@ -610,11 +660,14 @@ public static class Wow335Exporter
     }
 
     private static void PublishStagedPackage(string staging, string destinationRoot,
-        IReadOnlyList<string> stagedFiles, IReadOnlyList<string> finalFiles, IReadOnlyList<WowExportAsset> assets)
+        IReadOnlyList<string> stagedFiles, IReadOnlyList<string> finalFiles, IReadOnlyList<WowExportAsset> assets,
+        IReadOnlyDictionary<string, string> generatedHashes)
     {
         var previouslyManaged = ReadPreviouslyManagedAssets(destinationRoot);
         var newAssets = assets.GroupBy(asset => asset.PackageSource, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().ContentSha256, StringComparer.Ordinal);
+        foreach (var generated in generatedHashes)
+            newAssets[generated.Key] = generated.Value;
 
         foreach (var pair in newAssets)
         {
@@ -671,6 +724,15 @@ public static class Wow335Exporter
                     continue;
                 _ = ResolvePackagePath(destinationRoot, relative);
                 result[relative] = hash.GetString()!;
+
+                if (!asset.TryGetProperty("generatedFile", out var generatedFile) || generatedFile.ValueKind != JsonValueKind.String
+                    || !asset.TryGetProperty("generatedContentSha256", out var generatedHash) || generatedHash.ValueKind != JsonValueKind.String)
+                    continue;
+                var generatedRelative = generatedFile.GetString();
+                if (generatedRelative is null || !generatedRelative.StartsWith("textures/", StringComparison.Ordinal))
+                    continue;
+                _ = ResolvePackagePath(destinationRoot, generatedRelative);
+                result[generatedRelative] = generatedHash.GetString()!;
             }
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidDataException)
@@ -678,6 +740,24 @@ public static class Wow335Exporter
             return new(StringComparer.Ordinal);
         }
         return result;
+    }
+
+    private static bool IsPngConversion(WowExportAsset asset) =>
+        asset.Conversion == "png-to-uncompressed-32-bit-tga";
+
+    private static void ValidateGeneratedTga(string path, int width, int height)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> header = stackalloc byte[18];
+        stream.ReadExactly(header);
+        if (header[0] != 0 || header[1] != 0 || header[2] != 2
+            || BinaryPrimitives.ReadUInt16LittleEndian(header[12..14]) != width
+            || BinaryPrimitives.ReadUInt16LittleEndian(header[14..16]) != height
+            || header[16] != 32 || header[17] != 0x28)
+            throw new InvalidDataException("Generated TGA header is not uncompressed 32-bit true-color with a top-left origin.");
+        var expectedLength = checked(18L + (long)width * height * 4);
+        if (stream.Length != expectedLength)
+            throw new InvalidDataException($"Generated TGA length is {stream.Length} bytes; expected {expectedLength}.");
     }
 
     internal static string ResolvePackagePath(string root, string relative)
@@ -843,11 +923,13 @@ public static class Wow335Exporter
         }).ToArray();
         return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, rootParentRuntimeId = rootParent, stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = rootParent == "UIParent" ? null : rootParent, strategy = "artwork-and-template-reference-only" }, states, bindings }, JsonOptions());
     }
-    public static string WriteAssets(WowExportModel model) => JsonSerializer.Serialize(new
+    public static string WriteAssets(WowExportModel model) => WriteAssets(model, null);
+
+    private static string WriteAssets(WowExportModel model, IReadOnlyDictionary<string, string>? generatedHashes) => JsonSerializer.Serialize(new
     {
         schema = "frameforge-wow335-assets",
         version = 2,
-        note = "Project-owned source artwork is packaged below this manifest. Stock client artwork is referenced and never copied.",
+        note = "Project-owned source artwork is packaged below this manifest; PNG sources also produce game-ready TGA files. Stock client artwork is referenced and never copied.",
         assets = model.Assets.Select(a => new
         {
             source = a.PackageSource,
@@ -856,13 +938,22 @@ public static class Wow335Exporter
             logicalTexture = a.LogicalTexture,
             packagingTarget = a.PackagingTarget,
             conversion = a.Conversion,
+            width = a.TextureWidth,
+            height = a.TextureHeight,
+            generatedFile = IsPngConversion(a) ? a.PackagingTarget : null,
+            generatedContentSha256 = IsPngConversion(a) && generatedHashes is not null
+                && generatedHashes.TryGetValue(a.PackagingTarget, out var generatedHash) ? generatedHash : null,
+            requiredMpqDestination = IsPngConversion(a)
+                ? a.LogicalTexture.Replace('\\', '/') + ".tga"
+                : null,
+            generatedFormat = IsPngConversion(a) ? "tga-type-2-bgra32-top-left" : null,
             consumers = a.Consumers,
         }),
     }, JsonOptions());
     public static string WriteReport(WowExportModel model)
     {
         var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
-        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Root: {model.RootRuntimeName}, parent {rootParent}, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine(rootParent == "UIParent" ? "Stock foundation: geometry provenance only; not a runtime parent; not copied" : $"Stock foundation: runtime parent {rootParent}; stock definitions and artwork not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
+        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Generated TGA textures: {model.Assets.Count(IsPngConversion)} (uncompressed BGRA32, top-left origin)"); b.AppendLine($"Root: {model.RootRuntimeName}, parent {rootParent}, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine(rootParent == "UIParent" ? "Stock foundation: geometry provenance only; not a runtime parent; not copied" : $"Stock foundation: runtime parent {rootParent}; stock definitions and artwork not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
         foreach (var d in model.Diagnostics.OrderBy(d => d.Severity).ThenBy(d => d.Code, StringComparer.Ordinal).ThenBy(d => d.FrameName, StringComparer.Ordinal)) b.AppendLine($"{d.Severity.ToString().ToUpperInvariant()} {d.Code}{(d.FrameName is null ? "" : $" [{d.FrameName}]")}: {d.Message}");
         return b.ToString().Replace("\r\n", "\n");
     }
