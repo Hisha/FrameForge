@@ -15,8 +15,16 @@ then written as:
 - `export-report.txt`: deterministic diagnostics and importer self-check result.
 - `assets/`: deduplicated project-owned source artwork required by the package.
 
-Desktop exposes this through **Export → WoW 3.3.5a Layout…**. The same path is available for
-automation as `FrameForge --export-wow335 <project.fforge.json> <directory>`.
+Desktop exposes preferred **WoW 3.3.5a — BLP2/DXT5…**, the same encoder with source resolution
+preserved, and **Legacy TGA…** under **Export**. Automation uses:
+
+```text
+FrameForge --export-wow335 <project.fforge.json> <directory> \
+  [--texture-format blp2|tga] [--preserve-source-resolution]
+```
+
+The command-line default is BLP2/DXT5. The three-argument Core API overload retains legacy TGA
+behavior for existing callers; new callers select `Wow335ExportOptions.Preferred` explicitly.
 
 ## Runtime identity and state
 
@@ -45,11 +53,12 @@ language.
 ## Layout and draw order
 
 The exporter resolves the existing v1 project geometry and writes logical WoW anchors, offsets,
-width, and height; it never writes Avalonia canvas coordinates. Its generated root is an
-independent `UIParent` child with explicit size and placement. Anchors against the screen or an
-editor-only/stock foundation are rebased to that root, while relationships between authored
-objects remain native parent-relative anchors. Moving the root therefore moves the full authored
-composition without changing the design's initial screen position.
+width, and height; it never writes Avalonia canvas coordinates. Its generated root has explicit
+size and placement and retains a validated authored external parent (or falls back to `UIParent`).
+Anchors against the screen or an editor-only foundation are rebased to that root, while
+relationships between authored objects remain native parent-relative anchors. Moving the root
+therefore moves the full authored composition without changing the design's initial screen
+position.
 
 Texture and FontString regions are hosted in generated frames because WoW regions require an
 owning frame and cross-region authored order needs deterministic frame levels. Native Frames and
@@ -75,39 +84,47 @@ initialization, leaving `SetValue` to addon Lua.
 
 Stock textures such as `Interface\TargetingFrame\UI-StatusBar` remain logical client references.
 Project-owned PNG, TGA, and BLP inputs are copied unchanged into the export's `assets/` directory.
-PNG inputs are also decoded through FrameForge's existing SkiaSharp codec and written to
-`textures/` as deterministic, uncompressed TGA type 2 files: 32-bit BGRA pixels, eight alpha bits,
-and a top-left origin. Opaque PNGs use alpha 255. RGB and alpha values and row order are preserved;
-sources are never resized or modified.
+PNG inputs preferably produce BLP2 type-1 textures using DXT compression, eight-bit alpha,
+DXT5/BC3 alpha encoding 7, and a complete mip chain. `BCnEncoder.Net` performs only BC3 block
+compression. FrameForge writes and verifies the BLP2 container, every mip offset and length, file
+bounds, and an independent base-mip decode. Legacy export still writes deterministic,
+uncompressed TGA type 2: 32-bit BGRA, eight alpha bits, and top-left origin.
 
-WoW 3.3.5a UI textures use power-of-two dimensions. A non-power-of-two PNG is placed unchanged at
-the top-left of the next power-of-two canvas; every added pixel is transparent black. FrameForge
-does not resample the image. Exported rectangular texture coordinates are composed with the
-source-to-padded width and height ratios, including coordinates that already crop the source, so
-different objects can continue to share and crop one generated TGA. The editor model currently
-supports the four-edge rectangular FrameXML mapping; it does not contain an eight-value corner
-mapping to transform.
+BLP preparation uses a conservative usage-based policy. For every shared PNG, FrameForge inspects
+all consumers, their exported rectangles, and each rectangular crop. It chooses enough source
+pixels for two texels per largest displayed UI pixel, preserves the source aspect ratio, never
+upscales, and uses the largest requirement across consumers. The prepared image is resampled with
+a deterministic, alpha-aware premultiplied area filter and placed at the top-left of the next
+power-of-two canvas. **Preserve source resolution** disables only downsampling; power-of-two
+padding and coordinate composition still apply. This override is appropriate when future runtime
+use is not represented by the authored consumers.
+
+Exported rectangular texture coordinates are composed with the prepared-to-padded width and
+height ratios, including coordinates that already crop the source, so different objects continue
+to share and crop one generated texture. Object positions, dimensions, anchors, hierarchy,
+states, text, fonts, and colors are unchanged. The editor model currently supports the four-edge
+rectangular FrameXML mapping; it does not contain an eight-value corner mapping to transform.
 
 The coordinate composition maps corresponding source texel centres exactly. No opaque edge
 extrusion is written because that would violate the transparent-black padding contract. Precise
 filtering at the outermost edge remains dependent on the WoW 3.3.5a renderer and graphics device;
 the exporter does not claim a client-side filtering result without an in-game test.
 
-The exporter rejects non-positive PNG dimensions and source dimensions whose next power of two
-cannot fit the TGA format's unsigned 16-bit fields. It does not impose a smaller fixed maximum
-because the effective upper bound in the 3.3.5a renderer also depends on the graphics device.
-Decode failures, incomplete pixel data, invalid generated headers, and incorrect generated lengths
-block publication.
+The exporter rejects non-positive dimensions, invalid usage calculations, and textures requiring
+more than BLP2's sixteen mip slots. Decode failures, incomplete pixel data, malformed headers,
+incorrect mip lengths or offsets, out-of-bounds payloads, trailing payload bytes, and independent
+decode results outside conservative lossy-error limits block publication.
 
 Each manifest entry retains the package-relative source, source SHA-256, original project
 reference(s), logical `Interface\FrameForge\...` identity, and packaging target. Converted PNG
 entries additionally record `generatedFile`, `generatedContentSha256`, `generatedFormat`, image
-dimensions, and the exact `requiredMpqDestination` ending in `.tga`. `sourceWidth` and
-`sourceHeight` describe the PNG; `width` and `height` describe the generated power-of-two TGA; and
-`paddingApplied` records whether they differ. Identical content shares one packaged source file.
+dimensions, and the exact `.blp` or `.tga` `requiredMpqDestination`. `sourceWidth` and
+`sourceHeight` describe the PNG; `preparedWidth` and `preparedHeight` describe the usage-sized
+artwork; `width` and `height` describe the power-of-two texture; and `paddingApplied`, `resized`,
+`mipCount`, and independent-decode error metrics describe the output. Identical content shares one
+packaged source file.
 Same-name files with different content receive deterministic hash suffixes instead of overwriting
-each other. Existing project-owned TGA and BLP inputs retain their prior source-packaging behavior;
-this exporter enhancement does not add BLP conversion.
+each other. Existing project-owned TGA and BLP inputs retain their prior source-packaging behavior.
 
 Re-export replaces the four root contract files and its declared source and generated texture
 files. It removes a stale file only when the previous version-2 FrameForge asset manifest proves
@@ -115,6 +132,19 @@ ownership of that exact path; unrelated files in the selected directory are pres
 conflicting unowned file blocks the export rather than being overwritten. PNG conversion occurs in
 the staging directory, so conversion or validation failure leaves a previous successful package
 unchanged.
+
+## Content Manager integration
+
+Generated XML keeps extensionless logical references such as
+`Interface\FrameForge\Dungeon_Finder_UI\hunt_header`; the MPQ destination recorded by the asset
+manifest supplies the matching `.blp` or `.tga` file. Existing explicit EPF `content` entries can
+therefore package BLP output without a Content Manager change.
+
+Content Manager's optional `frameForgeWowUi` ingestion currently consumes the version-2 source-PNG
+contract and performs its own PNG-to-TGA conversion. It does not ingest FrameForge's generated BLP
+payload. A BLP-based EPF must declare the generated `.blp` files as ordinary explicit content until
+that separate component deliberately adds BLP ingestion. Do not include both generated TGA and BLP
+destinations for the same logical texture in one test package.
 
 ## Validation
 

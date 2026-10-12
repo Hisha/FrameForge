@@ -43,6 +43,8 @@ Dependency direction: `FrameForge.Desktop → FrameForge.Core`.
 - Retained texture/text/button/status-bar metadata with honest Preview stand-ins
 - Real TGA and verified WoW 3.3.5a BLP texture rendering from project assets, manual roots, or an
   application-managed cache populated on demand from the user's own client
+- Preferred WoW 3.3.5a BLP2/DXT5 export with usage-based resolution, full mip chains, independent
+  decode verification, and selectable legacy TGA/source-resolution compatibility modes
 - Focused build-12340 stock-definition resolution for Native Hunts' external parent, character-tab
   template, and six `GameFont*` styles, with machine-local Friz Quadrata loading and provenance
 - Explicit design-time **XML Defaults**, **Idle**, **Standard Hunt**, **Elite Hunt**, and

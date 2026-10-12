@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Xml.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -221,6 +222,94 @@ public sealed class Wow335ExportTests
         Assert.Equal(new[] { Path.Combine(fixture.Output1, "assets", "panel.png") },
             Directory.EnumerateFiles(fixture.Output1, "*.png", SearchOption.AllDirectories));
         Assert.Empty(Directory.EnumerateFiles(fixture.Output1, "*.ttf", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void PreferredBlp2ExportIsDeterministicMipmappedDecodedAndUsageSized()
+    {
+        using var fixture = ExportFixture.Create();
+        var pixels = Enumerable.Range(0, 16 * 8).Select(index =>
+            new SKColor((byte)(index * 17), (byte)(255 - index * 7), (byte)(index * 29),
+                (byte)(index % 5 == 0 ? 0 : index % 3 == 0 ? 112 : 255))).ToArray();
+        WritePng(Path.Combine(fixture.Root, "shared-rect.png"), 16, 8, pixels, withAlpha: true);
+        var project = AddTextures(fixture.Project, ("SharedFull", "shared-rect.png"), ("SharedCrop", "shared-rect.png"));
+        project = project with
+        {
+            Frames = project.Frames.Select(frame => frame.Name switch
+            {
+                "SharedFull" => frame with
+                {
+                    Width = 3,
+                    Height = 1,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, TexCoords.Full) },
+                },
+                "SharedCrop" => frame with
+                {
+                    Width = 2,
+                    Height = 2,
+                    Visual = new FrameVisual { Texture = new TextureVisual(null, new(.25, .75, 0, 1)) },
+                },
+                _ => frame,
+            }).ToArray(),
+        };
+
+        var first = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output1, Wow335ExportOptions.Preferred);
+        var second = Wow335Exporter.Export(project, fixture.ProjectPath, fixture.Output2, Wow335ExportOptions.Preferred);
+        Assert.True(first.Success, string.Join("\n", first.Diagnostics));
+        Assert.True(second.Success, string.Join("\n", second.Diagnostics));
+        var asset = Assert.Single(first.Model!.Assets, item => item.ProjectReferences.Contains("shared-rect.png"));
+        Assert.Equal((16, 8, 8, 4, 8, 4, 4),
+            (asset.SourceWidth, asset.SourceHeight, asset.PreparedWidth, asset.PreparedHeight,
+                asset.TextureWidth, asset.TextureHeight, asset.MipCount));
+        var firstPath = Path.Combine(fixture.Output1, "textures", "shared_rect.blp");
+        var secondPath = Path.Combine(fixture.Output2, "textures", "shared_rect.blp");
+        Assert.Equal(File.ReadAllBytes(firstPath), File.ReadAllBytes(secondPath));
+        using (var stream = File.OpenRead(firstPath))
+            Assert.Equal(4, Blp2Dxt5Converter.Verify(stream, new(16, 8, 8, 4, 8, 4, 4)).MipCount);
+
+        var bytes = File.ReadAllBytes(firstPath);
+        Assert.Equal("BLP2", System.Text.Encoding.ASCII.GetString(bytes, 0, 4));
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4, 4)));
+        Assert.Equal(new byte[] { 2, 8, 7, 1 }, bytes[8..12]);
+        Assert.Equal(8u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(12, 4)));
+        Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16, 4)));
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.AssetsFileName)));
+        var entry = manifest.RootElement.GetProperty("assets").EnumerateArray()
+            .Single(item => item.GetProperty("projectReferences").EnumerateArray()
+                .Any(reference => reference.GetString() == "shared-rect.png"));
+        Assert.Equal("textures/shared_rect.blp", entry.GetProperty("generatedFile").GetString());
+        Assert.Equal("Interface/FrameForge/Fixture/shared_rect.blp", entry.GetProperty("requiredMpqDestination").GetString());
+        Assert.Equal("blp2-dxt5-alpha8-mipmapped", entry.GetProperty("generatedFormat").GetString());
+        Assert.True(entry.GetProperty("resized").GetBoolean());
+        Assert.Equal(4, entry.GetProperty("mipCount").GetInt32());
+        Assert.InRange(entry.GetProperty("decodedPremultipliedColorMeanAbsoluteError").GetDouble(), 0, 64);
+        Assert.InRange(entry.GetProperty("decodedAlphaMeanAbsoluteError").GetDouble(), 0, 32);
+        Assert.Contains("hidden=\"true\"", File.ReadAllText(Path.Combine(fixture.Output1, Wow335Exporter.XmlFileName)));
+    }
+
+    [Fact]
+    public void Blp2PreserveSourceOptionKeepsResolutionAndConservativePolicyNeverUpscales()
+    {
+        using var fixture = ExportFixture.Create();
+        WritePng(Path.Combine(fixture.Root, "large.png"), 16, 8,
+            Enumerable.Repeat(new SKColor(50, 100, 150, 200), 16 * 8).ToArray(), withAlpha: true);
+        var project = AddTextures(fixture.Project, ("Large", "large.png"));
+        project = project with
+        {
+            Frames = project.Frames.Select(frame => frame.Name == "Large"
+                ? frame with { Width = 2, Height = 1 }
+                : frame).ToArray(),
+        };
+        var preserved = Wow335ExportBuilder.Build(project, fixture.ProjectPath,
+            Wow335ExportOptions.Preferred with { ResolutionPolicy = WowTextureResolutionPolicy.PreserveSource });
+        var conservative = Wow335ExportBuilder.Build(project, fixture.ProjectPath, Wow335ExportOptions.Preferred);
+        var preservedAsset = Assert.Single(preserved.Assets, item => item.ProjectReferences.Contains("large.png"));
+        var conservativeAsset = Assert.Single(conservative.Assets, item => item.ProjectReferences.Contains("large.png"));
+        Assert.Equal((16, 8), (preservedAsset.PreparedWidth, preservedAsset.PreparedHeight));
+        Assert.Equal((4, 2), (conservativeAsset.PreparedWidth, conservativeAsset.PreparedHeight));
+        Assert.True(conservativeAsset.PreparedWidth <= conservativeAsset.SourceWidth);
+        Assert.True(conservativeAsset.PreparedHeight <= conservativeAsset.SourceHeight);
     }
 
     [Fact]
@@ -786,7 +875,7 @@ public sealed class Wow335ExportTests
             Assert.True(result.Success, result.Summary);
             Assert.Equal(sourceBefore, File.ReadAllBytes(path));
             var xml = File.ReadAllText(Path.Combine(destination, Wow335Exporter.XmlFileName));
-            Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"LFDParentFrame\">", xml);
+            Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"LFDParentFrame\" hidden=\"true\">", xml);
             Assert.DoesNotContain("<Frame name=\"LFDParentFrame\"", xml);
             Assert.Single(Regex.Matches(xml, "relativeTo=\"LFDParentFrame\"").Cast<Match>());
             Assert.Contains("Round-trip self-check: PASS (49/49 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));

@@ -14,6 +14,22 @@ namespace FrameForge.Core.Export;
 
 public enum ExportSeverity { Warning, Error }
 
+public enum WowTextureFormat { Blp2Dxt5, Tga }
+
+public enum WowTextureResolutionPolicy { Conservative, PreserveSource }
+
+/// <summary>Options for generated PNG textures. BLP2/DXT5 is the preferred WoW 3.3.5a path.</summary>
+public sealed record Wow335ExportOptions
+{
+    public static Wow335ExportOptions Preferred { get; } = new();
+    public static Wow335ExportOptions LegacyTga { get; } = new() { TextureFormat = WowTextureFormat.Tga };
+
+    public WowTextureFormat TextureFormat { get; init; } = WowTextureFormat.Blp2Dxt5;
+    public WowTextureResolutionPolicy ResolutionPolicy { get; init; } = WowTextureResolutionPolicy.Conservative;
+    /// <summary>Target source texels per largest displayed UI pixel before power-of-two padding.</summary>
+    public double TexelsPerUiPixel { get; init; } = 2;
+}
+
 public sealed record ExportDiagnostic(ExportSeverity Severity, string Code, string Message, string? FrameName = null);
 
 public sealed record WowExportObject(
@@ -55,8 +71,11 @@ public sealed record WowExportAsset(
     string Conversion,
     int? SourceWidth,
     int? SourceHeight,
+    int? PreparedWidth,
+    int? PreparedHeight,
     int? TextureWidth,
     int? TextureHeight,
+    int? MipCount,
     IReadOnlyList<string> Consumers);
 
 public sealed record WowExportModel(
@@ -85,8 +104,13 @@ public static partial class Wow335ExportBuilder
 {
     private static readonly string[] DrawLayers = ["BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"];
 
-    public static WowExportModel Build(Project project, string? projectFilePath)
+    public static WowExportModel Build(Project project, string? projectFilePath) =>
+        Build(project, projectFilePath, Wow335ExportOptions.LegacyTga);
+
+    public static WowExportModel Build(Project project, string? projectFilePath, Wow335ExportOptions options)
     {
+        if (!double.IsFinite(options.TexelsPerUiPixel) || options.TexelsPerUiPixel <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "TexelsPerUiPixel must be finite and positive.");
         var diagnostics = new List<ExportDiagnostic>();
         var stateIds = project.Editor.DesignStates.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         if (project.Editor.DesignStates.Any(s => string.IsNullOrWhiteSpace(s.Id) || string.IsNullOrWhiteSpace(s.Name)))
@@ -206,7 +230,7 @@ public static partial class Wow335ExportBuilder
         }
         objects = objects.Select(item => item with { FrameLevel = ResolveLevel(item) }).ToList();
 
-        var assets = BuildAssets(project.Name, projectDirectory, assetConsumers, assetFrames, diagnostics,
+        var assets = BuildAssets(project.Name, projectDirectory, assetConsumers, assetFrames, objects, options, diagnostics,
             out var logicalByProjectReference, out var assetByProjectReference);
         objects = objects.Select(item => item.Metadata.DesignAsset is { Length: > 0 } reference
                 && logicalByProjectReference.TryGetValue(NormalizePortablePath(reference), out var logical)
@@ -405,13 +429,16 @@ public static partial class Wow335ExportBuilder
 
     private sealed record AssetCandidate(string ProjectReference, string PhysicalPath, string ContentSha256,
         string Extension, string BaseFileName, string BaseLogicalStem, IReadOnlyList<string> Consumers,
-        int? SourceWidth, int? SourceHeight, int? TextureWidth, int? TextureHeight);
+        int? SourceWidth, int? SourceHeight, int? PreparedWidth, int? PreparedHeight,
+        int? TextureWidth, int? TextureHeight, int? MipCount);
 
     private static IReadOnlyList<WowExportAsset> BuildAssets(
         string projectName,
         string? projectDirectory,
         IReadOnlyDictionary<string, List<string>> assetConsumers,
         IReadOnlyDictionary<string, List<string>> assetFrames,
+        IReadOnlyList<WowExportObject> objects,
+        Wow335ExportOptions options,
         List<ExportDiagnostic> diagnostics,
         out IReadOnlyDictionary<string, string> logicalByProjectReference,
         out IReadOnlyDictionary<string, WowExportAsset> assetByProjectReference)
@@ -431,18 +458,54 @@ public static partial class Wow335ExportBuilder
             }
             int? sourceWidth = null;
             int? sourceHeight = null;
+            int? preparedWidth = null;
+            int? preparedHeight = null;
             int? textureWidth = null;
             int? textureHeight = null;
+            int? mipCount = null;
             if (extension == ".png")
             {
                 try
                 {
                     using var source = new FileStream(physical!, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    var layout = PngTgaConverter.Validate(source);
-                    sourceWidth = layout.SourceWidth;
-                    sourceHeight = layout.SourceHeight;
-                    textureWidth = layout.Width;
-                    textureHeight = layout.Height;
+                    if (options.TextureFormat == WowTextureFormat.Tga)
+                    {
+                        var layout = PngTgaConverter.Validate(source);
+                        sourceWidth = preparedWidth = layout.SourceWidth;
+                        sourceHeight = preparedHeight = layout.SourceHeight;
+                        textureWidth = layout.Width;
+                        textureHeight = layout.Height;
+                        mipCount = 1;
+                    }
+                    else
+                    {
+                        var dimensions = Blp2Dxt5Converter.ReadPngDimensions(source);
+                        var objectBySource = objects.ToDictionary(item => item.SourceName, StringComparer.Ordinal);
+                        var requiredWidth = 1d;
+                        var requiredHeight = 1d;
+                        foreach (var consumerFrame in assetFrames[pair.Key])
+                        {
+                            if (!objectBySource.TryGetValue(consumerFrame, out var consumer))
+                                continue;
+                            var coordinates = consumer.Frame.Visual?.Texture?.TexCoords ?? TexCoords.Full;
+                            if (!coordinates.IsValid || coordinates.Width <= 0 || coordinates.Height <= 0)
+                                continue;
+                            requiredWidth = Math.Max(requiredWidth,
+                                consumer.ExportFrame.Width * options.TexelsPerUiPixel / coordinates.Width);
+                            requiredHeight = Math.Max(requiredHeight,
+                                consumer.ExportFrame.Height * options.TexelsPerUiPixel / coordinates.Height);
+                        }
+                        var layout = Blp2Dxt5Converter.CreateLayout(dimensions.Width, dimensions.Height,
+                            requiredWidth, requiredHeight,
+                            options.ResolutionPolicy == WowTextureResolutionPolicy.PreserveSource);
+                        sourceWidth = layout.SourceWidth;
+                        sourceHeight = layout.SourceHeight;
+                        preparedWidth = layout.PreparedWidth;
+                        preparedHeight = layout.PreparedHeight;
+                        textureWidth = layout.Width;
+                        textureHeight = layout.Height;
+                        mipCount = layout.MipCount;
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException)
                 {
@@ -455,7 +518,7 @@ public static partial class Wow335ExportBuilder
             if (stem.Length == 0) stem = "asset";
             candidates.Add(new(pair.Key, physical!, hash!, extension, stem + extension, stem,
                 [.. pair.Value.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-                sourceWidth, sourceHeight, textureWidth, textureHeight));
+                sourceWidth, sourceHeight, preparedWidth, preparedHeight, textureWidth, textureHeight, mipCount));
         }
 
         var fileCollisions = candidates.GroupBy(item => item.BaseFileName, StringComparer.OrdinalIgnoreCase)
@@ -498,12 +561,15 @@ public static partial class Wow335ExportBuilder
                 canonicalPackageByHash[group.Key.ContentSha256],
                 group.Key.ContentSha256,
                 logical,
-                $"textures/{group.Key.LogicalStem}.tga",
-                canonical.Extension == ".png" ? "png-to-uncompressed-32-bit-tga" : "copy-wow-compatible-artwork",
+                $"textures/{group.Key.LogicalStem}{(canonical.Extension == ".png" && options.TextureFormat == WowTextureFormat.Blp2Dxt5 ? ".blp" : ".tga")}",
+                canonical.Extension == ".png" ? "png-to-wow-compatible-tga-or-blp" : "copy-wow-compatible-artwork",
                 canonical.SourceWidth,
                 canonical.SourceHeight,
+                canonical.PreparedWidth,
+                canonical.PreparedHeight,
                 canonical.TextureWidth,
                 canonical.TextureHeight,
+                canonical.MipCount,
                 [.. members.SelectMany(item => item.Candidate.Consumers).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]));
         }
         logicalByProjectReference = logicalMap;
@@ -519,11 +585,11 @@ public static partial class Wow335ExportBuilder
         List<ExportDiagnostic> diagnostics)
     {
         if (item.Kind != FrameKind.TEXTURE
-            || asset.SourceWidth is not { } sourceWidth
-            || asset.SourceHeight is not { } sourceHeight
+            || asset.PreparedWidth is not { } preparedWidth
+            || asset.PreparedHeight is not { } preparedHeight
             || asset.TextureWidth is not { } textureWidth
             || asset.TextureHeight is not { } textureHeight
-            || (sourceWidth == textureWidth && sourceHeight == textureHeight))
+            || (preparedWidth == textureWidth && preparedHeight == textureHeight))
             return item;
 
         var visual = item.ExportFrame.Visual ?? new FrameVisual();
@@ -536,8 +602,8 @@ public static partial class Wow335ExportBuilder
             return item;
         }
 
-        var widthScale = (double)sourceWidth / textureWidth;
-        var heightScale = (double)sourceHeight / textureHeight;
+        var widthScale = (double)preparedWidth / textureWidth;
+        var heightScale = (double)preparedHeight / textureHeight;
         var transformed = new TexCoords(
             coordinates.Left * widthScale,
             coordinates.Right * widthScale,
@@ -618,9 +684,16 @@ public static class Wow335Exporter
     public const string AssetsFileName = "assets-manifest.json";
     public const string ReportFileName = "export-report.txt";
 
-    public static WowExportResult Export(Project project, string? projectFilePath, string destination)
+    private sealed record GeneratedTexture(string Hash, Blp2Verification? BlpVerification);
+
+    /// <summary>Compatibility overload retaining the historical TGA output.</summary>
+    public static WowExportResult Export(Project project, string? projectFilePath, string destination) =>
+        Export(project, projectFilePath, destination, Wow335ExportOptions.LegacyTga);
+
+    public static WowExportResult Export(Project project, string? projectFilePath, string destination,
+        Wow335ExportOptions options)
     {
-        var model = Wow335ExportBuilder.Build(project, projectFilePath);
+        var model = Wow335ExportBuilder.Build(project, projectFilePath, options);
         if (model.Diagnostics.Any(d => d.Severity == ExportSeverity.Error))
             return new(false, model, model.Diagnostics, []);
         // Folder pickers may preserve a trailing separator. Keep one canonical root
@@ -636,7 +709,7 @@ public static class Wow335Exporter
         try
         {
             Directory.CreateDirectory(staging);
-            var generatedHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+            var generatedTextures = new Dictionary<string, GeneratedTexture>(StringComparer.Ordinal);
             var stagedFiles = new[]
             {
                 Path.Combine(staging, XmlFileName), Path.Combine(staging, ManifestFileName),
@@ -661,17 +734,35 @@ public static class Wow335Exporter
                     var sourcePath = ResolvePackagePath(staging, asset.PackageSource);
                     var targetPath = ResolvePackagePath(staging, asset.PackagingTarget);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                    Blp2Verification? blpVerification = null;
                     using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                     using (var target = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                     {
-                        var dimensions = PngTgaConverter.Convert(source, target);
-                        if (dimensions.SourceWidth != asset.SourceWidth || dimensions.SourceHeight != asset.SourceHeight
-                            || dimensions.Width != asset.TextureWidth || dimensions.Height != asset.TextureHeight)
-                            throw new InvalidDataException("PNG dimensions changed while the export was being written.");
+                        if (IsBlpConversion(asset))
+                        {
+                            var layout = AssetBlpLayout(asset);
+                            blpVerification = Blp2Dxt5Converter.Convert(source, target, layout);
+                        }
+                        else
+                        {
+                            var dimensions = PngTgaConverter.Convert(source, target);
+                            if (dimensions.SourceWidth != asset.SourceWidth || dimensions.SourceHeight != asset.SourceHeight
+                                || dimensions.Width != asset.TextureWidth || dimensions.Height != asset.TextureHeight)
+                                throw new InvalidDataException("PNG dimensions changed while the export was being written.");
+                        }
                     }
-                    ValidateGeneratedTga(targetPath, asset.TextureWidth!.Value, asset.TextureHeight!.Value);
+                    if (IsBlpConversion(asset))
+                    {
+                        using var verify = new FileStream(targetPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        _ = Blp2Dxt5Converter.Verify(verify, AssetBlpLayout(asset));
+                    }
+                    else
+                    {
+                        ValidateGeneratedTga(targetPath, asset.TextureWidth!.Value, asset.TextureHeight!.Value);
+                    }
                     using var generated = new FileStream(targetPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    generatedHashes[asset.PackagingTarget] = Convert.ToHexString(SHA256.HashData(generated));
+                    generatedTextures[asset.PackagingTarget] = new(
+                        Convert.ToHexString(SHA256.HashData(generated)), blpVerification);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
                 {
@@ -684,7 +775,7 @@ public static class Wow335Exporter
 
             File.WriteAllText(stagedFiles[0], WriteXml(model), new UTF8Encoding(false));
             File.WriteAllText(stagedFiles[1], WriteManifest(model), new UTF8Encoding(false));
-            File.WriteAllText(stagedFiles[2], WriteAssets(model, generatedHashes), new UTF8Encoding(false));
+            File.WriteAllText(stagedFiles[2], WriteAssets(model, generatedTextures), new UTF8Encoding(false));
             var roundTrip = FrameXmlImporter.ImportFile(stagedFiles[0]);
             if (!roundTrip.Ok || roundTrip.Project is null)
                 throw new InvalidDataException("Generated FrameXML failed the independent importer self-check: " +
@@ -693,7 +784,8 @@ public static class Wow335Exporter
             var missing = model.Objects.Select(o => o.RuntimeName).Where(name => !importedNames.Contains(name)).ToArray();
             if (missing.Length > 0)
                 throw new InvalidDataException($"Generated FrameXML importer self-check lost {missing.Length} runtime object(s): {string.Join(", ", missing.Take(5))}.");
-            File.WriteAllText(stagedFiles[3], WriteReport(model) + $"Round-trip self-check: PASS ({model.Objects.Count}/{model.Objects.Count} runtime identities)\n", new UTF8Encoding(false));
+            File.WriteAllText(stagedFiles[3], WriteReport(model, options, generatedTextures)
+                + $"Round-trip self-check: PASS ({model.Objects.Count}/{model.Objects.Count} runtime identities)\n", new UTF8Encoding(false));
             foreach (var path in stagedFiles)
             {
                 var text = File.ReadAllText(path);
@@ -703,7 +795,8 @@ public static class Wow335Exporter
             using (var reader = XmlReader.Create(stagedFiles[0]))
                 while (reader.Read()) { }
 
-            PublishStagedPackage(staging, destinationRoot, stagedFiles, finalFiles, model.Assets, generatedHashes);
+            PublishStagedPackage(staging, destinationRoot, stagedFiles, finalFiles, model.Assets,
+                generatedTextures.ToDictionary(item => item.Key, item => item.Value.Hash, StringComparer.Ordinal));
             return new(true, model, model.Diagnostics, finalFiles);
         }
         finally
@@ -799,7 +892,15 @@ public static class Wow335Exporter
     }
 
     private static bool IsPngConversion(WowExportAsset asset) =>
-        asset.Conversion == "png-to-uncompressed-32-bit-tga";
+        asset.Conversion == "png-to-wow-compatible-tga-or-blp";
+
+    private static bool IsBlpConversion(WowExportAsset asset) =>
+        IsPngConversion(asset) && asset.PackagingTarget.EndsWith(".blp", StringComparison.OrdinalIgnoreCase);
+
+    private static Blp2TextureLayout AssetBlpLayout(WowExportAsset asset) => new(
+        asset.SourceWidth!.Value, asset.SourceHeight!.Value,
+        asset.PreparedWidth!.Value, asset.PreparedHeight!.Value,
+        asset.TextureWidth!.Value, asset.TextureHeight!.Value, asset.MipCount!.Value);
 
     private static void ValidateGeneratedTga(string path, int width, int height)
     {
@@ -850,7 +951,7 @@ public static class Wow335Exporter
         x.WriteAttributeString("xmlns", "xsi", null, "http://www.w3.org/2001/XMLSchema-instance");
         x.WriteAttributeString("xsi", "schemaLocation", null, "http://www.blizzard.com/wow/ui/ ..\\FrameXML\\UI.xsd");
         var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
-        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", rootParent);
+        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", rootParent); x.WriteAttributeString("hidden", "true");
         WriteSize(x, model.Root.Width, model.Root.Height);
         x.WriteStartElement("Anchors"); WriteAnchor(x, model.Root.Anchor, rootParent); x.WriteEndElement();
         x.WriteStartElement("Frames");
@@ -981,11 +1082,11 @@ public static class Wow335Exporter
     }
     public static string WriteAssets(WowExportModel model) => WriteAssets(model, null);
 
-    private static string WriteAssets(WowExportModel model, IReadOnlyDictionary<string, string>? generatedHashes) => JsonSerializer.Serialize(new
+    private static string WriteAssets(WowExportModel model, IReadOnlyDictionary<string, GeneratedTexture>? generatedTextures) => JsonSerializer.Serialize(new
     {
         schema = "frameforge-wow335-assets",
         version = 2,
-        note = "Project-owned source artwork is packaged below this manifest; PNG sources also produce game-ready TGA files. Stock client artwork is referenced and never copied.",
+        note = "Project-owned source artwork is packaged below this manifest; PNG sources also produce game-ready TGA or BLP2/DXT5 files. Stock client artwork is referenced and never copied.",
         assets = model.Assets.Select(a => new
         {
             source = a.PackageSource,
@@ -996,25 +1097,52 @@ public static class Wow335Exporter
             conversion = a.Conversion,
             sourceWidth = a.SourceWidth,
             sourceHeight = a.SourceHeight,
+            preparedWidth = a.PreparedWidth,
+            preparedHeight = a.PreparedHeight,
             width = a.TextureWidth,
             height = a.TextureHeight,
             paddingApplied = IsPngConversion(a)
-                ? a.SourceWidth != a.TextureWidth || a.SourceHeight != a.TextureHeight
+                ? a.PreparedWidth != a.TextureWidth || a.PreparedHeight != a.TextureHeight
                 : (bool?)null,
+            resized = IsPngConversion(a)
+                ? a.SourceWidth != a.PreparedWidth || a.SourceHeight != a.PreparedHeight
+                : (bool?)null,
+            mipCount = IsPngConversion(a) ? a.MipCount : null,
             generatedFile = IsPngConversion(a) ? a.PackagingTarget : null,
-            generatedContentSha256 = IsPngConversion(a) && generatedHashes is not null
-                && generatedHashes.TryGetValue(a.PackagingTarget, out var generatedHash) ? generatedHash : null,
+            generatedContentSha256 = IsPngConversion(a) && generatedTextures is not null
+                && generatedTextures.TryGetValue(a.PackagingTarget, out var generated) ? generated.Hash : null,
             requiredMpqDestination = IsPngConversion(a)
-                ? a.LogicalTexture.Replace('\\', '/') + ".tga"
+                ? a.LogicalTexture.Replace('\\', '/') + Path.GetExtension(a.PackagingTarget).ToLowerInvariant()
                 : null,
-            generatedFormat = IsPngConversion(a) ? "tga-type-2-bgra32-top-left" : null,
+            generatedFormat = IsPngConversion(a)
+                ? IsBlpConversion(a) ? "blp2-dxt5-alpha8-mipmapped" : "tga-type-2-bgra32-top-left"
+                : null,
+            decodedPremultipliedColorMeanAbsoluteError = generatedTextures is not null
+                && generatedTextures.TryGetValue(a.PackagingTarget, out var verifiedColor)
+                ? verifiedColor.BlpVerification?.PremultipliedColorMeanAbsoluteError : null,
+            decodedAlphaMeanAbsoluteError = generatedTextures is not null
+                && generatedTextures.TryGetValue(a.PackagingTarget, out var verifiedAlpha)
+                ? verifiedAlpha.BlpVerification?.AlphaMeanAbsoluteError : null,
             consumers = a.Consumers,
         }),
     }, JsonOptions());
-    public static string WriteReport(WowExportModel model)
+    public static string WriteReport(WowExportModel model) =>
+        WriteReport(model, model.Assets.Any(IsBlpConversion)
+            ? Wow335ExportOptions.Preferred
+            : Wow335ExportOptions.LegacyTga, null);
+
+    private static string WriteReport(WowExportModel model, Wow335ExportOptions options,
+        IReadOnlyDictionary<string, GeneratedTexture>? generatedTextures)
     {
         var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
-        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Generated TGA textures: {model.Assets.Count(IsPngConversion)} (uncompressed BGRA32, top-left origin; {model.Assets.Count(a => IsPngConversion(a) && (a.SourceWidth != a.TextureWidth || a.SourceHeight != a.TextureHeight))} power-of-two padded)"); b.AppendLine($"Root: {model.RootRuntimeName}, parent {rootParent}, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine(rootParent == "UIParent" ? "Stock foundation: geometry provenance only; not a runtime parent; not copied" : $"Stock foundation: runtime parent {rootParent}; stock definitions and artwork not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
+        var generated = model.Assets.Where(IsPngConversion).ToArray();
+        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Generated texture format: {options.TextureFormat}"); b.AppendLine($"Resolution policy: {options.ResolutionPolicy} ({N(options.TexelsPerUiPixel)} source texels per largest displayed UI pixel; never upscale)"); b.AppendLine($"Generated textures: {generated.Length} ({generated.Count(a => a.SourceWidth != a.PreparedWidth || a.SourceHeight != a.PreparedHeight)} resized; {generated.Count(a => a.PreparedWidth != a.TextureWidth || a.PreparedHeight != a.TextureHeight)} power-of-two padded)"); b.AppendLine($"Root: {model.RootRuntimeName}, parent {rootParent}, size {N(model.Root.Width)}x{N(model.Root.Height)}, initially hidden"); b.AppendLine(rootParent == "UIParent" ? "Stock foundation: geometry provenance only; not a runtime parent; not copied" : $"Stock foundation: runtime parent {rootParent}; stock definitions and artwork not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization");
+        if (generatedTextures is not null && generatedTextures.Values.Any(item => item.BlpVerification is not null))
+        {
+            var checks = generatedTextures.Values.Select(item => item.BlpVerification).Where(item => item is not null).Select(item => item!.Value).ToArray();
+            b.AppendLine($"Independent DXT5 decode: PASS ({checks.Length}/{checks.Length}; worst premultiplied RGB MAE {checks.Max(item => item.PremultipliedColorMeanAbsoluteError):0.###}; worst alpha MAE {checks.Max(item => item.AlphaMeanAbsoluteError):0.###})");
+        }
+        b.AppendLine(); b.AppendLine("Diagnostics:");
         foreach (var d in model.Diagnostics.OrderBy(d => d.Severity).ThenBy(d => d.Code, StringComparer.Ordinal).ThenBy(d => d.FrameName, StringComparer.Ordinal)) b.AppendLine($"{d.Severity.ToString().ToUpperInvariant()} {d.Code}{(d.FrameName is null ? "" : $" [{d.FrameName}]")}: {d.Message}");
         return b.ToString().Replace("\r\n", "\n");
     }

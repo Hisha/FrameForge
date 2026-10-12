@@ -1,7 +1,17 @@
 # Third-Party Notices
 
 FrameForge itself is licensed under the MIT License in `LICENSE`. Its self-contained desktop
-distribution includes the following managed libraries for read-only MPQ access.
+distribution includes the following managed dependencies for texture compression and read-only
+MPQ access.
+
+## BCnEncoder.Net 2.3.0
+
+Copyright Nominom and contributors.
+
+Used for pure-managed BC3/DXT5 block compression during BLP2 export. It has no native encoder
+dependency and is dual-licensed under the MIT License and the Unlicense:
+<https://github.com/Nominom/BCnEncoder.NET>. Its `CommunityToolkit.HighPerformance` dependency is
+licensed under the MIT License.
 
 ## Nmpq.Standard 1.0.0
 

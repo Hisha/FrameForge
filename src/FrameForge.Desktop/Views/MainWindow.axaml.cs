@@ -623,13 +623,25 @@ public partial class MainWindow : Window
             vm.SaveToFile(path);
     }
 
-    private async void OnExportWow335Click(object? sender, RoutedEventArgs e)
+    private async void OnExportWow335Click(object? sender, RoutedEventArgs e) =>
+        await ExportWow335Async(Wow335ExportOptions.Preferred);
+
+    private async void OnExportWow335PreserveClick(object? sender, RoutedEventArgs e) =>
+        await ExportWow335Async(Wow335ExportOptions.Preferred with
+        {
+            ResolutionPolicy = WowTextureResolutionPolicy.PreserveSource,
+        });
+
+    private async void OnExportWow335TgaClick(object? sender, RoutedEventArgs e) =>
+        await ExportWow335Async(Wow335ExportOptions.LegacyTga);
+
+    private async Task ExportWow335Async(Wow335ExportOptions options)
     {
         if (ViewModel is not { } vm)
             return;
 
         var validation = Wow335ExportBuilder.Build(vm.Project,
-            string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath);
+            string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath, options);
         var errors = validation.Diagnostics.Where(d => d.Severity == ExportSeverity.Error).ToArray();
         if (errors.Length > 0)
         {
@@ -648,7 +660,7 @@ public partial class MainWindow : Window
         try
         {
             var result = Wow335Exporter.Export(vm.Project,
-                string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath, destination);
+                string.IsNullOrWhiteSpace(vm.ProjectPath) ? null : vm.ProjectPath, destination, options);
             vm.Status = result.Summary + $" Output: {destination}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)

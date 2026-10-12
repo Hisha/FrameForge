@@ -24,7 +24,7 @@ internal static class Program
         {
             if (exportIndex + 2 >= args.Length)
             {
-                Console.Error.WriteLine("Usage: FrameForge --export-wow335 <project.fforge.json> <destination-directory>");
+                Console.Error.WriteLine("Usage: FrameForge --export-wow335 <project.fforge.json> <destination-directory> [--texture-format blp2|tga] [--preserve-source-resolution]");
                 return 2;
             }
             try
@@ -36,7 +36,21 @@ internal static class Program
                     Console.Error.WriteLine(parsed.ErrorText);
                     return 2;
                 }
-                var result = Wow335Exporter.Export(parsed.Project!, projectPath, Path.GetFullPath(args[exportIndex + 2]));
+                var formatIndex = Array.IndexOf(args, "--texture-format");
+                var format = formatIndex < 0 || formatIndex + 1 < args.Length && args[formatIndex + 1] == "blp2"
+                    ? WowTextureFormat.Blp2Dxt5
+                    : formatIndex + 1 < args.Length && args[formatIndex + 1] == "tga"
+                        ? WowTextureFormat.Tga
+                        : throw new InvalidDataException("--texture-format must be 'blp2' or 'tga'.");
+                var options = new Wow335ExportOptions
+                {
+                    TextureFormat = format,
+                    ResolutionPolicy = args.Contains("--preserve-source-resolution", StringComparer.Ordinal)
+                        ? WowTextureResolutionPolicy.PreserveSource
+                        : WowTextureResolutionPolicy.Conservative,
+                };
+                var result = Wow335Exporter.Export(parsed.Project!, projectPath,
+                    Path.GetFullPath(args[exportIndex + 2]), options);
                 foreach (var diagnostic in result.Diagnostics)
                     Console.WriteLine($"{diagnostic.Severity.ToString().ToUpperInvariant()} {diagnostic.Code}: {diagnostic.Message}");
                 Console.WriteLine(result.Summary);

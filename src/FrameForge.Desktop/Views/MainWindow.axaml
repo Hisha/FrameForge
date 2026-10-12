@@ -72,7 +72,9 @@
                 <Button Content="Export" ToolTip.Tip="Export presentation and runtime contracts">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <MenuItem Header="WoW 3.3.5a Layout…" Click="OnExportWow335Click" />
+                            <MenuItem Header="WoW 3.3.5a — BLP2/DXT5…" Click="OnExportWow335Click" />
+                            <MenuItem Header="WoW 3.3.5a — BLP2/DXT5 (preserve source resolution)…" Click="OnExportWow335PreserveClick" />
+                            <MenuItem Header="WoW 3.3.5a — Legacy TGA…" Click="OnExportWow335TgaClick" />
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
