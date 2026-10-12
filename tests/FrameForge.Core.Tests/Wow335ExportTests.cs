@@ -12,6 +12,74 @@ namespace FrameForge.Core.Tests;
 public sealed class Wow335ExportTests
 {
     [Fact]
+    public void DungeonFinderFoundationOwnsExportRootWithoutFlatteningCustomRelationships()
+    {
+        var project = new Project
+        {
+            Name = "Dungeon Finder UI",
+            Frames =
+            [
+                new() { Name = "LFDParentFrame", Width = 355, Height = 440, Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER },
+                new() { Name = "StockArtwork", Parent = "LFDParentFrame", Kind = FrameKind.TEXTURE, Width = 64, Height = 64, Visual = new FrameVisual { Texture = new TextureVisual(@"Interface\LFGFrame\UI-LFG-FRAME") } },
+                new() { Name = "CustomPanel", Parent = "LFDParentFrame", Width = 300, Height = 80, Point = AnchorPoint.TOP, RelativePoint = AnchorPoint.TOP, OffsetY = -20 },
+                new() { Name = "Header", Parent = "CustomPanel", Kind = FrameKind.FONTSTRING, Width = 270, Height = 18, Point = AnchorPoint.CENTER, RelativePoint = AnchorPoint.CENTER, OffsetX = 7, OffsetY = -3, Visual = new FrameVisual { Text = new TextVisual("Custom") } },
+            ],
+            Editor = new EditorMetadata
+            {
+                Groups =
+                [
+                    new EditorGroup
+                    {
+                        Name = "Blizzard Dungeon Finder Frame",
+                        Concept = "stock-framework",
+                        StockIdentity = "wow-3.3.5a-12340:Interface/FrameXML/LFDFrame.xml:LFDParentFrame",
+                        Locked = true,
+                        Members = ["LFDParentFrame", "StockArtwork"],
+                    },
+                ],
+                DesignOrder = ["CustomPanel", "Header"],
+                DesignObjects =
+                [
+                    new() { FrameName = "LFDParentFrame", DisplayName = "Blizzard Dungeon Finder Frame" },
+                    new() { FrameName = "CustomPanel" },
+                    new() { FrameName = "Header" },
+                ],
+            },
+        };
+
+        var model = Wow335ExportBuilder.Build(project, null);
+        var xml = XDocument.Parse(Wow335Exporter.WriteXml(model));
+        XNamespace ns = "http://www.blizzard.com/wow/ui/";
+        var root = Assert.Single(xml.Root!.Elements(ns + "Frame"));
+        var rootAnchor = Assert.Single(root.Element(ns + "Anchors")!.Elements(ns + "Anchor"));
+        var panel = Assert.Single(model.Objects, item => item.SourceName == "CustomPanel");
+        var header = Assert.Single(model.Objects, item => item.SourceName == "Header");
+
+        Assert.Equal("LFDParentFrame", root.Attribute("parent")!.Value);
+        Assert.Equal("LFDParentFrame", rootAnchor.Attribute("relativeTo")!.Value);
+        Assert.Equal(AnchorPoint.TOPLEFT, model.Root.Anchor.Point);
+        Assert.Equal(0, model.Root.Anchor.OffsetX);
+        Assert.Equal(0, model.Root.Anchor.OffsetY);
+        Assert.Equal(355, model.Root.Width);
+        Assert.Equal(440, model.Root.Height);
+        Assert.Equal(model.RootRuntimeName, panel.ExportFrame.Parent);
+        Assert.Equal(AnchorPoint.TOP, panel.ExportFrame.Point);
+        Assert.Equal(AnchorPoint.TOP, panel.ExportFrame.RelativePoint);
+        Assert.Equal(0, panel.ExportFrame.OffsetX);
+        Assert.Equal(-20, panel.ExportFrame.OffsetY);
+        Assert.Equal(panel.RuntimeName, header.ExportFrame.Parent);
+        Assert.Null(header.ExportFrame.RelativeTo);
+        Assert.Equal(7, header.ExportFrame.OffsetX);
+        Assert.Equal(-3, header.ExportFrame.OffsetY);
+        Assert.DoesNotContain("StockArtwork", xml.ToString());
+        Assert.DoesNotContain(@"Interface\LFGFrame\UI-LFG-FRAME", xml.ToString());
+
+        using var manifest = JsonDocument.Parse(Wow335Exporter.WriteManifest(model));
+        Assert.Equal("LFDParentFrame", manifest.RootElement.GetProperty("rootParentRuntimeId").GetString());
+        Assert.Equal("LFDParentFrame", manifest.RootElement.GetProperty("stockFoundation").GetProperty("runtimeParent").GetString());
+    }
+
+    [Fact]
     public void RootIsIndependentAndScreenAuthoredObjectsAreRebasedToIt()
     {
         using var fixture = ExportFixture.Create();
@@ -475,7 +543,7 @@ public sealed class Wow335ExportTests
         var expected = project.Editor.DesignObjects.Count(item => project.Contains(item.FrameName) && !stock.Contains(item.FrameName));
         Assert.Equal(expected, model.Objects.Count);
         Assert.Equal(49, model.Objects.Count);
-        Assert.Equal("UIParent", model.Root.Anchor.RelativeTo);
+        Assert.Equal("LFDParentFrame", model.Root.Anchor.RelativeTo);
         Assert.Equal(355, model.Root.Width, 8);
         Assert.Equal(440, model.Root.Height, 8);
         Assert.All(model.Objects, item => Assert.Equal(model.RootRuntimeName, item.ExportFrame.Parent));
@@ -499,9 +567,9 @@ public sealed class Wow335ExportTests
             Assert.True(result.Success, result.Summary);
             Assert.Equal(sourceBefore, File.ReadAllBytes(path));
             var xml = File.ReadAllText(Path.Combine(destination, Wow335Exporter.XmlFileName));
-            Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"UIParent\">", xml);
-            Assert.DoesNotContain("LFDParentFrame", xml);
-            Assert.Single(Regex.Matches(xml, "relativeTo=\"UIParent\"").Cast<Match>());
+            Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"LFDParentFrame\">", xml);
+            Assert.DoesNotContain("<Frame name=\"LFDParentFrame\"", xml);
+            Assert.Single(Regex.Matches(xml, "relativeTo=\"LFDParentFrame\"").Cast<Match>());
             Assert.Contains("Round-trip self-check: PASS (49/49 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
             Assert.Equal(11, result.Model!.Assets.Count);
             Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());

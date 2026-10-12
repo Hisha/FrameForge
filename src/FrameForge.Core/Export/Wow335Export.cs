@@ -129,11 +129,19 @@ public static partial class Wow335ExportBuilder
             },
             StringComparer.Ordinal);
         var layout = LayoutResolver.Resolve(project);
-        var rootRect = ResolveRootRect(project, stockGroup, stock, authored, layout, diagnostics);
+        var foundation = ResolveStockFoundation(project, stockGroup, stock);
         var screenRect = LayoutResolver.ScreenRect(project.Screen);
+        var rootRect = ResolveRootRect(foundation, authored, layout, screenRect, diagnostics);
+        var stockRuntimeParent = ResolveStockRuntimeParent(stockGroup, foundation);
+        var rootParent = stockRuntimeParent ?? "UIParent";
+        var rootReferenceRect = stockRuntimeParent is not null
+            && foundation is not null
+            && layout.Rects.TryGetValue(foundation.Name, out var foundationRect)
+                ? foundationRect
+                : screenRect;
         var root = new WowExportRoot(rootRect.Width, rootRect.Height, FrameAnchor.Create(
-            AnchorPoint.TOPLEFT, "UIParent", AnchorPoint.TOPLEFT,
-            rootRect.Left - screenRect.Left, rootRect.Top - screenRect.Top));
+            AnchorPoint.TOPLEFT, rootParent, AnchorPoint.TOPLEFT,
+            rootRect.Left - rootReferenceRect.Left, rootRect.Top - rootReferenceRect.Top));
 
         var projectDirectory = string.IsNullOrWhiteSpace(projectFilePath) ? null : Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
         var assetConsumers = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
@@ -213,18 +221,39 @@ public static partial class Wow335ExportBuilder
             [.. project.Editor.DesignStates], objects, assets, diagnostics);
     }
 
-    private static FrameRect ResolveRootRect(
+    private static FrameDef? ResolveStockFoundation(
         Project project,
         EditorGroup? stockGroup,
-        IReadOnlySet<string> stock,
-        IReadOnlyList<DesignObjectMetadata> authored,
-        LayoutResult layout,
-        List<ExportDiagnostic> diagnostics)
+        IReadOnlySet<string> stock)
     {
         var identityName = stockGroup?.StockIdentity?.Split(':', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        var foundation = identityName is null ? null : project.Find(identityName);
-        foundation ??= project.Frames.FirstOrDefault(frame => stock.Contains(frame.Name)
-            && (frame.Parent is null || !stock.Contains(frame.Parent)));
+        return (identityName is null ? null : project.Find(identityName))
+               ?? project.Frames.FirstOrDefault(frame => stock.Contains(frame.Name)
+                   && (frame.Parent is null || !stock.Contains(frame.Parent)));
+    }
+
+    private static string? ResolveStockRuntimeParent(EditorGroup? stockGroup, FrameDef? foundation)
+    {
+        var identity = stockGroup?.StockIdentity?.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        if (identity is not { Length: >= 3 })
+            return null;
+
+        var source = identity[^2].Replace('\\', '/');
+        var runtimeName = identity[^1];
+        return source.Equals("Interface/FrameXML/LFDFrame.xml", StringComparison.OrdinalIgnoreCase)
+               && runtimeName.Equals("LFDParentFrame", StringComparison.Ordinal)
+               && foundation?.Name == runtimeName
+            ? runtimeName
+            : null;
+    }
+
+    private static FrameRect ResolveRootRect(
+        FrameDef? foundation,
+        IReadOnlyList<DesignObjectMetadata> authored,
+        LayoutResult layout,
+        FrameRect screenRect,
+        List<ExportDiagnostic> diagnostics)
+    {
         if (foundation is not null && layout.Rects.TryGetValue(foundation.Name, out var foundationRect)
             && foundationRect.Width > 0 && foundationRect.Height > 0)
             return foundationRect;
@@ -241,7 +270,7 @@ public static partial class Wow335ExportBuilder
 
         diagnostics.Add(new(ExportSeverity.Warning, "ROOT_FALLBACK_SCREEN",
             "No stock foundation or authored bounds could define an export root; the project screen was used."));
-        return LayoutResolver.ScreenRect(project.Screen);
+        return screenRect;
     }
 
     private static FrameDef BuildExportFrame(
@@ -684,9 +713,10 @@ public static class Wow335Exporter
         x.WriteStartElement("Ui", "http://www.blizzard.com/wow/ui/");
         x.WriteAttributeString("xmlns", "xsi", null, "http://www.w3.org/2001/XMLSchema-instance");
         x.WriteAttributeString("xsi", "schemaLocation", null, "http://www.blizzard.com/wow/ui/ ..\\FrameXML\\UI.xsd");
-        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", "UIParent");
+        var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
+        x.WriteStartElement("Frame"); x.WriteAttributeString("name", model.RootRuntimeName); x.WriteAttributeString("parent", rootParent);
         WriteSize(x, model.Root.Width, model.Root.Height);
-        x.WriteStartElement("Anchors"); WriteAnchor(x, model.Root.Anchor, "UIParent"); x.WriteEndElement();
+        x.WriteStartElement("Anchors"); WriteAnchor(x, model.Root.Anchor, rootParent); x.WriteEndElement();
         x.WriteStartElement("Frames");
         foreach (var item in model.Objects.OrderBy(o => o.DrawOrder).ThenBy(o => o.RuntimeName, StringComparer.Ordinal)) WriteObject(x, item);
         x.WriteEndElement(); x.WriteEndElement(); x.WriteEndElement();
@@ -789,6 +819,7 @@ public static class Wow335Exporter
 
     public static string WriteManifest(WowExportModel model)
     {
+        var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
         var states = model.States.Select(state => new
         {
             state.Id,
@@ -810,7 +841,7 @@ public static class Wow335Exporter
             operation = o.Metadata.RuntimeValueRequired ? o.Kind == FrameKind.STATUSBAR ? "SetValue" : "SetText" : null,
             editorPreviewDefault = o.Kind == FrameKind.STATUSBAR ? o.Frame.Visual?.StatusBar?.DefaultValue : null,
         }).ToArray();
-        return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, rootParentRuntimeId = "UIParent", stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = (string?)null, strategy = "artwork-and-template-reference-only" }, states, bindings }, JsonOptions());
+        return JsonSerializer.Serialize(new { schema = "frameforge-wow335-manifest", version = 2, target = new { game = "World of Warcraft", version = "3.3.5a", build = 12340 }, project = model.ProjectName, layout = XmlFileName, rootRuntimeId = model.RootRuntimeName, rootParentRuntimeId = rootParent, stockFoundation = new { identity = model.StockFoundationIdentity, runtimeParent = rootParent == "UIParent" ? null : rootParent, strategy = "artwork-and-template-reference-only" }, states, bindings }, JsonOptions());
     }
     public static string WriteAssets(WowExportModel model) => JsonSerializer.Serialize(new
     {
@@ -830,7 +861,8 @@ public static class Wow335Exporter
     }, JsonOptions());
     public static string WriteReport(WowExportModel model)
     {
-        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Root: {model.RootRuntimeName}, parent UIParent, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine("Stock foundation: geometry provenance only; not a runtime parent; not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
+        var rootParent = model.Root.Anchor.RelativeTo ?? "UIParent";
+        var b = new StringBuilder(); b.AppendLine("FrameForge WoW 3.3.5a export report"); b.AppendLine($"Project: {model.ProjectName}"); b.AppendLine($"Objects: {model.Objects.Count}"); b.AppendLine($"Runtime bindings: {model.Objects.Count(o => o.Metadata.RuntimeValueRequired)}"); b.AppendLine($"States: {string.Join(", ", model.States.Select(s => s.Name))}"); b.AppendLine($"Project assets: {model.Assets.Count}"); b.AppendLine($"Packaged source files: {model.Assets.Select(a => a.PackageSource).Distinct(StringComparer.Ordinal).Count()}"); b.AppendLine($"Root: {model.RootRuntimeName}, parent {rootParent}, size {N(model.Root.Width)}x{N(model.Root.Height)}"); b.AppendLine(rootParent == "UIParent" ? "Stock foundation: geometry provenance only; not a runtime parent; not copied" : $"Stock foundation: runtime parent {rootParent}; stock definitions and artwork not copied"); b.AppendLine("StatusBar defaultValue: editor preview metadata only; omitted from FrameXML runtime initialization"); b.AppendLine(); b.AppendLine("Diagnostics:");
         foreach (var d in model.Diagnostics.OrderBy(d => d.Severity).ThenBy(d => d.Code, StringComparer.Ordinal).ThenBy(d => d.FrameName, StringComparer.Ordinal)) b.AppendLine($"{d.Severity.ToString().ToUpperInvariant()} {d.Code}{(d.FrameName is null ? "" : $" [{d.FrameName}]")}: {d.Message}");
         return b.ToString().Replace("\r\n", "\n");
     }
