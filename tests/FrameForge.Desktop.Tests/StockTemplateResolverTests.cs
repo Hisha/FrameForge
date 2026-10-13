@@ -44,7 +44,14 @@ public sealed class StockTemplateResolverTests : IDisposable
             """);
         Write(@"Interface\Tabs\Normal.blp", "synthetic texture marker");
         Write(@"Interface\FrameXML\LFDFrame.xml", """
-            <Ui><Frame name="LFDParentFrame" parent="UIParent"><Size x="355" y="440"/></Frame></Ui>
+            <Ui><Frame name="LFDParentFrame" parent="UIParent"><Size x="355" y="440"/><Frames>
+              <Frame name="LFDQueueFrame" setAllPoints="true"><Layers>
+                <Layer level="BACKGROUND"><Texture name="$parentLayout" file="Interface\LFGFrame\UI-LFG-FRAME">
+                  <Size><AbsDimension x="512" y="512"/></Size>
+                  <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors>
+                </Texture></Layer>
+              </Layers></Frame>
+            </Frames></Frame></Ui>
             """);
         Write(@"Interface\FrameXML\UIPanelTemplates.xml", "<Ui />");
     }
@@ -132,6 +139,40 @@ public sealed class StockTemplateResolverTests : IDisposable
         Assert.Equal((0d, 0d), (project.Frames[0].Width, project.Frames[0].Height));
         Assert.True(effective.Frames[0].Width > 0);
         Assert.Equal(10, effective.Frames[0].Height);
+    }
+
+    [Fact]
+    public void LfdReferenceArtworkUsesAuthoritativeBuildGeometryWithoutMutatingProject()
+    {
+        using var resolver = new StockTemplateResolver(_provider);
+        var root = new FrameDef { Name = "LFDParentFrame", Width = 355, Height = 440 };
+        var layout = new FrameDef
+        {
+            Name = "LFDQueueFrameLayout", Parent = "LFDQueueFrame", SourceName = "$parentLayout",
+            Kind = FrameKind.TEXTURE, Width = 512, Height = 512,
+            Point = AnchorPoint.TOPLEFT, RelativePoint = AnchorPoint.TOPLEFT,
+            OffsetX = 3.9566326530612246,
+            Visual = new FrameVisual { Texture = new TextureVisual(@"Interface\LFGFrame\UI-LFG-FRAME") },
+        };
+        var project = new Project
+        {
+            Frames = [root, layout],
+            Editor = new EditorMetadata
+            {
+                Groups = [new EditorGroup
+                {
+                    Name = "Blizzard Dungeon Finder Frame", Members = [root.Name, layout.Name],
+                    StockIdentity = "wow-3.3.5a-12340:Interface/FrameXML/LFDFrame.xml:LFDParentFrame",
+                }],
+            },
+        };
+
+        var effective = resolver.ApplyEffectiveGeometry(project);
+
+        Assert.Equal(3.9566326530612246, project.Find(layout.Name)!.OffsetX);
+        Assert.Equal(0, effective.Find(layout.Name)!.OffsetX);
+        Assert.Equal((512d, 512d), (effective.Find(layout.Name)!.Width, effective.Find(layout.Name)!.Height));
+        Assert.Equal(AnchorPoint.TOPLEFT, effective.Find(layout.Name)!.Point);
     }
 
     [Fact]

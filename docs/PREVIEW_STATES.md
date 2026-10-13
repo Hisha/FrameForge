@@ -50,6 +50,12 @@ selected font style. The Hunt Record is visible and populated in the same states
 the green color demonstrated by the Lua code, and the seal icon is shown for the representative
 available-seal state.
 
+Those states also hide `LFDQueueFrame` and `LFDParentFramePortrait` when the imported project
+contains those external stock targets, matching the inspected Hunts-tab transition. They are
+optional targets so a standalone addon XML import does not invent missing Blizzard frames or emit a
+diagnostic. This remains transient state data consumed by the generic override engine; it never
+changes the source project or exported XML.
+
 The inspected Lua uses a `0..100` progress range and percent text. Tracking places the primary and
 secondary text at `(15, -34)` and `(15, -78)` relative to the state panel; completion uses
 `(15, -43)` and `(15, -75)`. The completed state displays `HUNT COMPLETE`, `READY TO TURN IN`, a

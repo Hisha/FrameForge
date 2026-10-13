@@ -1008,14 +1008,18 @@ public static class Wow335Exporter
             if (item.FontStyle is { } font) x.WriteAttributeString("inherits", font);
             if (item.JustifyH is { } justify) x.WriteAttributeString("justifyH", justify.ToUpperInvariant());
             if (item.JustifyV is { } justifyV) x.WriteAttributeString("justifyV", justifyV.ToUpperInvariant());
-            if (item.Outline is "NONE" or "NORMAL" or "THICK")
+            // In build 12340's UI.xsd, FontString owns the font and outline attributes and a
+            // FontHeight child.  A nested <Font size="..."> is not part of FontStringType.
+            // Supplying the concrete font together with FontHeight makes the explicit size an
+            // effective declaration instead of leaving the inherited Font object's height active.
+            if (item.FontSize is not null) x.WriteAttributeString("font", @"Fonts\FRIZQT__.TTF");
+            if (item.Outline is "NONE" or "NORMAL" or "THICK") x.WriteAttributeString("outline", item.Outline);
+            if (item.FontSize is { } size)
             {
-                x.WriteStartElement("Font"); x.WriteAttributeString("font", @"Fonts\FRIZQT__.TTF");
-                x.WriteAttributeString("size", N(item.FontSize ?? StockFontSize(item.FontStyle)));
-                if (item.Outline != "NONE") x.WriteAttributeString("flags", item.Outline == "THICK" ? "THICKOUTLINE" : "OUTLINE");
+                x.WriteStartElement("FontHeight");
+                x.WriteStartElement("AbsValue"); x.WriteAttributeString("val", N(size)); x.WriteEndElement();
                 x.WriteEndElement();
             }
-            else if (item.FontSize is { } size) { x.WriteStartElement("FontHeight"); x.WriteStartElement("AbsValue"); x.WriteAttributeString("val", N(size)); x.WriteEndElement(); x.WriteEndElement(); }
             if (item.TextColor is { } color) WriteColor(x, "Color", color);
             if (item.Shadow is { } shadow)
             {
@@ -1148,11 +1152,5 @@ public static class Wow335Exporter
     }
     private static JsonSerializerOptions JsonOptions() => new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
     private static string ManifestValueType(FrameKind kind) => kind == FrameKind.STATUSBAR ? "number" : "string";
-    private static double StockFontSize(string? style) => style switch
-    {
-        "GameFontNormalSmall" or "GameFontHighlightSmall" => 10,
-        "GameFontNormalLarge" or "GameFontHighlightLarge" => 16,
-        _ => 12,
-    };
     private static string N(double value) => value.ToString("0.################", CultureInfo.InvariantCulture);
 }

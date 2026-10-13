@@ -4,6 +4,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using FrameForge.Desktop.Services;
 using FrameForge.Core.Export;
 using FrameForge.Core.Serialization;
+using FrameForge.Core.Viewing;
+using System.Text.Json;
 
 namespace FrameForge.Desktop;
 
@@ -19,6 +21,40 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        var compareIndex = Array.IndexOf(args, "--compare-wow-landmarks");
+        if (compareIndex >= 0)
+        {
+            if (compareIndex + 1 >= args.Length)
+            {
+                Console.Error.WriteLine("Usage: FrameForge --compare-wow-landmarks <landmarks.json> [report.json]");
+                return 2;
+            }
+            try
+            {
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true,
+                };
+                var samples = JsonSerializer.Deserialize<VisualLandmarkSample[]>(
+                    File.ReadAllText(Path.GetFullPath(args[compareIndex + 1])), options)
+                    ?? throw new InvalidDataException("The landmark file did not contain an array.");
+                var report = VisualLandmarkComparison.Compare(samples);
+                var json = JsonSerializer.Serialize(report, options);
+                if (compareIndex + 2 < args.Length && !args[compareIndex + 2].StartsWith("--", StringComparison.Ordinal))
+                    File.WriteAllText(Path.GetFullPath(args[compareIndex + 2]), json);
+                Console.WriteLine(json);
+                return 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or InvalidDataException or JsonException or ArgumentException)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 2;
+            }
+        }
+
         var exportIndex = Array.IndexOf(args, "--export-wow335");
         if (exportIndex >= 0)
         {

@@ -333,6 +333,72 @@ public sealed class Wow335ExportTests
     }
 
     [Fact]
+    public void ExplicitFontSizeUsesBuild12340FontDeclarationWithoutLosingInheritedStyleOverrides()
+    {
+        using var fixture = ExportFixture.Create();
+        var project = fixture.Project with
+        {
+            Editor = fixture.Project.Editor with
+            {
+                DesignObjects = fixture.Project.Editor.DesignObjects.Select(item => item.FrameName == "Text1"
+                    ? item with
+                    {
+                        DisplayName = "Hunt_Seals",
+                        TextOverride = "Huntmaster's Seals:",
+                        TextStyle = new DesignTextStyleMetadata
+                        {
+                            BaseStyle = "GameFontHighlight",
+                            Size = 8,
+                            Color = new ColorRgba(.25, .5, .75, 1),
+                            Outline = "THICK",
+                            Shadow = true,
+                            JustifyH = "LEFT",
+                        },
+                    }
+                    : item).ToArray(),
+            },
+        };
+
+        var xml = XDocument.Parse(Wow335Exporter.WriteXml(Wow335ExportBuilder.Build(project, fixture.ProjectPath)));
+        XNamespace ns = "http://www.blizzard.com/wow/ui/";
+        var text = xml.Descendants(ns + "FontString").Single(item => item.Attribute("name")?.Value == "Hunt_Seals");
+
+        Assert.Equal("GameFontHighlight", text.Attribute("inherits")?.Value);
+        Assert.Equal("LEFT", text.Attribute("justifyH")?.Value);
+        Assert.Equal(@"Fonts\FRIZQT__.TTF", text.Attribute("font")?.Value);
+        Assert.Equal("THICK", text.Attribute("outline")?.Value);
+        Assert.Equal("8", Assert.Single(text.Elements(ns + "FontHeight"))
+            .Element(ns + "AbsValue")?.Attribute("val")?.Value);
+        Assert.Empty(text.Elements(ns + "Font"));
+        Assert.NotNull(text.Element(ns + "Color"));
+        Assert.NotNull(text.Element(ns + "Shadow"));
+    }
+
+    [Fact]
+    public void InheritedFontWithoutExplicitSizeRemainsInherited()
+    {
+        using var fixture = ExportFixture.Create();
+        var project = fixture.Project with
+        {
+            Editor = fixture.Project.Editor with
+            {
+                DesignObjects = fixture.Project.Editor.DesignObjects.Select(item => item.FrameName == "Text1"
+                    ? item with { TextStyle = new DesignTextStyleMetadata { BaseStyle = "GameFontHighlight" } }
+                    : item).ToArray(),
+            },
+        };
+
+        var xml = XDocument.Parse(Wow335Exporter.WriteXml(Wow335ExportBuilder.Build(project, fixture.ProjectPath)));
+        XNamespace ns = "http://www.blizzard.com/wow/ui/";
+        var text = xml.Descendants(ns + "FontString").Single(item => item.Attribute("name")?.Value == "Bad_Name");
+
+        Assert.Equal("GameFontHighlight", text.Attribute("inherits")?.Value);
+        Assert.Null(text.Attribute("font"));
+        Assert.Empty(text.Elements(ns + "Font"));
+        Assert.Empty(text.Elements(ns + "FontHeight"));
+    }
+
+    [Fact]
     public void StatusBarUsesLogicalTextureAndDoesNotInitializePreviewValue()
     {
         using var fixture = ExportFixture.Create();
@@ -850,13 +916,20 @@ public sealed class Wow335ExportTests
         var stock = project.Editor.Groups.Where(g => g.Concept == "stock-framework").SelectMany(g => g.Members).ToHashSet(StringComparer.Ordinal);
         var expected = project.Editor.DesignObjects.Count(item => project.Contains(item.FrameName) && !stock.Contains(item.FrameName));
         Assert.Equal(expected, model.Objects.Count);
-        Assert.Equal(49, model.Objects.Count);
+        Assert.Equal(48, model.Objects.Count);
         Assert.Equal("LFDParentFrame", model.Root.Anchor.RelativeTo);
         Assert.Equal(355, model.Root.Width, 8);
         Assert.Equal(440, model.Root.Height, 8);
         Assert.All(model.Objects, item => Assert.Equal(model.RootRuntimeName, item.ExportFrame.Parent));
         Assert.All(model.Objects.SelectMany(item => item.ExportFrame.AllAnchors), anchor =>
             Assert.True(anchor.RelativeTo is null || anchor.RelativeTo != "UIParent"));
+        var generatedXml = XDocument.Parse(Wow335Exporter.WriteXml(model));
+        XNamespace generatedNs = "http://www.blizzard.com/wow/ui/";
+        var sealsLabel = generatedXml.Descendants(generatedNs + "FontString")
+            .Single(element => element.Attribute("name")?.Value == "Hunt_Seals");
+        Assert.Equal(@"Fonts\FRIZQT__.TTF", sealsLabel.Attribute("font")?.Value);
+        Assert.Equal("8", sealsLabel.Element(generatedNs + "FontHeight")?
+            .Element(generatedNs + "AbsValue")?.Attribute("val")?.Value);
         var progress = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Progress");
         Assert.Equal(FrameKind.STATUSBAR, progress.Kind);
         Assert.Equal(@"Interface\TargetingFrame\UI-StatusBar", progress.TextureReference);
@@ -878,7 +951,7 @@ public sealed class Wow335ExportTests
             Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"LFDParentFrame\" hidden=\"true\">", xml);
             Assert.DoesNotContain("<Frame name=\"LFDParentFrame\"", xml);
             Assert.Single(Regex.Matches(xml, "relativeTo=\"LFDParentFrame\"").Cast<Match>());
-            Assert.Contains("Round-trip self-check: PASS (49/49 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
+            Assert.Contains("Round-trip self-check: PASS (48/48 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
             Assert.Equal(11, result.Model!.Assets.Count);
             Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());
             using var assets = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, Wow335Exporter.AssetsFileName)));

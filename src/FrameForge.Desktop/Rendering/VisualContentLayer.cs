@@ -163,7 +163,7 @@ public sealed class VisualContentLayer : ICanvasLayer
                 DrawStyledText(context, canvas, rect, text.Text!, style.JustifyH, text.JustifyVertical, style,
                     canvas.PreviewOverrides?.Find(frame.Name)?.TextColor);
             else
-                DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
+                DrawClippedText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
                     Color.Parse("#E8F1F5"));
             return;
         }
@@ -201,7 +201,7 @@ public sealed class VisualContentLayer : ICanvasLayer
                         -stock.TextOffsetY * canvas.Viewport.Zoom)),
                     text.Text!, "CENTER", "MIDDLE", style);
             else
-                DrawClippedText(context, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
+                DrawClippedText(context, canvas, rect, text.Text!, text.JustifyHorizontal, text.JustifyVertical,
                     Color.Parse("#F0DCC0"));
         }
     }
@@ -327,31 +327,22 @@ public sealed class VisualContentLayer : ICanvasLayer
     /// </remarks>
     private static void DrawClippedText(
         DrawingContext context,
+        CanvasRenderContext canvas,
         Rect host,
         string text,
         string? justifyH,
         string? justifyV,
         Color color)
     {
+        const double size = 11;
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Normal), 11,
+            new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Normal), size,
             new SolidColorBrush(color));
-
-        var x = justifyH switch
-        {
-            "CENTER" => host.X + Math.Max(0, (host.Width - label.Width) / 2),
-            "RIGHT" => host.X + Math.Max(0, host.Width - label.Width),
-            _ => host.X,
-        };
-
-        var y = justifyV switch
-        {
-            "TOP" => host.Y,
-            "BOTTOM" => host.Bottom - label.Height,
-            _ => host.Y + Math.Max(0, (host.Height - label.Height) / 2),
-        };
+        var zoom = canvas.Viewport.Zoom;
+        var placement = PreviewTextLayout.Place(host, label.Width, label.Height, zoom, justifyH, justifyV);
         using (context.PushClip(host))
-            context.DrawText(label, new Point(x, y));
+        using (context.PushTransform(PreviewTextLayout.CanvasTransform(placement, zoom)))
+            context.DrawText(label, default);
     }
 
     private static void DrawStyledText(
@@ -364,34 +355,23 @@ public sealed class VisualContentLayer : ICanvasLayer
         StockFontStyle style,
         ColorRgba? previewColor = null)
     {
-        var size = Math.Max(1, style.Size * canvas.Viewport.Zoom);
+        var size = Math.Max(1, style.Size);
         var color = ToColor(previewColor ?? style.Color);
         var typeface = new Typeface(style.AvaloniaFamily, FontStyle.Normal, FontWeight.Normal);
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             typeface, size, new SolidColorBrush(color));
         var justifyH = declaredJustifyH ?? style.JustifyH;
         var justifyV = declaredJustifyV ?? style.JustifyV;
-        var x = justifyH switch
-        {
-            "CENTER" => host.X + (host.Width - label.Width) / 2,
-            "RIGHT" => host.Right - label.Width,
-            _ => host.X,
-        };
-        var y = justifyV switch
-        {
-            "TOP" => host.Y,
-            "BOTTOM" => host.Bottom - label.Height,
-            _ => host.Y + (host.Height - label.Height) / 2,
-        };
+        var zoom = canvas.Viewport.Zoom;
+        var placement = PreviewTextLayout.Place(host, label.Width, label.Height, zoom, justifyH, justifyV);
         using (context.PushClip(host))
+        using (context.PushTransform(PreviewTextLayout.CanvasTransform(placement, zoom)))
         {
             if (style.ShadowColor is { } shadow)
             {
                 var shadowText = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
                     typeface, size, new SolidColorBrush(ToColor(shadow)));
-                context.DrawText(shadowText, new Point(
-                    x + style.ShadowX * canvas.Viewport.Zoom,
-                    y - style.ShadowY * canvas.Viewport.Zoom));
+                context.DrawText(shadowText, new Point(style.ShadowX, -style.ShadowY));
             }
             if (style.Outline is "NORMAL" or "THICK")
             {
@@ -399,9 +379,9 @@ public sealed class VisualContentLayer : ICanvasLayer
                 var outline = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
                     typeface, size, Brushes.Black);
                 foreach (var offset in new[] { new Point(-radius, 0), new Point(radius, 0), new Point(0, -radius), new Point(0, radius) })
-                    context.DrawText(outline, new Point(x + offset.X, y + offset.Y));
+                    context.DrawText(outline, offset);
             }
-            context.DrawText(label, new Point(x, y));
+            context.DrawText(label, default);
         }
     }
 

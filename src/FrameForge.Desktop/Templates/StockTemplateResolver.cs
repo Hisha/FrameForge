@@ -118,6 +118,7 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
     private LocalFontCollection? _fontCollection;
     private bool _fontRegistered;
     private string? _fontPath;
+    private string? _fontFamilyName;
 
     public StockTemplateResolver(IWoWClientAssetProvider assets)
     {
@@ -234,8 +235,22 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
     public Project ApplyEffectiveGeometry(Project declaredProject)
     {
         var changed = false;
+        var lfdMembers = declaredProject.Editor.Groups
+            .Where(group => group.StockIdentity?.EndsWith(":" + LfdParentFrame, StringComparison.Ordinal) == true)
+            .SelectMany(group => group.Members)
+            .ToHashSet(StringComparer.Ordinal);
         var frames = declaredProject.Frames.Select(frame =>
         {
+            // Imported stock descendants are presentation context, not user-authored geometry.
+            // Re-read their static placement from the authoritative build-12340 definition so a
+            // stale imported copy cannot make every custom object appear shifted against the
+            // Blizzard chrome.  The declared project is deliberately left untouched.
+            if (lfdMembers.Contains(frame.Name) && ResolveLfdStaticGeometry(frame) is { } stockFrame
+                && stockFrame != frame)
+            {
+                changed = true;
+                return stockFrame;
+            }
             if (frame.Kind == FrameKind.BUTTON && frame.Inherits is { } template
                 && ResolveButton(template) is { } button)
             {
@@ -260,6 +275,50 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
             return frame;
         }).ToArray();
         return changed ? declaredProject with { Frames = frames } : declaredProject;
+    }
+
+    private FrameDef? ResolveLfdStaticGeometry(FrameDef frame)
+    {
+        if (!_definitions.TryGetValue(LfdParentFrame, out var root))
+            return null;
+
+        if (frame.Name == LfdParentFrame)
+        {
+            var size = Child(root, "Size");
+            var width = Number(size, "x") ?? Number(Child(size, "AbsDimension"), "x");
+            var height = Number(size, "y") ?? Number(Child(size, "AbsDimension"), "y");
+            return width is > 0 && height is > 0 ? frame with { Width = width.Value, Height = height.Value } : null;
+        }
+
+        if (frame.SourceName is not { Length: > 0 } sourceName || frame.Visual?.Texture?.File is not { } file)
+            return null;
+
+        var element = root.Descendants().FirstOrDefault(candidate =>
+            candidate.Attribute("name")?.Value == sourceName
+            && string.Equals(candidate.Attribute("file")?.Value, file, StringComparison.OrdinalIgnoreCase));
+        if (element is null)
+            return null;
+
+        var sizeElement = Child(element, "Size");
+        var widthValue = Number(sizeElement, "x") ?? Number(Child(sizeElement, "AbsDimension"), "x");
+        var heightValue = Number(sizeElement, "y") ?? Number(Child(sizeElement, "AbsDimension"), "y");
+        var anchor = Child(Child(element, "Anchors"), "Anchor");
+        if (widthValue is not > 0 || heightValue is not > 0 || anchor is null
+            || !AnchorPoints.TryParse(anchor.Attribute("point")?.Value ?? "CENTER", out var point)
+            || !AnchorPoints.TryParse(anchor.Attribute("relativePoint")?.Value ?? point.ToString(), out var relativePoint))
+            return null;
+
+        var offset = Child(Child(anchor, "Offset"), "AbsDimension");
+        return frame with
+        {
+            Width = widthValue.Value,
+            Height = heightValue.Value,
+            Point = point,
+            RelativePoint = relativePoint,
+            RelativeTo = null,
+            OffsetX = Number(offset, "x") ?? 0,
+            OffsetY = Number(offset, "y") ?? 0,
+        };
     }
 
     public IReadOnlyList<string> Describe(FrameDef frame)
@@ -371,7 +430,7 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
         chain.Remove(name);
         return _fonts[name] = new StockFontStyle(name, fontReference,
             fontReference?.Equals(@"Fonts\FRIZQT__.TTF", StringComparison.OrdinalIgnoreCase) == true ? _fontPath : null,
-            _fontRegistered ? "Friz Quadrata TT" : null, size, color, justifyH, justifyV, outline,
+            _fontRegistered ? _fontFamilyName : null, size, color, justifyH, justifyV, outline,
             shadowX, shadowY, shadowColor, provenance);
     }
 
@@ -412,6 +471,7 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
             FontManager.Current.RemoveFontCollection(_fontCollection!.Key);
         _fontRegistered = false;
         _fontCollection = null;
+        _fontFamilyName = null;
         _fontPath = CachePath(@"Fonts\FRIZQT__.TTF");
         if (!File.Exists(_fontPath))
         {
@@ -426,6 +486,7 @@ public sealed class StockTemplateResolver : IStockTemplateResolver, IDisposable
             using var typeface = SKTypeface.FromFile(_fontPath);
             if (typeface is null)
                 throw new InvalidDataException("Skia rejected the local TrueType font.");
+            _fontFamilyName = typeface.FamilyName;
             _fontCollection = new LocalFontCollection();
             _fontCollection.Reset(_fontPath);
             FontManager.Current.AddFontCollection(_fontCollection);

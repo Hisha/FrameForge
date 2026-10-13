@@ -89,6 +89,26 @@ public sealed class PreviewStateTests
         Assert.Null(_native.Find("LFDParentFrameTab2")!.Visual?.StatusBar);
     }
 
+    [Fact]
+    public void Hunts_state_hides_optional_runtime_owned_stock_artwork_when_the_project_contains_it()
+    {
+        var source = _native with
+        {
+            Frames = [.. _native.Frames,
+                new FrameDef { Name = "LFDQueueFrame", Parent = "LFDParentFrame", Visible = true },
+                new FrameDef { Name = "LFDParentFramePortrait", Parent = "LFDParentFrame", Visible = true }],
+        };
+
+        var set = _registry.Resolve(source, "idle");
+        var applied = _registry.Apply(source, set);
+
+        Assert.Empty(set.Diagnostics);
+        Assert.False(applied.Find("LFDQueueFrame")!.Visible);
+        Assert.False(applied.Find("LFDParentFramePortrait")!.Visible);
+        Assert.True(source.Find("LFDQueueFrame")!.Visible);
+        Assert.True(source.Find("LFDParentFramePortrait")!.Visible);
+    }
+
     [Theory]
     [InlineData(0, 0)]
     [InlineData(60, 0.6)]

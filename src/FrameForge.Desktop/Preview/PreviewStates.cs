@@ -17,7 +17,8 @@ public sealed record PreviewFrameOverride(
     double? StatusBarValue = null,
     PreviewButtonState? ButtonState = null,
     FrameAnchor? PrimaryAnchor = null,
-    string? BehaviorSource = null);
+    string? BehaviorSource = null,
+    bool IgnoreIfMissing = false);
 
 public sealed record PreviewStateDefinition(
     string Id,
@@ -148,8 +149,9 @@ public sealed class PreviewStateRegistry : IPreviewStateRegistry
         {
             if (!project.Contains(item.Key))
             {
-                diagnostics.Add(new PreviewStateDiagnostic("missing-preview-target",
-                    $"Preview state '{state.Label}' targets missing frame '{item.Key}'.", item.Key));
+                if (!item.Value.IgnoreIfMissing)
+                    diagnostics.Add(new PreviewStateDiagnostic("missing-preview-target",
+                        $"Preview state '{state.Label}' targets missing frame '{item.Key}'.", item.Key));
                 continue;
             }
             valid[item.Key] = item.Value;
@@ -186,6 +188,8 @@ public static class NativeHuntsPreviewStates
     private const string RecordSeals = Record + "Seals";
     private const string DungeonTab = "LFDParentFrameTab1";
     private const string HuntsTab = "LFDParentFrameTab2";
+    private const string BlizzardQueue = "LFDQueueFrame";
+    private const string BlizzardPortrait = "LFDParentFramePortrait";
 
     private static readonly ColorRgba AvailableGreen = new(0x20 / 255d, 1, 0x20 / 255d);
     private static readonly ColorRgba QuestGold = new(1, 0.82, 0);
@@ -268,6 +272,12 @@ public static class NativeHuntsPreviewStates
     {
         var values = new Dictionary<string, PreviewFrameOverride>(StringComparer.Ordinal);
         Visible(values, Root, true);
+        // These are optional external stock targets: the imported addon XML fixture does not own
+        // them, while a project that includes the authoritative LFD reference does.  The runtime
+        // hides both for every Hunts presentation.  Keeping that fact in the non-exported state
+        // data prevents the 512-unit queue artwork from becoming a false alignment reference.
+        VisibleIfPresent(values, BlizzardQueue, false);
+        VisibleIfPresent(values, BlizzardPortrait, false);
         Visible(values, Record, true);
         Visible(values, RecordSealIcon, true);
         Text(values, RecordStandard, "12", sample: true);
@@ -290,6 +300,9 @@ public static class NativeHuntsPreviewStates
 
     private static void Visible(IDictionary<string, PreviewFrameOverride> values, string name, bool visible) =>
         values[name] = Prior(values, name) with { Visible = visible };
+
+    private static void VisibleIfPresent(IDictionary<string, PreviewFrameOverride> values, string name, bool visible) =>
+        values[name] = Prior(values, name) with { Visible = visible, IgnoreIfMissing = true };
 
     private static void Text(IDictionary<string, PreviewFrameOverride> values, string name, string text,
         bool sample, ColorRgba? color = null) =>
