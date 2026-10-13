@@ -28,6 +28,11 @@ public sealed record DesignObjectMetadata
     /// </summary>
     public string? DesignAsset { get; init; }
     /// <summary>
+    /// Additional project-owned textures that runtime code may swap onto this object. They are
+    /// packaged by export but do not change the texture shown in DESIGN.
+    /// </summary>
+    public IReadOnlyList<string> RuntimeAssets { get; init; } = [];
+    /// <summary>
     /// FrameForge-authored visible text. Null means use the imported/source text unchanged;
     /// an empty string is a deliberate blank override. This never rewrites source FrameXML.
     /// </summary>

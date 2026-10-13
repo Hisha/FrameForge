@@ -14,6 +14,32 @@ namespace FrameForge.Desktop.Rendering;
 /// </remarks>
 internal static class PreviewTextLayout
 {
+    private const string Ellipsis = "...";
+
+    /// <summary>
+    /// Mirrors build-12340 FontString overflow using measurements from the resolved client font.
+    /// Avalonia still paints the glyphs, but it no longer decides whether the exported text fits.
+    /// </summary>
+    internal static string Fit(string text, double availableWidth, Func<string, double> measure)
+    {
+        if (string.IsNullOrEmpty(text) || availableWidth <= 0 || measure(text) <= availableWidth)
+            return availableWidth > 0 ? text : string.Empty;
+        if (measure(Ellipsis) > availableWidth)
+            return string.Empty;
+
+        var low = 0;
+        var high = text.Length;
+        while (low < high)
+        {
+            var candidate = (low + high + 1) / 2;
+            if (measure(text[..candidate] + Ellipsis) <= availableWidth)
+                low = candidate;
+            else
+                high = candidate - 1;
+        }
+        return text[..low] + Ellipsis;
+    }
+
     internal static Rect Place(
         Rect host,
         double shapedWidth,

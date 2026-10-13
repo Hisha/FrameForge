@@ -75,6 +75,7 @@ public sealed class EditorMetadataTests
                     {
                         FrameName = "DesignObject", DisplayName = "Hunt Record",
                         TextOverride = "NATIVE HUNTS", DesignAsset = "assets/hunt_divider.png",
+                        RuntimeAssets = ["assets/hunt_divider_elite.png"],
                         TextStyle = new DesignTextStyleMetadata
                         {
                             BaseStyle = "GameFontNormalLarge", Size = 14,
@@ -102,6 +103,8 @@ public sealed class EditorMetadataTests
         Assert.Equal("Hunt Record", reopened.Project!.Editor.DisplayNameFor(reopened.Project.Find("DesignObject")!));
         Assert.Equal("NATIVE HUNTS", reopened.Project.Editor.DesignObjectFor("DesignObject")!.TextOverride);
         Assert.Equal("assets/hunt_divider.png", reopened.Project.Editor.DesignObjectFor("DesignObject")!.DesignAsset);
+        Assert.Equal(["assets/hunt_divider_elite.png"],
+            reopened.Project.Editor.DesignObjectFor("DesignObject")!.RuntimeAssets);
         Assert.Equal(project.Editor.DesignObjectFor("DesignObject")!.TextStyle,
             reopened.Project.Editor.DesignObjectFor("DesignObject")!.TextStyle);
         Assert.Equal(Project.FormatVersion, 1);

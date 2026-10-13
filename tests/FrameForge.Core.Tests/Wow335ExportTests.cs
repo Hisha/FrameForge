@@ -225,6 +225,30 @@ public sealed class Wow335ExportTests
     }
 
     [Fact]
+    public void Runtime_swapped_texture_is_packaged_without_exporting_a_second_control()
+    {
+        using var fixture = ExportFixture.Create();
+        File.Copy(Path.Combine(fixture.Root, "panel.png"), Path.Combine(fixture.Root, "elite.png"));
+        var project = fixture.Project with
+        {
+            Editor = fixture.Project.Editor with
+            {
+                DesignObjects = fixture.Project.Editor.DesignObjects.Select(item => item.FrameName == "Image"
+                    ? item with { RuntimeAssets = ["elite.png"] }
+                    : item).ToArray(),
+            },
+        };
+
+        var model = Wow335ExportBuilder.Build(project, fixture.ProjectPath, Wow335ExportOptions.Preferred);
+
+        Assert.Equal(3, model.Objects.Count);
+        Assert.Contains(model.Assets, asset => asset.ProjectReferences.Contains("panel.png"));
+        var alternate = Assert.Single(model.Assets, asset => asset.ProjectReferences.Contains("elite.png"));
+        Assert.Equal(["Bad_Name_2"], alternate.Consumers);
+        Assert.Equal(@"Interface\FrameForge\Fixture\elite", alternate.LogicalTexture);
+    }
+
+    [Fact]
     public void PreferredBlp2ExportIsDeterministicMipmappedDecodedAndUsageSized()
     {
         using var fixture = ExportFixture.Create();
@@ -916,7 +940,7 @@ public sealed class Wow335ExportTests
         var stock = project.Editor.Groups.Where(g => g.Concept == "stock-framework").SelectMany(g => g.Members).ToHashSet(StringComparer.Ordinal);
         var expected = project.Editor.DesignObjects.Count(item => project.Contains(item.FrameName) && !stock.Contains(item.FrameName));
         Assert.Equal(expected, model.Objects.Count);
-        Assert.Equal(48, model.Objects.Count);
+        Assert.Equal(47, model.Objects.Count);
         Assert.Equal("LFDParentFrame", model.Root.Anchor.RelativeTo);
         Assert.Equal(355, model.Root.Width, 8);
         Assert.Equal(440, model.Root.Height, 8);
@@ -930,6 +954,18 @@ public sealed class Wow335ExportTests
         Assert.Equal(@"Fonts\FRIZQT__.TTF", sealsLabel.Attribute("font")?.Value);
         Assert.Equal("8", sealsLabel.Element(generatedNs + "FontHeight")?
             .Element(generatedNs + "AbsValue")?.Attribute("val")?.Value);
+        var tierIcon = Assert.Single(model.Objects, o => o.RuntimeName == "Hunt_Tier_Icon");
+        Assert.DoesNotContain(model.Objects, o => o.RuntimeName is "Standard_Hunt_Icon" or "Elite_Hunt_Icon");
+        Assert.Equal(64, tierIcon.ExportFrame.Width);
+        Assert.Equal(64, tierIcon.ExportFrame.Height);
+        Assert.Equal(21, tierIcon.FrameLevel);
+        Assert.True(tierIcon.FrameLevel > Assert.Single(model.Objects, o => o.RuntimeName == "Hunt_Panel_Top").FrameLevel);
+        Assert.Equal(["hunt_icon_elite.png"], tierIcon.Metadata.RuntimeAssets);
+        var grounds = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Ground");
+        Assert.Equal("Hunting Grounds:", grounds.Text);
+        Assert.Equal(90, grounds.ExportFrame.Width);
+        Assert.Equal(16, grounds.ExportFrame.Height);
+        Assert.Equal(10, grounds.FontSize);
         var progress = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Progress");
         Assert.Equal(FrameKind.STATUSBAR, progress.Kind);
         Assert.Equal(@"Interface\TargetingFrame\UI-StatusBar", progress.TextureReference);
@@ -951,7 +987,7 @@ public sealed class Wow335ExportTests
             Assert.Contains($"<Frame name=\"{model.RootRuntimeName}\" parent=\"LFDParentFrame\" hidden=\"true\">", xml);
             Assert.DoesNotContain("<Frame name=\"LFDParentFrame\"", xml);
             Assert.Single(Regex.Matches(xml, "relativeTo=\"LFDParentFrame\"").Cast<Match>());
-            Assert.Contains("Round-trip self-check: PASS (48/48 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
+            Assert.Contains("Round-trip self-check: PASS (47/47 runtime identities)", File.ReadAllText(Path.Combine(destination, Wow335Exporter.ReportFileName)));
             Assert.Equal(11, result.Model!.Assets.Count);
             Assert.Equal(11, Directory.EnumerateFiles(Path.Combine(destination, "assets"), "*", SearchOption.AllDirectories).Count());
             using var assets = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, Wow335Exporter.AssetsFileName)));

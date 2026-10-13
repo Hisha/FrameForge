@@ -328,6 +328,13 @@ public static class ProjectCodec
                             writer.WriteString("displayName", displayName);
                         if (item.DesignAsset is { Length: > 0 } designAsset)
                             writer.WriteString("designAsset", designAsset);
+                        if (item.RuntimeAssets.Count > 0)
+                        {
+                            writer.WriteStartArray("runtimeAssets");
+                            foreach (var runtimeAsset in item.RuntimeAssets)
+                                writer.WriteStringValue(runtimeAsset);
+                            writer.WriteEndArray();
+                        }
                         if (item.TextOverride is not null)
                             writer.WriteString("textOverride", item.TextOverride);
                         if (item.RuntimeValueRequired)
@@ -733,6 +740,7 @@ public static class ProjectCodec
                         FrameName = frameName,
                         DisplayName = ReadOptionalString(entry, "displayName"),
                         DesignAsset = ReadOptionalString(entry, "designAsset"),
+                        RuntimeAssets = ReadStringArray(entry, "runtimeAssets", objectPath, null, errors),
                         TextOverride = ReadOptionalString(entry, "textOverride"),
                         TextStyle = ReadDesignTextStyle(entry, objectPath, errors),
                         RuntimeValueRequired = entry.TryGetProperty("runtimeValueRequired", out var runtimeValue)
@@ -791,7 +799,7 @@ public static class ProjectCodec
     }
 
     private static IReadOnlyList<string> ReadStringArray(JsonElement parent, string key, string path,
-        IReadOnlySet<string> validValues, List<string> errors)
+        IReadOnlySet<string>? validValues, List<string> errors)
     {
         if (!parent.TryGetProperty(key, out var array) || array.ValueKind == JsonValueKind.Null)
             return [];
@@ -804,7 +812,7 @@ public static class ProjectCodec
         foreach (var item in array.EnumerateArray())
         {
             var value = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-            if (value is null || !validValues.Contains(value))
+            if (string.IsNullOrWhiteSpace(value) || validValues is not null && !validValues.Contains(value))
                 errors.Add($"{path}.{key} contains an unknown value.");
             else if (!values.Contains(value, StringComparer.Ordinal))
                 values.Add(value);

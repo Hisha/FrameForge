@@ -204,6 +204,15 @@ public static partial class Wow335ExportBuilder
                 if (!IsStockTexture(texture)) diagnostics.Add(new(ExportSeverity.Error, "STOCK_TEXTURE_INVALID", $"StatusBar texture '{barTexture}' is not a logical Interface path.", frame.Name));
             }
 
+            foreach (var runtimeReference in metadata.RuntimeAssets)
+            {
+                var asset = NormalizePortablePath(runtimeReference);
+                if (!assetConsumers.TryGetValue(asset, out var consumers)) assetConsumers[asset] = consumers = [];
+                consumers.Add(runtime);
+                if (!assetFrames.TryGetValue(asset, out var frames)) assetFrames[asset] = frames = [];
+                frames.Add(frame.Name);
+            }
+
             var style = metadata.TextStyle;
             var text = metadata.TextOverride ?? frame.Visual?.Text?.Text;
             var drawIndex = rank.GetValueOrDefault(frame.Name, objects.Count);
@@ -375,6 +384,8 @@ public static partial class Wow335ExportBuilder
     {
         if (frame.Kind is FrameKind.OTHER or FrameKind.BUTTON)
             diagnostics.Add(new(ExportSeverity.Error, "OBJECT_UNSUPPORTED", "This DESIGN object type cannot be exported safely.", frame.Name));
+        if (metadata.RuntimeAssets.Count > 0 && frame.Kind != FrameKind.TEXTURE)
+            diagnostics.Add(new(ExportSeverity.Error, "RUNTIME_ASSET_TYPE_UNSUPPORTED", "Runtime-swapped assets can only be attached to a Texture DESIGN object.", frame.Name));
         if (frame.Visual?.DrawLayer is { } layer && layer is not ("BACKGROUND" or "BORDER" or "ARTWORK" or "OVERLAY" or "HIGHLIGHT"))
             diagnostics.Add(new(ExportSeverity.Error, "DRAW_LAYER_INVALID", $"Draw layer '{layer}' is not supported by WoW 3.3.5a.", frame.Name));
         var invalidDeclaredSize = !Finite(frame.Width) || !Finite(frame.Height) || frame.Width < 0 || frame.Height < 0
@@ -413,7 +424,7 @@ public static partial class Wow335ExportBuilder
             diagnostics.Add(new(ExportSeverity.Error, "BINDING_KEY_EDITOR_ID", "Runtime binding keys must express application semantics, not FrameForge editor/source identities.", frame.Name));
     }
 
-    private static bool HasAuthoredOverride(DesignObjectMetadata m) => m.TextOverride is not null || m.TextStyle is not null || m.DesignAsset is not null || m.RuntimeValueRequired || m.RuntimeBinding is not null || m.StateIds.Count > 0;
+    private static bool HasAuthoredOverride(DesignObjectMetadata m) => m.TextOverride is not null || m.TextStyle is not null || m.DesignAsset is not null || m.RuntimeAssets.Count > 0 || m.RuntimeValueRequired || m.RuntimeBinding is not null || m.StateIds.Count > 0;
     private static string BindingValueType(FrameKind kind) => kind == FrameKind.STATUSBAR ? "number" : "string";
     private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
     private static bool IsStockTexture(string value) => value.StartsWith("Interface\\", StringComparison.OrdinalIgnoreCase) && !IsMachinePath(value);

@@ -48,7 +48,11 @@ public sealed record Project
             Groups = Editor.Groups.Select(group => group with { Members = [.. group.Members] }).ToArray(),
             LockedElements = [.. Editor.LockedElements],
             DesignOrder = [.. Editor.DesignOrder],
-            DesignObjects = Editor.DesignObjects.Select(item => item with { StateIds = [.. item.StateIds] }).ToArray(),
+            DesignObjects = Editor.DesignObjects.Select(item => item with
+            {
+                RuntimeAssets = [.. item.RuntimeAssets],
+                StateIds = [.. item.StateIds],
+            }).ToArray(),
             DesignStates = Editor.DesignStates.Select(item => item with { }).ToArray(),
         },
     };
@@ -81,6 +85,7 @@ public sealed record Project
                    pair.First.FrameName == pair.Second.FrameName
                    && pair.First.DisplayName == pair.Second.DisplayName
                    && pair.First.DesignAsset == pair.Second.DesignAsset
+                   && pair.First.RuntimeAssets.SequenceEqual(pair.Second.RuntimeAssets)
                    && pair.First.TextOverride == pair.Second.TextOverride
                    && pair.First.TextStyle == pair.Second.TextStyle
                    && pair.First.RuntimeValueRequired == pair.Second.RuntimeValueRequired
@@ -127,6 +132,8 @@ public sealed record Project
             hash.Add(item.FrameName);
             hash.Add(item.DisplayName);
             hash.Add(item.DesignAsset);
+            foreach (var runtimeAsset in item.RuntimeAssets)
+                hash.Add(runtimeAsset);
             hash.Add(item.TextOverride);
             hash.Add(item.TextStyle);
             hash.Add(item.RuntimeValueRequired);

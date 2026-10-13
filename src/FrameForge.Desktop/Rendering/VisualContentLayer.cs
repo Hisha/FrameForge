@@ -358,25 +358,28 @@ public sealed class VisualContentLayer : ICanvasLayer
         var size = Math.Max(1, style.Size);
         var color = ToColor(previewColor ?? style.Color);
         var typeface = new Typeface(style.AvaloniaFamily, FontStyle.Normal, FontWeight.Normal);
-        var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+        var zoom = canvas.Viewport.Zoom;
+        var displayText = canvas.StockTemplates is { } stock
+            ? PreviewTextLayout.Fit(text, host.Width / zoom, candidate => stock.MeasureText(style, candidate))
+            : text;
+        var label = new FormattedText(displayText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             typeface, size, new SolidColorBrush(color));
         var justifyH = declaredJustifyH ?? style.JustifyH;
         var justifyV = declaredJustifyV ?? style.JustifyV;
-        var zoom = canvas.Viewport.Zoom;
         var placement = PreviewTextLayout.Place(host, label.Width, label.Height, zoom, justifyH, justifyV);
         using (context.PushClip(host))
         using (context.PushTransform(PreviewTextLayout.CanvasTransform(placement, zoom)))
         {
             if (style.ShadowColor is { } shadow)
             {
-                var shadowText = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                var shadowText = new FormattedText(displayText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
                     typeface, size, new SolidColorBrush(ToColor(shadow)));
                 context.DrawText(shadowText, new Point(style.ShadowX, -style.ShadowY));
             }
             if (style.Outline is "NORMAL" or "THICK")
             {
                 var radius = style.Outline == "THICK" ? 2d : 1d;
-                var outline = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                var outline = new FormattedText(displayText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
                     typeface, size, Brushes.Black);
                 foreach (var offset in new[] { new Point(-radius, 0), new Point(radius, 0), new Point(0, -radius), new Point(0, radius) })
                     context.DrawText(outline, offset);

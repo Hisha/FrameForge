@@ -159,7 +159,8 @@ Artwork resolution rules:
       "textStyle": { "baseStyle": "GameFontNormalLarge", "size": 14,
         "color": { "r": 1, "g": 0.82, "b": 0, "a": 1 },
         "outline": "NONE", "shadow": true, "justifyH": "CENTER" } },
-    { "frame": "Divider", "displayName": "Divider", "designAsset": "assets/hunt_divider.png" }
+    { "frame": "Divider", "displayName": "Divider", "designAsset": "assets/hunt_divider.png",
+      "runtimeAssets": ["assets/hunt_divider_elite.png"] }
   ],
   "designOrder": ["CustomPanel", "Divider", "TitleText"]
 }
@@ -175,7 +176,9 @@ canvas drag only. `expanded` is presentation state and never changes the lock. `
 is visible design text applied without changing the imported/source text; null/absent means the
 source text remains active, while an empty value is an intentional blank override. `designAsset`
 is a normalized, forward-slash, project-relative path to artwork owned by the project; absolute
-paths and traversal are invalid. An absent or empty `states` array means **All States**; otherwise the object is visible only in the listed authored
+paths and traversal are invalid. `runtimeAssets` lists additional project-owned textures which
+runtime code may swap onto the same exported object. They are packaged without creating another
+control and do not change the texture shown in DESIGN. An absent or empty `states` array means **All States**; otherwise the object is visible only in the listed authored
 `designStates` when one is active. Authored states are independent from the read-only Native Hunts
 preview-state catalog, and neither executes Lua. Older v1 files without `editor`, or with only the
 earlier groups/locks fields, load with safe defaults, so these additive fields do not require a
