@@ -10,7 +10,7 @@
     requires editing this one file.
   -->
   <PropertyGroup>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
   </PropertyGroup>
 
   <PropertyGroup>
