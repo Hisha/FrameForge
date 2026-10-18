@@ -20,6 +20,7 @@ artifacts/
 Thumbs.db
 
 # Generated smoke/test outputs
+.test-logs/
 frameforge-smoke.png
 smoke-output/
 coverage/

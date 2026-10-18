@@ -14,6 +14,60 @@ namespace FrameForge.Core.Tests;
 public sealed class Wow335ExportTests
 {
     [Fact]
+    public void PersistentRegionsDefaultToArtworkAndExplicitDrawLayersArePreserved()
+    {
+        var project = RegionProject(
+            ("Texture", FrameKind.TEXTURE, null),
+            ("Label", FrameKind.FONTSTRING, null),
+            ("IntentionalHighlight", FrameKind.TEXTURE, "HIGHLIGHT"),
+            ("IntentionalBackground", FrameKind.TEXTURE, "BACKGROUND"));
+
+        var model = Wow335ExportBuilder.Build(project, null);
+
+        Assert.Equal("ARTWORK", Assert.Single(model.Objects, item => item.SourceName == "Texture").DrawLayer);
+        Assert.Equal("ARTWORK", Assert.Single(model.Objects, item => item.SourceName == "Label").DrawLayer);
+        Assert.Equal("HIGHLIGHT", Assert.Single(model.Objects, item => item.SourceName == "IntentionalHighlight").DrawLayer);
+        Assert.Equal("BACKGROUND", Assert.Single(model.Objects, item => item.SourceName == "IntentionalBackground").DrawLayer);
+    }
+
+    [Theory]
+    [InlineData(50)]
+    [InlineData(75)]
+    [InlineData(100)]
+    public void LargeDesignOrdersKeepPersistentRegionsOnArtwork(int objectCount)
+    {
+        var definitions = Enumerable.Range(0, objectCount)
+            .Select(index => ($"Region{index:D3}", index % 2 == 0 ? FrameKind.TEXTURE : FrameKind.FONTSTRING, (string?)null))
+            .ToArray();
+        var model = Wow335ExportBuilder.Build(RegionProject(definitions), null);
+
+        Assert.Equal(objectCount, model.Objects.Count);
+        Assert.All(model.Objects, item => Assert.Equal("ARTWORK", item.DrawLayer));
+        Assert.Equal(Enumerable.Range(1, objectCount), model.Objects.Select(item => item.FrameLevel));
+    }
+
+    [Fact]
+    public void ReorderingChangesWrapperLevelsButNotSemanticDrawLayers()
+    {
+        var original = RegionProject(
+            ("Back", FrameKind.TEXTURE, null),
+            ("Middle", FrameKind.FONTSTRING, null),
+            ("Front", FrameKind.TEXTURE, null));
+        var reordered = original with
+        {
+            Editor = original.Editor with { DesignOrder = ["Middle", "Front", "Back"] },
+        };
+
+        var before = Wow335ExportBuilder.Build(original, null).Objects.ToDictionary(item => item.SourceName);
+        var after = Wow335ExportBuilder.Build(reordered, null).Objects.ToDictionary(item => item.SourceName);
+
+        Assert.All(before.Values, item => Assert.Equal("ARTWORK", item.DrawLayer));
+        Assert.All(after.Values, item => Assert.Equal("ARTWORK", item.DrawLayer));
+        Assert.NotEqual(before["Back"].FrameLevel, after["Back"].FrameLevel);
+        Assert.Equal(3, after["Back"].FrameLevel);
+    }
+
+    [Fact]
     public void DungeonFinderFoundationOwnsExportRootWithoutFlatteningCustomRelationships()
     {
         var project = new Project
@@ -963,7 +1017,7 @@ public sealed class Wow335ExportTests
         Assert.Equal(["hunt_icon_elite.png"], tierIcon.Metadata.RuntimeAssets);
         var grounds = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Ground");
         Assert.Equal("Hunting Grounds:", grounds.Text);
-        Assert.Equal(90, grounds.ExportFrame.Width);
+        Assert.Equal(100, grounds.ExportFrame.Width);
         Assert.Equal(16, grounds.ExportFrame.Height);
         Assert.Equal(10, grounds.FontSize);
         var progress = Assert.Single(model.Objects, o => o.RuntimeName == "Tracker_Hunt_Progress");
@@ -976,6 +1030,17 @@ public sealed class Wow335ExportTests
         Assert.Contains(model.Objects, o => o.RuntimeName == "Tracking_Text" && o.StateIds.SequenceEqual(["tracking"]));
         Assert.Equal(10, model.Objects.Count(o => o.Metadata.RuntimeValueRequired));
         Assert.Equal("hunt.progress", progress.Metadata.RuntimeBinding);
+        var persistentRecordStatistics = new[]
+        {
+            "Hunt_Seals", "Elite_Today", "Elite_Hunts", "Standard_Hunts", "Hunt_Seal",
+            "Standard_Hunts_Value", "Elite_Hunts_Value", "Elite_Today_Available",
+            "Elite_Today_Unavailable", "Hunt_Seal_Value",
+        };
+        Assert.All(persistentRecordStatistics, runtimeName =>
+            Assert.Equal("ARTWORK", Assert.Single(model.Objects, item => item.RuntimeName == runtimeName).DrawLayer));
+        Assert.DoesNotContain(model.Objects,
+            item => persistentRecordStatistics.Contains(item.RuntimeName, StringComparer.Ordinal)
+                    && item.DrawLayer == "HIGHLIGHT");
 
         var destination = Path.Combine(Path.GetTempPath(), "frameforge-native-hunts-export", Guid.NewGuid().ToString("N"));
         try
@@ -1043,6 +1108,34 @@ public sealed class Wow335ExportTests
                     DesignAsset = texture.Asset,
                 })],
                 DesignOrder = [.. project.Editor.DesignOrder, .. textures.Select(texture => texture.Name)],
+            },
+        };
+    }
+
+    private static Project RegionProject(params (string Name, FrameKind Kind, string? DrawLayer)[] definitions)
+    {
+        return new Project
+        {
+            Name = "Draw Layer Contract",
+            Frames = definitions.Select(definition => new FrameDef
+            {
+                Name = definition.Name,
+                Kind = definition.Kind,
+                Width = 16,
+                Height = 16,
+                Visual = new FrameVisual
+                {
+                    DrawLayer = definition.DrawLayer,
+                    Text = definition.Kind == FrameKind.FONTSTRING ? new TextVisual(definition.Name) : null,
+                },
+            }).ToArray(),
+            Editor = new EditorMetadata
+            {
+                DesignOrder = definitions.Select(definition => definition.Name).ToArray(),
+                DesignObjects = definitions.Select(definition => new DesignObjectMetadata
+                {
+                    FrameName = definition.Name,
+                }).ToArray(),
             },
         };
     }

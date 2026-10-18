@@ -102,7 +102,10 @@ public sealed record WowExportResult(
 /// <summary>Builds a portable, validated WoW 3.3.5a export model from editor data.</summary>
 public static partial class Wow335ExportBuilder
 {
-    private static readonly string[] DrawLayers = ["BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"];
+    // Draw layers are semantic within an owning frame; global stacking between the generated
+    // wrapper frames is carried by parent relationships and FrameLevel. HIGHLIGHT must therefore
+    // be opt-in rather than an accidental consequence of an object's design-order rank.
+    private const string DefaultPersistentDrawLayer = "ARTWORK";
 
     public static WowExportModel Build(Project project, string? projectFilePath) =>
         Build(project, projectFilePath, Wow335ExportOptions.LegacyTga);
@@ -216,10 +219,9 @@ public static partial class Wow335ExportBuilder
             var style = metadata.TextStyle;
             var text = metadata.TextOverride ?? frame.Visual?.Text?.Text;
             var drawIndex = rank.GetValueOrDefault(frame.Name, objects.Count);
-            var layerIndex = Math.Min(DrawLayers.Length - 1, drawIndex * DrawLayers.Length / Math.Max(1, authored.Length));
             objects.Add(new(
                 frame.Name, runtime, runtime + "__FFLayer", frame.Kind, frame, exportFrame, metadata,
-                drawIndex, 0, frame.Visual?.DrawLayer ?? DrawLayers[layerIndex], [.. metadata.StateIds], texture, text,
+                drawIndex, 0, frame.Visual?.DrawLayer ?? DefaultPersistentDrawLayer, [.. metadata.StateIds], texture, text,
                 style?.BaseStyle ?? frame.Visual?.Text?.FontTemplate, style?.Size, style?.Color, style?.Outline,
                 style?.Shadow, style?.JustifyH ?? frame.Visual?.Text?.JustifyH, frame.Visual?.Text?.JustifyV));
         }
